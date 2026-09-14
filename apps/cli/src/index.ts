@@ -126,4 +126,33 @@ program
 		await runUpgradeAction(() => upgrade())
 	})
 
+program
+	.command("desktop")
+	.alias("gui")
+	.description("Launch Roo Code Desktop GUI application")
+	.option("-w, --workspace <path>", "Workspace directory path", process.cwd())
+	.option("-p, --port <number>", "Desktop server port", "4500")
+	.option("--web", "Launch in web browser mode", false)
+	.option("--electron", "Launch as native Electron window", false)
+	.option("--no-open", "Do not automatically open browser", false)
+	.action(async (opts) => {
+		const { spawn } = await import("child_process")
+		const path = await import("path")
+		const fs = await import("fs")
+		const { fileURLToPath } = await import("url")
+		const __dirname = path.dirname(fileURLToPath(import.meta.url))
+		let rootDir = __dirname
+		while (rootDir !== path.dirname(rootDir)) {
+			if (fs.existsSync(path.join(rootDir, "apps", "desktop"))) break
+			rootDir = path.dirname(rootDir)
+		}
+		const desktopCli = path.join(rootDir, "apps", "desktop", "dist", "cli.js")
+		const args = [desktopCli, "-w", opts.workspace, "-p", opts.port]
+		if (opts.web) args.push("--web")
+		if (opts.electron) args.push("--electron")
+		if (opts.open === false) args.push("--no-open")
+		const child = spawn(process.execPath, args, { stdio: "inherit" })
+		child.on("exit", (code) => process.exit(code || 0))
+	})
+
 program.parse()

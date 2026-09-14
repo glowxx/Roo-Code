@@ -1,57 +1,100 @@
-.pnpm-store
-dist
-out
-out-*
-node_modules
+# Package manager & dependencies
+node_modules/
+.pnpm-store/
 package-lock.json
+yarn.lock
+bun.lockb
+
+# Build outputs
+dist/
+out/
+out-*/
+build/
+bin/
+*.tsbuildinfo
+.turbo/
+.vite-port
 coverage/
 mock/
-
-.DS_Store
-
-# IDEs
-.idea
-
-# Builds
-bin/
+roo-cli-*.tar.gz*
 *.vsix
+*.deb
+*.rpm
+*.AppImage
+*.exe
+*.dmg
 
-# Local prompts and rules
-/local-prompts
-AGENTS.local.md
-
-# Test environment
-.test_env
-.vscode-test/
-
-# Docs
-docs/_site/
-
-# Dotenv
+# Environment, secrets & credentials (NEVER commit personal or sensitive data)
 .env
 .env.*
 !.env.*.sample
+!.env.sample
+*.pem
+*.key
+*.cert
+*.pfx
+*.token
+*.secret
+credentials.json
+auth.json
+hosts.yml
+id_rsa
+id_ed25519
 
-# Logging
-logs
-*.log
-
-# Vite development
-.vite-port
-
-# Turborepo
-.turbo
-
-# IntelliJ and Qodo plugin folders
-.idea/
-.qodo/
-.vercel
-.roo/mcp.json
-
-# Qdrant
-qdrant_storage/
-
-# Architect plans
+# Agent, assistant & AI transcripts
+.gemini/
+.claude/
+.claude.json
+.codex/
+.antigravity/
+brain/
+transcripts/
+*.transcript*
+.roo/
+/local-prompts/
+AGENTS.local.md
 plans/
 
-roo-cli-*.tar.gz*
+# Local databases & persistent state
+.roo-desktop-data/
+qdrant_storage/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs & debugging
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDEs & Editors
+.idea/
+.vscode/
+.vscode-test/
+.qodo/
+.vercel
+*.sublime-project
+*.sublime-workspace
+.fleet/
+
+# Temporary / Scratch files
+scratch/
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*~

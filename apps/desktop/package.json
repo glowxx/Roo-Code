@@ -1,0 +1,37 @@
+{
+	"name": "@roo-code/desktop",
+	"version": "1.0.0",
+	"description": "Roo Code Desktop - Full-featured Autonomous AI Developer Desktop Application",
+	"private": true,
+	"type": "module",
+	"main": "dist/main/index.js",
+	"bin": {
+		"roo-desktop": "dist/cli.js"
+	},
+	"scripts": {
+		"build": "node build.mjs",
+		"start": "node dist/cli.js --electron",
+		"web": "node dist/cli.js --web",
+		"dev": "node dist/cli.js --web --dev",
+		"clean": "rimraf dist .turbo"
+	},
+	"dependencies": {
+		"@roo-code/core": "workspace:^",
+		"@roo-code/types": "workspace:^",
+		"@roo-code/vscode-shim": "workspace:^",
+		"commander": "^12.1.0",
+		"open": "^10.1.0",
+		"p-wait-for": "^5.0.2",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@roo-code/config-eslint": "workspace:^",
+		"@roo-code/config-typescript": "workspace:^",
+		"@types/node": "^24.1.0",
+		"@types/ws": "^8.5.14",
+		"electron": "^34.0.0",
+		"esbuild": "^0.25.0",
+		"rimraf": "^6.0.1",
+		"typescript": "5.8.3"
+	}
+}

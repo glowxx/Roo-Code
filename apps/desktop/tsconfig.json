@@ -1,0 +1,12 @@
+{
+	"extends": "@roo-code/config-typescript/base.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["src/*"]
+		}
+	},
+	"include": ["src", "*.mjs"],
+	"exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Roo Code Desktop</title>
+	<link rel="stylesheet" href="styles.css">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+	<div id="desktop-app">
+		<!-- Top App Header -->
+		<header class="app-header">
+			<div class="header-left">
+				<div class="brand">
+					<div class="brand-logo">
+						<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>
+						</svg>
+					</div>
+					<span class="brand-name">Roo Code</span>
+					<span class="version-tag">Desktop</span>
+				</div>
+
+				<div class="workspace-pill" id="workspace-pill">
+					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+					</svg>
+					<span class="workspace-name" id="workspace-name">Loading workspace...</span>
+					<button class="open-folder-btn" id="open-folder-btn" title="Open Workspace Folder">
+						<span>Change Folder</span>
+					</button>
+				</div>
+
+				<div class="git-pill" id="git-pill" style="display: none;">
+					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<line x1="6" y1="3" x2="6" y2="15"></line>
+						<circle cx="18" cy="6" r="3"></circle>
+						<circle cx="6" cy="18" r="3"></circle>
+						<path d="M18 9a9 9 0 0 1-9 9"></path>
+					</svg>
+					<span id="git-branch">main</span>
+				</div>
+			</div>
+
+			<div class="header-center">
+				<nav class="nav-tabs">
+					<button class="nav-tab active" data-tab="chat">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+						</svg>
+						<span>Agent Chat</span>
+					</button>
+					<button class="nav-tab" data-tab="diffs">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<circle cx="18" cy="18" r="3"></circle>
+							<circle cx="6" cy="6" r="3"></circle>
+							<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+							<line x1="6" y1="9" x2="6" y2="21"></line>
+						</svg>
+						<span>Changes & Diffs</span>
+						<span class="badge" id="diffs-count">0</span>
+					</button>
+					<button class="nav-tab" data-tab="terminal">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<polyline points="4 17 10 11 4 5"></polyline>
+							<line x1="12" y1="19" x2="20" y2="19"></line>
+						</svg>
+						<span>Terminal</span>
+						<span class="badge" id="terminal-count">0</span>
+					</button>
+					<button class="nav-tab" data-tab="files">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+							<polyline points="14 2 14 8 20 8"></polyline>
+						</svg>
+						<span>Files</span>
+					</button>
+				</nav>
+			</div>
+
+			<div class="header-right">
+				<div class="agent-status-badge status-idle" id="agent-status-badge">
+					<span class="status-dot"></span>
+					<span class="status-text" id="status-text">Idle</span>
+				</div>
+
+				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Dark/Light Mode">
+					<svg class="moon-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+					</svg>
+					<svg class="sun-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+						<circle cx="12" cy="12" r="5"></circle>
+						<line x1="12" y1="1" x2="12" y2="3"></line>
+						<line x1="12" y1="21" x2="12" y2="23"></line>
+						<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+						<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+						<line x1="1" y1="12" x2="3" y2="12"></line>
+						<line x1="21" y1="12" x2="23" y2="12"></line>
+						<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+						<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+					</svg>
+				</button>
+			</div>
+		</header>
+
+		<!-- Main Workspace Area -->
+		<main class="app-body">
+			<!-- Tab 1: Agent Chat (Integrated Roo Code UI) -->
+			<section class="tab-panel active" id="tab-chat">
+				<div class="chat-container">
+					<iframe id="webview-frame" src="/webview/index.html" class="webview-iframe"></iframe>
+				</div>
+			</section>
+
+			<!-- Tab 2: Changes & Diffs -->
+			<section class="tab-panel" id="tab-diffs">
+				<div class="diffs-view">
+					<aside class="diffs-sidebar">
+						<div class="sidebar-header">
+							<h3>Modified Files</h3>
+							<span class="file-counter" id="diff-file-counter">0 files</span>
+						</div>
+						<div class="diffs-list" id="diffs-file-list">
+							<div class="empty-state">No changes made by the agent yet.</div>
+						</div>
+					</aside>
+					<div class="diff-viewer-panel">
+						<div class="diff-viewer-header" id="diff-viewer-header">
+							<span class="diff-filename">Select a file from the sidebar to inspect changes</span>
+						</div>
+						<div class="diff-content" id="diff-content">
+							<div class="diff-placeholder">
+								<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+									<circle cx="18" cy="18" r="3"></circle>
+									<circle cx="6" cy="6" r="3"></circle>
+									<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+									<line x1="6" y1="9" x2="6" y2="21"></line>
+								</svg>
+								<p>When Roo Code creates or modifies files, you can review line-by-line diffs here.</p>
+							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- Tab 3: Terminal & Commands Log -->
+			<section class="tab-panel" id="tab-terminal">
+				<div class="terminal-view">
+					<div class="terminal-toolbar">
+						<div class="terminal-title">
+							<span class="terminal-icon">$</span>
+							<span>Agent Execution Stream</span>
+						</div>
+						<div class="terminal-actions">
+							<button class="terminal-btn" id="clear-terminal-btn">Clear Logs</button>
+						</div>
+					</div>
+					<div class="terminal-output" id="terminal-output">
+						<div class="terminal-empty">Terminal output from tools and commands executed by Roo Code will appear here.</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- Tab 4: Files Explorer -->
+			<section class="tab-panel" id="tab-files">
+				<div class="files-view">
+					<aside class="files-sidebar">
+						<div class="sidebar-header">
+							<h3>Workspace Files</h3>
+							<input type="text" id="files-search" class="files-search-input" placeholder="Filter files...">
+						</div>
+						<div class="files-tree" id="files-tree">
+							<div class="empty-state">Loading workspace tree...</div>
+						</div>
+					</aside>
+					<div class="file-preview-panel">
+						<div class="preview-header">
+							<span id="preview-filename">Select a file to preview</span>
+						</div>
+						<pre class="preview-code"><code id="preview-code-content">// File preview will be displayed here</code></pre>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<!-- Bottom Status Bar -->
+		<footer class="app-footer">
+			<div class="footer-left">
+				<span class="footer-item" id="footer-workspace-path">Path: ...</span>
+			</div>
+			<div class="footer-right">
+				<span class="footer-item status-indicator">
+					<span class="indicator-dot"></span>
+					<span id="connection-status">Connected to Engine</span>
+				</span>
+				<span class="footer-item">Standalone Desktop v1.0</span>
+			</div>
+		</footer>
+	</div>
+
+	<script src="app.js"></script>
+</body>
+</html>
