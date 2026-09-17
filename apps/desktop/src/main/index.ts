@@ -98,7 +98,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				minWidth: 900,
 				minHeight: 600,
 				title: "Roo Code Desktop",
-				backgroundColor: "#18181b",
+				backgroundColor: "#090a0f",
 				icon: fs.existsSync(iconCandidate) ? iconCandidate : undefined,
 				webPreferences: {
 					preload: path.join(__dirname, "..", "preload", "index.js"),

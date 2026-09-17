@@ -11,31 +11,33 @@
 </head>
 <body class="dark-theme">
 	<div id="desktop-app">
-		<!-- Top App Header -->
+		<!-- Luxury Modern Header (Linear / Raycast tier) -->
 		<header class="app-header">
 			<div class="header-left">
 				<div class="brand">
-					<div class="brand-logo">
-						<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<div class="brand-badge">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
 							<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>
 						</svg>
 					</div>
-					<span class="brand-name">Roo Code</span>
-					<span class="version-tag">Desktop</span>
+					<span class="brand-title">Roo Code</span>
 				</div>
 
-				<div class="workspace-pill" id="workspace-pill">
-					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+				<div class="header-divider"></div>
+
+				<!-- Workspace Quick Selector -->
+				<button class="project-pill" id="open-folder-btn" title="Click to change workspace folder">
+					<svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
 					</svg>
-					<span class="workspace-name" id="workspace-name">Loading workspace...</span>
-					<button class="open-folder-btn" id="open-folder-btn" title="Open Workspace Folder">
-						<span>Change Folder</span>
-					</button>
-				</div>
+					<span class="workspace-name" id="workspace-name">Select Workspace...</span>
+					<svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="m6 9 6 6 6-6"/>
+					</svg>
+				</button>
 
 				<div class="git-pill" id="git-pill" style="display: none;">
-					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<line x1="6" y1="3" x2="6" y2="15"></line>
 						<circle cx="18" cy="6" r="3"></circle>
 						<circle cx="6" cy="18" r="3"></circle>
@@ -45,26 +47,27 @@
 				</div>
 			</div>
 
+			<!-- Sleek Segmented Control Tabs -->
 			<div class="header-center">
 				<nav class="nav-tabs">
 					<button class="nav-tab active" data-tab="chat">
-						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
 						</svg>
-						<span>Agent Chat</span>
+						<span>Agent</span>
 					</button>
 					<button class="nav-tab" data-tab="diffs">
-						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<circle cx="18" cy="18" r="3"></circle>
 							<circle cx="6" cy="6" r="3"></circle>
 							<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
 							<line x1="6" y1="9" x2="6" y2="21"></line>
 						</svg>
-						<span>Changes & Diffs</span>
+						<span>Diffs</span>
 						<span class="badge" id="diffs-count">0</span>
 					</button>
 					<button class="nav-tab" data-tab="terminal">
-						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<polyline points="4 17 10 11 4 5"></polyline>
 							<line x1="12" y1="19" x2="20" y2="19"></line>
 						</svg>
@@ -72,7 +75,7 @@
 						<span class="badge" id="terminal-count">0</span>
 					</button>
 					<button class="nav-tab" data-tab="files">
-						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
 							<polyline points="14 2 14 8 20 8"></polyline>
 						</svg>
@@ -81,17 +84,18 @@
 				</nav>
 			</div>
 
+			<!-- Right Status & Controls -->
 			<div class="header-right">
 				<div class="agent-status-badge status-idle" id="agent-status-badge">
 					<span class="status-dot"></span>
 					<span class="status-text" id="status-text">Idle</span>
 				</div>
 
-				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Dark/Light Mode">
-					<svg class="moon-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Theme (Dark / Light)">
+					<svg class="moon-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
 					</svg>
-					<svg class="sun-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+					<svg class="sun-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
 						<circle cx="12" cy="12" r="5"></circle>
 						<line x1="12" y1="1" x2="12" y2="3"></line>
 						<line x1="12" y1="21" x2="12" y2="23"></line>
@@ -111,7 +115,7 @@
 			<!-- Tab 1: Agent Chat (Integrated Roo Code UI) -->
 			<section class="tab-panel active" id="tab-chat">
 				<div class="chat-container">
-					<iframe id="webview-frame" src="/webview/index.html" class="webview-iframe"></iframe>
+					<iframe id="webview-frame" src="/webview/index.html" class="webview-iframe" title="Roo Code Assistant"></iframe>
 				</div>
 			</section>
 
@@ -120,7 +124,7 @@
 				<div class="diffs-view">
 					<aside class="diffs-sidebar">
 						<div class="sidebar-header">
-							<h3>Modified Files</h3>
+							<span class="sidebar-title">Modified Files</span>
 							<span class="file-counter" id="diff-file-counter">0 files</span>
 						</div>
 						<div class="diffs-list" id="diffs-file-list">
@@ -133,7 +137,7 @@
 						</div>
 						<div class="diff-content" id="diff-content">
 							<div class="diff-placeholder">
-								<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
 									<circle cx="18" cy="18" r="3"></circle>
 									<circle cx="6" cy="6" r="3"></circle>
 									<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
@@ -151,11 +155,11 @@
 				<div class="terminal-view">
 					<div class="terminal-toolbar">
 						<div class="terminal-title">
-							<span class="terminal-icon">$</span>
-							<span>Agent Execution Stream</span>
+							<span class="terminal-prompt">$</span>
+							<span>Command Execution Stream</span>
 						</div>
 						<div class="terminal-actions">
-							<button class="terminal-btn" id="clear-terminal-btn">Clear Logs</button>
+							<button class="terminal-btn" id="clear-terminal-btn">Clear Stream</button>
 						</div>
 					</div>
 					<div class="terminal-output" id="terminal-output">
@@ -169,8 +173,8 @@
 				<div class="files-view">
 					<aside class="files-sidebar">
 						<div class="sidebar-header">
-							<h3>Workspace Files</h3>
-							<input type="text" id="files-search" class="files-search-input" placeholder="Filter files...">
+							<span class="sidebar-title">Workspace Tree</span>
+							<input type="text" id="files-search" class="files-search-input" placeholder="Search files...">
 						</div>
 						<div class="files-tree" id="files-tree">
 							<div class="empty-state">Loading workspace tree...</div>
@@ -186,17 +190,17 @@
 			</section>
 		</main>
 
-		<!-- Bottom Status Bar -->
+		<!-- Bottom Status Bar (VS Code / Linear tier) -->
 		<footer class="app-footer">
 			<div class="footer-left">
-				<span class="footer-item" id="footer-workspace-path">Path: ...</span>
+				<span class="footer-item" id="footer-workspace-path" title="Workspace path">Path: ...</span>
 			</div>
 			<div class="footer-right">
 				<span class="footer-item status-indicator">
 					<span class="indicator-dot"></span>
 					<span id="connection-status">Connected to Engine</span>
 				</span>
-				<span class="footer-item">Standalone Desktop v1.0</span>
+				<span class="footer-item footer-version">v1.0.0 Desktop</span>
 			</div>
 		</footer>
 	</div>

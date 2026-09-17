@@ -6,7 +6,6 @@ import { EventEmitter } from "events"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-import pWaitFor from "p-wait-for"
 import type { ExtensionMessage, WebviewMessage } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
 import type { AgentStatusType, TerminalLogEntry, DiffFileEntry } from "../shared/types.js"
@@ -197,11 +196,6 @@ export class DesktopAgentHost extends EventEmitter {
 
 		this.on("extensionWebviewMessage", (msg: ExtensionMessage) => {
 			this.processExtensionMessage(msg)
-		})
-
-		await pWaitFor(() => this.isReady, { interval: 100, timeout: 15_000 }).catch(() => {
-			// Mark ready if timeout expires
-			this.isReady = true
 		})
 	}
 

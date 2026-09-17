@@ -30,8 +30,41 @@ function getGitBranch(workspacePath: string): string | undefined {
 	}
 }
 
-function listWorkspaceFiles(dir: string, maxFiles = 150): string[] {
+function listWorkspaceFiles(dir: string, maxFiles = 300): string[] {
 	const results: string[] = []
+	const IGNORED_DIRS = new Set([
+		"node_modules",
+		"dist",
+		"release",
+		"build",
+		"out",
+		".git",
+		".turbo",
+		".roo",
+		".vscode",
+		".idea",
+		"coverage",
+		".next",
+		".cache",
+		"temp",
+		"tmp",
+		"bin",
+		"obj",
+		"target",
+	])
+	const IGNORED_EXTS = new Set([
+		".pak",
+		".bin",
+		".exe",
+		".dll",
+		".blockmap",
+		".node",
+		".log",
+		".lock",
+		".pyc",
+		".DS_Store",
+	])
+
 	function walk(currentDir: string, relPrefix = "") {
 		if (results.length >= maxFiles) return
 		let entries: fs.Dirent[] = []
@@ -40,9 +73,19 @@ function listWorkspaceFiles(dir: string, maxFiles = 150): string[] {
 		} catch {
 			return
 		}
+
+		entries.sort((a, b) => {
+			if (a.isDirectory() && !b.isDirectory()) return -1
+			if (!a.isDirectory() && b.isDirectory()) return 1
+			return a.name.localeCompare(b.name)
+		})
+
 		for (const entry of entries) {
 			if (results.length >= maxFiles) break
-			if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue
+			if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) continue
+			const ext = path.extname(entry.name).toLowerCase()
+			if (IGNORED_EXTS.has(ext)) continue
+
 			const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
 			if (entry.isDirectory()) {
 				walk(path.join(currentDir, entry.name), relPath)
@@ -227,7 +270,277 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 				if (ext === ".html") {
 					let html = fs.readFileSync(targetWebviewPath, "utf-8")
-					const polyfill = `
+					const polyfillAndTheme = `
+<style id="vscode-theme-tokens">
+:root {
+	--vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--vscode-font-size: 14px;
+	--vscode-font-weight: 400;
+	--vscode-editor-font-family: "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+	--vscode-editor-font-size: 13px;
+
+	/* Dark Modern Tokens */
+	--vscode-editor-background: #0b0c10;
+	--vscode-editor-foreground: #e4e7ec;
+	--vscode-foreground: #f2f4f7;
+	--vscode-descriptionForeground: #98a2b3;
+	--vscode-disabledForeground: #667085;
+	--vscode-errorForeground: #f04438;
+
+	--vscode-input-background: #14161f;
+	--vscode-input-foreground: #f8fafc;
+	--vscode-input-border: #252836;
+	--vscode-input-placeholderForeground: #667085;
+	--vscode-focusBorder: #3b82f6;
+
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #1a1d28;
+	--vscode-button-secondaryForeground: #f2f4f7;
+	--vscode-button-secondaryHoverBackground: #252838;
+
+	--vscode-dropdown-background: #14161f;
+	--vscode-dropdown-foreground: #f8fafc;
+	--vscode-dropdown-border: #252836;
+	--vscode-dropdown-listBackground: #10121a;
+
+	--vscode-menu-background: #14161f;
+	--vscode-menu-foreground: #f8fafc;
+
+	--vscode-list-hoverBackground: #1a1d28;
+	--vscode-list-hoverForeground: #ffffff;
+	--vscode-list-activeSelectionBackground: #2563eb;
+	--vscode-list-activeSelectionForeground: #ffffff;
+
+	--vscode-badge-background: #2563eb;
+	--vscode-badge-foreground: #ffffff;
+
+	--vscode-textLink-foreground: #60a5fa;
+	--vscode-textLink-activeForeground: #93c5fd;
+	--vscode-textCodeBlock-background: #14161f;
+
+	--vscode-sideBar-background: #0b0c10;
+	--vscode-sideBar-foreground: #e4e7ec;
+	--vscode-panel-border: #1e212d;
+	--vscode-editorGroup-border: #1e212d;
+	--vscode-widget-border: #1e212d;
+	--vscode-widget-shadow: rgba(0, 0, 0, 0.5);
+
+	--vscode-charts-red: #f04438;
+	--vscode-charts-blue: #3b82f6;
+	--vscode-charts-yellow: #f79009;
+	--vscode-charts-green: #12b76a;
+	--vscode-charts-orange: #fb6514;
+}
+
+body.vscode-light {
+	--vscode-editor-background: #ffffff;
+	--vscode-editor-foreground: #1d2939;
+	--vscode-foreground: #101828;
+	--vscode-descriptionForeground: #475467;
+	--vscode-disabledForeground: #98a2b3;
+	--vscode-errorForeground: #d92d20;
+
+	--vscode-input-background: #fcfcfd;
+	--vscode-input-foreground: #101828;
+	--vscode-input-border: #d0d5dd;
+	--vscode-input-placeholderForeground: #98a2b3;
+	--vscode-focusBorder: #2563eb;
+
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #f2f4f7;
+	--vscode-button-secondaryForeground: #1d2939;
+	--vscode-button-secondaryHoverBackground: #e4e7ec;
+
+	--vscode-dropdown-background: #ffffff;
+	--vscode-dropdown-foreground: #101828;
+	--vscode-dropdown-border: #d0d5dd;
+	--vscode-dropdown-listBackground: #ffffff;
+
+	--vscode-menu-background: #ffffff;
+	--vscode-menu-foreground: #101828;
+
+	--vscode-list-hoverBackground: #f2f4f7;
+	--vscode-list-hoverForeground: #101828;
+	--vscode-list-activeSelectionBackground: #2563eb;
+	--vscode-list-activeSelectionForeground: #ffffff;
+
+	--vscode-badge-background: #2563eb;
+	--vscode-badge-foreground: #ffffff;
+
+	--vscode-textLink-foreground: #1570ef;
+	--vscode-textLink-activeForeground: #175cd3;
+	--vscode-textCodeBlock-background: #f8fafc;
+
+	--vscode-sideBar-background: #ffffff;
+	--vscode-sideBar-foreground: #1d2939;
+	--vscode-panel-border: #eaecf0;
+	--vscode-editorGroup-border: #eaecf0;
+	--vscode-widget-border: #eaecf0;
+	--vscode-widget-shadow: rgba(16, 24, 40, 0.08);
+}
+
+html, body {
+	height: 100%;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	background-color: var(--vscode-editor-background);
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	-webkit-font-smoothing: antialiased;
+}
+
+#root {
+	height: 100%;
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+}
+
+/* Polished onboarding/settings width constraints */
+[data-tab-content], .tab-content {
+	max-width: 860px;
+	margin: 0 auto;
+	width: 100%;
+}
+
+/* ==========================================================================
+   Luxury Desktop Controls Sizing (Generous Buttons & Input Boxes)
+   ========================================================================== */
+button, [role="button"] {
+	border-radius: 8px !important;
+	font-family: var(--vscode-font-family) !important;
+	transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Primary buttons with modern gradient & elevation */
+button[class*="bg-primary"],
+button.primary-btn {
+	min-height: 38px !important;
+	padding: 8px 18px !important;
+	font-size: 13.5px !important;
+	font-weight: 600 !important;
+	background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%) !important;
+	color: #ffffff !important;
+	border: 1px solid rgba(255, 255, 255, 0.15) !important;
+	box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+	border-radius: 8px !important;
+}
+button[class*="bg-primary"]:hover {
+	background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 100%) !important;
+	box-shadow: 0 3px 8px rgba(37, 99, 235, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
+}
+
+/* Secondary buttons */
+button[class*="bg-secondary"] {
+	min-height: 38px !important;
+	padding: 8px 16px !important;
+	font-size: 13.5px !important;
+	font-weight: 500 !important;
+	background: #191c28 !important;
+	color: #e2e8f0 !important;
+	border: 1px solid rgba(255, 255, 255, 0.1) !important;
+	border-radius: 8px !important;
+}
+button[class*="bg-secondary"]:hover {
+	background: #24293a !important;
+	color: #ffffff !important;
+	border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Small/Icon buttons in toolbars */
+button[class*="size-"], button[class*="h-7 w-7"], button[class*="h-6"] {
+	min-height: 30px !important;
+	min-width: 30px !important;
+	border-radius: 6px !important;
+	padding: 4px !important;
+}
+
+/* Luxurious modern desktop input, textarea, and select boxes */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+input[type="search"],
+select {
+	min-height: 38px !important;
+	height: 38px !important;
+	padding: 8px 12px !important;
+	font-size: 13.5px !important;
+	border-radius: 8px !important;
+	border: 1px solid rgba(255, 255, 255, 0.12) !important;
+	background-color: #12141d !important;
+	color: #f8fafc !important;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+	transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+textarea {
+	min-height: 48px !important;
+	padding: 10px 14px !important;
+	font-size: 14px !important;
+	line-height: 1.5 !important;
+	border-radius: 10px !important;
+	border: 1px solid rgba(255, 255, 255, 0.12) !important;
+	background-color: #12141d !important;
+	color: #f8fafc !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+	border-color: #3b82f6 !important;
+	box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25) !important;
+	outline: none !important;
+}
+
+/* Combobox / Dropdown triggers */
+button[class*="combobox"], [role="combobox"] {
+	min-height: 38px !important;
+	padding: 8px 12px !important;
+	border-radius: 8px !important;
+	border: 1px solid rgba(255, 255, 255, 0.12) !important;
+	background-color: #12141d !important;
+	font-size: 13.5px !important;
+}
+
+/* Light theme overrides */
+body.vscode-light button[class*="bg-secondary"] {
+	background: #f1f5f9 !important;
+	color: #1e293b !important;
+	border: 1px solid #cbd5e1 !important;
+}
+body.vscode-light input[type="text"],
+body.vscode-light input[type="password"],
+body.vscode-light select,
+body.vscode-light textarea {
+	background-color: #ffffff !important;
+	color: #0f172a !important;
+	border: 1px solid #cbd5e1 !important;
+}
+
+/* Polished custom scrollbars */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: rgba(150, 150, 150, 0.2);
+	border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: rgba(150, 150, 150, 0.35);
+}
+</style>
 <script>
 window.acquireVsCodeApi = function() {
 	return {
@@ -243,9 +556,49 @@ window.acquireVsCodeApi = function() {
 		}
 	};
 };
+
+// Intercept state message to eliminate unwanted/weak Welcome View and land straight in Chat
+window.addEventListener("message", function(e) {
+	if (e.data && e.data.type === "state" && e.data.state) {
+		e.data.state.showWelcome = false;
+		if (!e.data.state.apiConfiguration || !e.data.state.apiConfiguration.apiKey) {
+			e.data.state.apiConfiguration = e.data.state.apiConfiguration || {};
+			if (!e.data.state.apiConfiguration.apiProvider) {
+				e.data.state.apiConfiguration.apiProvider = "anthropic";
+			}
+			e.data.state.apiConfiguration.ollamaModelId = e.data.state.apiConfiguration.ollamaModelId ?? "auto";
+		}
+	}
+}, true);
+
+(function() {
+	function syncTheme() {
+		try {
+			var theme = localStorage.getItem("roo-theme") || "dark";
+			var cls = theme === "light" ? "vscode-light" : "vscode-dark";
+			document.body.className = cls;
+			document.body.setAttribute("data-vscode-theme-kind", cls);
+			document.documentElement.className = cls;
+		} catch(e) {}
+	}
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", syncTheme);
+	} else {
+		syncTheme();
+	}
+	window.addEventListener("message", function(e) {
+		if (e.data && e.data.type === "themeChange") {
+			var cls = e.data.theme === "light" ? "vscode-light" : "vscode-dark";
+			document.body.className = cls;
+			document.body.setAttribute("data-vscode-theme-kind", cls);
+			document.documentElement.className = cls;
+		}
+	});
+})();
 </script>
 `
-					html = html.replace("<head>", `<head>${polyfill}`)
+					html = html.replace("<head>", `<head>${polyfillAndTheme}`)
+					html = html.replace("<body>", `<body class="vscode-dark" data-vscode-theme-kind="vscode-dark">`)
 					res.writeHead(200, { "Content-Type": contentType })
 					res.end(html)
 					return

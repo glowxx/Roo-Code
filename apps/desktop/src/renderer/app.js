@@ -65,6 +65,7 @@
 
 	themeToggleBtn.addEventListener("click", () => {
 		const isLight = document.body.classList.contains("light-theme")
+		const nextTheme = isLight ? "dark" : "light"
 		if (isLight) {
 			document.body.classList.remove("light-theme")
 			document.body.classList.add("dark-theme")
@@ -76,7 +77,17 @@
 			localStorage.setItem("roo-theme", "light")
 			updateThemeIcons(true)
 		}
+		if (webviewFrame?.contentWindow) {
+			webviewFrame.contentWindow.postMessage({ type: "themeChange", theme: nextTheme }, "*")
+		}
 	})
+
+	if (webviewFrame) {
+		webviewFrame.addEventListener("load", () => {
+			const theme = localStorage.getItem("roo-theme") || "dark"
+			webviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+		})
+	}
 
 	function updateThemeIcons(isLight) {
 		const moon = document.querySelector(".moon-icon")
@@ -291,8 +302,61 @@
 		}
 	}
 
+	function computeLCSDiff(oldLines, newLines) {
+		const m = oldLines.length
+		const n = newLines.length
+		if (m > 1200 || n > 1200) {
+			const result = []
+			const max = Math.max(m, n)
+			for (let i = 0; i < max; i++) {
+				const o = oldLines[i]
+				const nw = newLines[i]
+				if (o !== undefined && nw !== undefined) {
+					if (o === nw) result.push({ type: "same", line: o, oldNum: i + 1, newNum: i + 1 })
+					else {
+						result.push({ type: "del", line: o, oldNum: i + 1 })
+						result.push({ type: "add", line: nw, newNum: i + 1 })
+					}
+				} else if (o !== undefined) {
+					result.push({ type: "del", line: o, oldNum: i + 1 })
+				} else if (nw !== undefined) {
+					result.push({ type: "add", line: nw, newNum: i + 1 })
+				}
+			}
+			return result
+		}
+
+		const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+		for (let i = 0; i < m; i++) {
+			for (let j = 0; j < n; j++) {
+				if (oldLines[i] === newLines[j]) {
+					dp[i + 1][j + 1] = dp[i][j] + 1
+				} else {
+					dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1])
+				}
+			}
+		}
+
+		let i = m, j = n
+		const result = []
+		while (i > 0 || j > 0) {
+			if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+				result.push({ type: "same", line: oldLines[i - 1], oldNum: i, newNum: j })
+				i--
+				j--
+			} else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+				result.push({ type: "add", line: newLines[j - 1], newNum: j })
+				j--
+			} else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+				result.push({ type: "del", line: oldLines[i - 1], oldNum: i })
+				i--
+			}
+		}
+		return result.reverse()
+	}
+
 	function renderSelectedDiff(file) {
-		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(file.filePath)} (${file.status})</span>`
+		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(file.filePath)} &nbsp;·&nbsp; <span style="text-transform: capitalize; color: var(--text-primary); font-weight: 600;">${escapeHtml(file.status)}</span></span>`
 		if (!file.newContent && !file.oldContent) {
 			diffContentEl.innerHTML = '<div class="empty-state">File content not available</div>'
 			return
@@ -301,26 +365,23 @@
 		if (file.oldContent && file.newContent && file.oldContent !== file.newContent) {
 			const oldLines = file.oldContent.split("\n")
 			const newLines = file.newContent.split("\n")
+			const diffItems = computeLCSDiff(oldLines, newLines)
 			let html = ""
-			const maxLines = Math.max(oldLines.length, newLines.length)
-			for (let i = 0; i < maxLines && i < 1500; i++) {
-				const oldL = oldLines[i]
-				const newL = newLines[i]
-				if (oldL !== undefined && (newL === undefined || oldL !== newL)) {
-					html += `<div class="diff-line deletion"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>- ${escapeHtml(oldL)}</div>`
+			diffItems.forEach((item) => {
+				if (item.type === "same") {
+					html += `<div class="diff-line"><span class="diff-gutter">${item.newNum || item.oldNum}</span>  ${escapeHtml(item.line)}</div>`
+				} else if (item.type === "del") {
+					html += `<div class="diff-line deletion"><span class="diff-gutter">${item.oldNum}</span>- ${escapeHtml(item.line)}</div>`
+				} else if (item.type === "add") {
+					html += `<div class="diff-line addition"><span class="diff-gutter">${item.newNum}</span>+ ${escapeHtml(item.line)}</div>`
 				}
-				if (newL !== undefined && (oldL === undefined || oldL !== newL)) {
-					html += `<div class="diff-line addition"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>+ ${escapeHtml(newL)}</div>`
-				} else if (oldL !== undefined && oldL === newL) {
-					html += `<div class="diff-line"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>  ${escapeHtml(oldL)}</div>`
-				}
-			}
+			})
 			diffContentEl.innerHTML = html
 		} else {
 			const lines = (file.newContent || file.oldContent || "").split("\n")
 			let html = ""
 			lines.forEach((line, idx) => {
-				html += `<div class="diff-line addition"><span style="width: 40px; color: var(--text-muted);">${idx + 1}</span>+ ${escapeHtml(line)}</div>`
+				html += `<div class="diff-line addition"><span class="diff-gutter">${idx + 1}</span>+ ${escapeHtml(line)}</div>`
 			})
 			diffContentEl.innerHTML = html
 		}
@@ -360,7 +421,19 @@
 		let html = ""
 		filtered.forEach((f) => {
 			const isSelected = selectedPreviewFile === f ? "selected" : ""
-			html += `<div class="file-node ${isSelected}" data-path="${escapeHtml(f)}">📄 ${escapeHtml(f)}</div>`
+			const parts = f.split("/")
+			const fileName = parts.pop() || f
+			const dirPath = parts.join("/")
+			html += `
+				<div class="file-node ${isSelected}" data-path="${escapeHtml(f)}" title="${escapeHtml(f)}">
+					<svg class="file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+						<polyline points="13 2 13 9 20 9"></polyline>
+					</svg>
+					<span class="file-name">${escapeHtml(fileName)}</span>
+					${dirPath ? `<span class="file-dir">${escapeHtml(dirPath)}</span>` : ""}
+				</div>
+			`
 		})
 		filesTreeEl.innerHTML = html
 
