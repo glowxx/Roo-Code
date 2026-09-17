@@ -1,7 +1,11 @@
 import { createRequire } from "module"
 import path from "path"
 import fs from "fs"
+import { fileURLToPath } from "url"
 import { EventEmitter } from "events"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 import pWaitFor from "p-wait-for"
 import type { ExtensionMessage, WebviewMessage } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
@@ -40,6 +44,32 @@ export class DesktopAgentHost extends EventEmitter {
 		return this.currentWorkspace
 	}
 
+	public setWorkspace(newWorkspace: string): void {
+		const resolved = path.resolve(newWorkspace)
+		if (!fs.existsSync(resolved)) {
+			throw new Error(`Directory does not exist: ${resolved}`)
+		}
+		this.currentWorkspace = resolved
+		this.diffFiles.clear()
+		this.terminalLogs = []
+		if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
+			const ws = (this.vscode as Record<string, unknown>).workspace as {
+				workspaceFolders?: Array<{ uri: unknown; name: string; index: number }>
+				name?: string
+			}
+			const UriClass = (this.vscode as Record<string, unknown>).Uri as { file: (p: string) => unknown }
+			ws.workspaceFolders = [
+				{
+					uri: UriClass.file(resolved),
+					name: path.basename(resolved),
+					index: 0,
+				},
+			]
+			ws.name = path.basename(resolved)
+		}
+		this.emit("workspaceChanged", this.currentWorkspace)
+	}
+
 	public getStatus(): AgentStatusType {
 		return this.status
 	}
@@ -58,16 +88,65 @@ export class DesktopAgentHost extends EventEmitter {
 			throw new Error(`Roo Code core engine bundle not found at: ${bundlePath}. Please build it first.`)
 		}
 
+		// Ensure CommonJS package.json exists in extensionPath so Node loads bundle as CJS
+		const enginePkgPath = path.join(this.extensionPath, "package.json")
+		if (!fs.existsSync(enginePkgPath)) {
+			try {
+				fs.writeFileSync(enginePkgPath, JSON.stringify({ name: "@roo-code/engine", type: "commonjs" }, null, 2))
+			} catch {
+				// Read-only filesystem fallback
+			}
+		}
+
 		if (this.storageDir && !fs.existsSync(this.storageDir)) {
 			fs.mkdirSync(this.storageDir, { recursive: true })
 		}
 
-		let appRoot = path.dirname(this.extensionPath)
-		while (appRoot !== path.dirname(appRoot)) {
-			if (fs.existsSync(path.join(appRoot, "node_modules", "@vscode", "ripgrep"))) {
+		// Find appRoot for VSCode API (needs node_modules/@vscode/ripgrep/bin/rg)
+		const binName = process.platform === "win32" ? "rg.exe" : "rg"
+		const candidateAppRoots = [
+			path.join(__dirname, ".."), // dist/
+			path.join(__dirname, "../.."), // apps/desktop
+			process.resourcesPath || "",
+			this.extensionPath,
+		].filter(Boolean)
+
+		let appRoot = ""
+		for (const candidate of candidateAppRoots) {
+			if (fs.existsSync(path.join(candidate, "node_modules", "@vscode", "ripgrep", "bin", binName))) {
+				appRoot = candidate
 				break
 			}
-			appRoot = path.dirname(appRoot)
+		}
+
+		if (!appRoot) {
+			let searchDir = path.dirname(this.extensionPath)
+			while (searchDir !== path.dirname(searchDir)) {
+				const directPath = path.join(searchDir, "node_modules", "@vscode", "ripgrep", "bin", binName)
+				if (fs.existsSync(directPath)) {
+					appRoot = searchDir
+					break
+				}
+				const pnpmDir = path.join(searchDir, "node_modules", ".pnpm")
+				if (fs.existsSync(pnpmDir)) {
+					try {
+						const entries = fs.readdirSync(pnpmDir)
+						const rgEntry = entries.find((e) => e.startsWith("@vscode+ripgrep"))
+						if (rgEntry) {
+							const pnpmRgPath = path.join(pnpmDir, rgEntry)
+							if (fs.existsSync(path.join(pnpmRgPath, "node_modules", "@vscode", "ripgrep", "bin", binName))) {
+								appRoot = pnpmRgPath
+								break
+							}
+						}
+					} catch {}
+				}
+				searchDir = path.dirname(searchDir)
+			}
+		}
+
+		if (!appRoot) {
+			appRoot = path.join(__dirname, "..")
 		}
 
 		// Initialize VSCode API mock
@@ -148,12 +227,13 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	private processExtensionMessage(msg: ExtensionMessage): void {
+		const raw = msg as Record<string, any>
 		// Detect agent status transitions
-		if (msg.type === "say") {
-			if (msg.say === "tool") {
+		if (raw.type === "say") {
+			if (raw.say === "tool") {
 				this.setStatus("executing")
 				try {
-					const toolData = typeof msg.text === "string" ? JSON.parse(msg.text) : msg.text
+					const toolData = typeof raw.text === "string" ? JSON.parse(raw.text) : raw.text
 					if (toolData && toolData.tool === "execute_command") {
 						this.recordTerminalLog(toolData.command || "")
 					}
@@ -163,12 +243,18 @@ export class DesktopAgentHost extends EventEmitter {
 				} catch {
 					// text wasn't JSON
 				}
-			} else if (msg.say === "task") {
+			} else if (raw.say === "command") {
+				this.setStatus("executing")
+				this.recordTerminalLog(typeof raw.text === "string" ? raw.text : "")
+			} else if (raw.say === "command_output") {
+				this.updateLatestTerminalOutput(typeof raw.text === "string" ? raw.text : "")
+			} else if (raw.say === "task") {
 				this.setStatus("thinking")
-			} else if (msg.say === "completion_result") {
+			} else if (raw.say === "completion_result") {
 				this.setStatus("idle")
+				this.finishRunningTerminalLogs()
 			}
-		} else if (msg.type === "ask") {
+		} else if (raw.type === "ask") {
 			this.setStatus("waiting_approval")
 		}
 
@@ -189,16 +275,49 @@ export class DesktopAgentHost extends EventEmitter {
 		this.emit("terminalLog", entry)
 	}
 
+	private updateLatestTerminalOutput(output: string): void {
+		if (this.terminalLogs.length > 0) {
+			const latest = this.terminalLogs[this.terminalLogs.length - 1]
+			if (latest) {
+				latest.output = output || "(Command completed with no output)"
+				latest.status = "completed"
+				this.emit("terminalLog", latest)
+			}
+		}
+	}
+
+	private finishRunningTerminalLogs(): void {
+		for (const log of this.terminalLogs) {
+			if (log.status === "running") {
+				log.status = "completed"
+			}
+		}
+	}
+
 	private recordFileChange(filePath: string, content?: string): void {
 		if (!filePath) return
 		const absPath = path.isAbsolute(filePath) ? filePath : path.join(this.currentWorkspace, filePath)
 		const relPath = path.relative(this.currentWorkspace, absPath)
+		let oldContent: string | undefined = undefined
+		const fileExists = fs.existsSync(absPath)
+		if (fileExists) {
+			try {
+				oldContent = fs.readFileSync(absPath, "utf-8")
+			} catch {
+				// file read error
+			}
+		}
+
+		const oldLines = oldContent ? oldContent.split("\n").length : 0
+		const newLines = content ? content.split("\n").length : 0
+
 		const entry: DiffFileEntry = {
 			filePath: relPath,
+			oldContent,
 			newContent: content,
-			status: fs.existsSync(absPath) ? "modified" : "added",
-			additions: content ? content.split("\n").length : 0,
-			deletions: 0,
+			status: fileExists ? "modified" : "added",
+			additions: Math.max(1, newLines),
+			deletions: oldLines > 0 && newLines > 0 ? Math.max(0, oldLines - newLines) : 0,
 		}
 		this.diffFiles.set(relPath, entry)
 		this.emit("diffsUpdated", this.getDiffFiles())

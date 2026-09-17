@@ -93,7 +93,11 @@
 	// Folder Selection
 	openFolderBtn.addEventListener("click", () => {
 		if (window.__desktopAPI?.selectFolder) {
-			window.__desktopAPI.selectFolder()
+			window.__desktopAPI.selectFolder().then((newPath) => {
+				if (newPath) {
+					sendToServer({ type: "getWorkspaceInfo" })
+				}
+			})
 		} else {
 			const newPath = prompt("Enter full path of folder to open:", currentWorkspace?.path || "")
 			if (newPath && newPath.trim()) {
@@ -132,6 +136,15 @@
 		}
 	}
 
+	// Listen to Electron IPC messages if running inside Electron
+	if (window.__desktopAPI?.onExtensionMessage) {
+		window.__desktopAPI.onExtensionMessage((msg) => {
+			if (msg && typeof msg === "object") {
+				handleServerMessage(msg)
+			}
+		})
+	}
+
 	// WebSocket connection to Agent Engine
 	function connectWebSocket() {
 		const protocol = location.protocol === "https:" ? "wss:" : "ws:"
@@ -168,8 +181,8 @@
 	}
 
 	function sendToServer(msg) {
-		if (window.__desktopAPI?.isElectron) {
-			window.__desktopAPI.sendToExtension(msg)
+		if (window.__desktopAPI?.isElectron && msg.type === "webviewMessage") {
+			window.__desktopAPI.sendToExtension(msg.message)
 			return
 		}
 		if (socket && socket.readyState === WebSocket.OPEN) {
@@ -279,18 +292,38 @@
 	}
 
 	function renderSelectedDiff(file) {
-		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${file.filePath} (${file.status})</span>`
-		if (!file.newContent) {
+		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(file.filePath)} (${file.status})</span>`
+		if (!file.newContent && !file.oldContent) {
 			diffContentEl.innerHTML = '<div class="empty-state">File content not available</div>'
 			return
 		}
 
-		const lines = file.newContent.split("\n")
-		let html = ""
-		lines.forEach((line, idx) => {
-			html += `<div class="diff-line addition"><span style="width: 40px; color: var(--text-muted);">${idx + 1}</span>+ ${escapeHtml(line)}</div>`
-		})
-		diffContentEl.innerHTML = html
+		if (file.oldContent && file.newContent && file.oldContent !== file.newContent) {
+			const oldLines = file.oldContent.split("\n")
+			const newLines = file.newContent.split("\n")
+			let html = ""
+			const maxLines = Math.max(oldLines.length, newLines.length)
+			for (let i = 0; i < maxLines && i < 1500; i++) {
+				const oldL = oldLines[i]
+				const newL = newLines[i]
+				if (oldL !== undefined && (newL === undefined || oldL !== newL)) {
+					html += `<div class="diff-line deletion"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>- ${escapeHtml(oldL)}</div>`
+				}
+				if (newL !== undefined && (oldL === undefined || oldL !== newL)) {
+					html += `<div class="diff-line addition"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>+ ${escapeHtml(newL)}</div>`
+				} else if (oldL !== undefined && oldL === newL) {
+					html += `<div class="diff-line"><span style="width: 40px; color: var(--text-muted);">${i + 1}</span>  ${escapeHtml(oldL)}</div>`
+				}
+			}
+			diffContentEl.innerHTML = html
+		} else {
+			const lines = (file.newContent || file.oldContent || "").split("\n")
+			let html = ""
+			lines.forEach((line, idx) => {
+				html += `<div class="diff-line addition"><span style="width: 40px; color: var(--text-muted);">${idx + 1}</span>+ ${escapeHtml(line)}</div>`
+			})
+			diffContentEl.innerHTML = html
+		}
 	}
 
 	function renderTerminalLogs() {

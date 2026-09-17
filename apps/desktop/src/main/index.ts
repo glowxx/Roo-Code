@@ -1,5 +1,6 @@
 import path from "path"
 import fs from "fs"
+import os from "os"
 import { fileURLToPath } from "url"
 import { DesktopAgentHost } from "./agent-host.js"
 import { createDesktopServer } from "./server.js"
@@ -13,38 +14,60 @@ export interface DesktopRunOptions {
 	isElectron?: boolean
 	openBrowser?: boolean
 	dev?: boolean
+	storageDir?: string
 }
 
 export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	const workspacePath = path.resolve(options.workspacePath || process.cwd())
 	const port = options.port || 4500
-
-	// Locate extension bundle
-	let rootDir = __dirname
-	while (rootDir !== path.dirname(rootDir)) {
-		if (fs.existsSync(path.join(rootDir, "src", "dist", "extension.js"))) {
-			break
-		}
-		rootDir = path.dirname(rootDir)
+	const storageDir = options.storageDir || path.join(os.homedir(), ".roo-desktop-data")
+	if (!fs.existsSync(storageDir)) {
+		fs.mkdirSync(storageDir, { recursive: true })
 	}
 
-	const extensionPath = path.join(rootDir, "src", "dist")
+	// Locate extension bundle
+	let extensionPath = ""
+	const candidateEnginePaths = [
+		process.resourcesPath ? path.join(process.resourcesPath, "engine") : "",
+		path.join(__dirname, "..", "engine"),
+		path.join(__dirname, "engine"),
+	].filter(Boolean)
+
+	for (const candidate of candidateEnginePaths) {
+		if (fs.existsSync(path.join(candidate, "extension.js"))) {
+			extensionPath = candidate
+			break
+		}
+	}
+
+	if (!extensionPath) {
+		let rootDir = __dirname
+		while (rootDir !== path.dirname(rootDir)) {
+			if (fs.existsSync(path.join(rootDir, "src", "dist", "extension.js"))) {
+				extensionPath = path.join(rootDir, "src", "dist")
+				break
+			}
+			rootDir = path.dirname(rootDir)
+		}
+	}
+
 	let staticDir = path.join(__dirname, "renderer")
 	if (!fs.existsSync(staticDir)) {
 		staticDir = path.join(__dirname, "..", "renderer")
 	}
-	if (!fs.existsSync(staticDir)) {
-		staticDir = path.join(rootDir, "apps", "desktop", "dist", "renderer")
+	if (!fs.existsSync(staticDir) && process.resourcesPath) {
+		staticDir = path.join(process.resourcesPath, "renderer")
 	}
 
 	console.log("⚡ Starting Roo Code Desktop...")
 	console.log(`📁 Workspace: ${workspacePath}`)
 	console.log(`📦 Core Engine: ${extensionPath}`)
+	console.log(`💾 Storage: ${storageDir}`)
 
 	const agentHost = new DesktopAgentHost({
 		workspacePath,
 		extensionPath,
-		storageDir: path.join(workspacePath, ".roo-desktop-data"),
+		storageDir,
 	})
 
 	await agentHost.init()
@@ -68,6 +91,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			await app.whenReady()
 
+			const iconCandidate = path.join(staticDir, "icon.png")
 			const win = new BrowserWindow({
 				width: 1300,
 				height: 880,
@@ -75,6 +99,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				minHeight: 600,
 				title: "Roo Code Desktop",
 				backgroundColor: "#18181b",
+				icon: fs.existsSync(iconCandidate) ? iconCandidate : undefined,
 				webPreferences: {
 					preload: path.join(__dirname, "..", "preload", "index.js"),
 					contextIsolation: true,
@@ -82,8 +107,51 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				},
 			})
 
+			// IPC Handlers for communication with renderer
+			ipcMain.on("desktop:message-to-extension", (_event, message) => {
+				agentHost.sendToExtension(message as any)
+			})
+
+			ipcMain.handle("desktop:select-folder", async () => {
+				const result = await dialog.showOpenDialog(win, {
+					properties: ["openDirectory"],
+					defaultPath: agentHost.getWorkspace(),
+				})
+				if (!result.canceled && result.filePaths.length > 0) {
+					const selectedPath = result.filePaths[0]
+					if (selectedPath) {
+						console.log(`Switching workspace to: ${selectedPath}`)
+						agentHost.setWorkspace(selectedPath)
+						return selectedPath
+					}
+				}
+				return null
+			})
+
+			// Bridge agentHost events directly to Electron window
+			agentHost.on("messageToUI", (message) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "extensionMessage", message })
+				}
+			})
+			agentHost.on("statusChange", (status) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "agentStatus", status })
+				}
+			})
+			agentHost.on("terminalLog", (entry) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "terminalLog", entry })
+				}
+			})
+			agentHost.on("diffsUpdated", (diffs) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs })
+				}
+			})
+
 			// Create application menu
-			const menuTemplate: electron.MenuItemConstructorOptions[] = [
+			const menuTemplate: Electron.MenuItemConstructorOptions[] = [
 				{
 					label: "File",
 					submenu: [
@@ -93,14 +161,14 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 							click: async () => {
 								const result = await dialog.showOpenDialog(win, {
 									properties: ["openDirectory"],
-									defaultPath: workspacePath,
+									defaultPath: agentHost.getWorkspace(),
 								})
 								if (!result.canceled && result.filePaths.length > 0) {
 									const selectedPath = result.filePaths[0]
-									console.log(`Switching workspace to: ${selectedPath}`)
-									// Reload with new workspace
-									app.relaunch({ args: process.argv.slice(1).concat(["--workspace", selectedPath]) })
-									app.exit(0)
+									if (selectedPath) {
+										console.log(`Switching workspace to: ${selectedPath}`)
+										agentHost.setWorkspace(selectedPath)
+									}
 								}
 							},
 						},
@@ -166,4 +234,21 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	}
 
 	return { url: appUrl, stop: desktopServer.stop }
+}
+
+// Auto-start when executed directly in an Electron process (e.g. electron . or packaged app)
+if (process.versions.electron && !process.env.ELECTRON_RUN_AS_NODE) {
+	const args = process.argv.slice(2)
+	let workspacePath = process.cwd()
+	const wsArgIdx = args.indexOf("-w") !== -1 ? args.indexOf("-w") : args.indexOf("--workspace")
+	if (wsArgIdx !== -1 && args[wsArgIdx + 1]) {
+		workspacePath = args[wsArgIdx + 1]!
+	}
+
+	startDesktopApp({
+		workspacePath,
+		isElectron: true,
+	}).catch((err) => {
+		console.error("Failed to start Roo Code Desktop in Electron:", err)
+	})
 }

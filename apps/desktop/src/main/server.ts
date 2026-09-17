@@ -90,13 +90,26 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	agentHost.on("diffsUpdated", (diffs) => {
 		broadcast({ type: "diffsUpdated", diffs })
 	})
+	agentHost.on("workspaceChanged", (wsPath) => {
+		const newWs: WorkspaceInfo = {
+			path: wsPath,
+			name: path.basename(wsPath),
+			branch: getGitBranch(wsPath),
+			files: listWorkspaceFiles(wsPath),
+		}
+		broadcast({ type: "workspaceInfo", workspace: newWs })
+		broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+	})
 
 	const server = http.createServer((req, res) => {
 		const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
 		const pathname = parsedUrl.pathname
 
-		// Enable CORS
-		res.setHeader("Access-Control-Allow-Origin", "*")
+		// Enable CORS restricted to localhost/local origins
+		const origin = req.headers.origin || ""
+		if (!origin || origin.includes("localhost") || origin.includes("127.0.0.1")) {
+			res.setHeader("Access-Control-Allow-Origin", origin || "*")
+		}
 		res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		res.setHeader("Access-Control-Allow-Headers", "Content-Type")
 
@@ -127,12 +140,21 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				res.end(JSON.stringify({ error: "Missing path parameter" }))
 				return
 			}
-			const absPath = path.isAbsolute(filePath) ? filePath : path.join(agentHost.getWorkspace(), filePath)
+			const wsRoot = path.resolve(agentHost.getWorkspace())
+			const absPath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
+
+			// Path traversal check
+			if (!absPath.startsWith(wsRoot)) {
+				res.writeHead(403, { "Content-Type": "application/json" })
+				res.end(JSON.stringify({ error: "Access outside workspace forbidden" }))
+				return
+			}
+
 			try {
 				const content = fs.readFileSync(absPath, "utf-8")
 				res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" })
 				res.end(content)
-			} catch (err) {
+			} catch {
 				res.writeHead(404, { "Content-Type": "application/json" })
 				res.end(JSON.stringify({ error: "File not found" }))
 			}
@@ -153,13 +175,30 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 		// Handle /webview and /assets routes
 		if (pathname.startsWith("/webview") || pathname.startsWith("/assets/")) {
-			// Find root repository dir
-			let rootDir = __dirname
-			while (rootDir !== path.dirname(rootDir)) {
-				if (fs.existsSync(path.join(rootDir, "src", "webview-ui", "build"))) break
-				rootDir = path.dirname(rootDir)
+			let webviewBuildDir = ""
+			const candidateWebviewPaths = [
+				process.resourcesPath ? path.join(process.resourcesPath, "webview") : "",
+				path.join(__dirname, "..", "webview"),
+				path.join(__dirname, "webview"),
+			].filter(Boolean)
+
+			for (const candidate of candidateWebviewPaths) {
+				if (fs.existsSync(path.join(candidate, "index.html"))) {
+					webviewBuildDir = candidate
+					break
+				}
 			}
-			const webviewBuildDir = path.join(rootDir, "src", "webview-ui", "build")
+
+			if (!webviewBuildDir) {
+				let rootDir = __dirname
+				while (rootDir !== path.dirname(rootDir)) {
+					if (fs.existsSync(path.join(rootDir, "src", "webview-ui", "build"))) {
+						webviewBuildDir = path.join(rootDir, "src", "webview-ui", "build")
+						break
+					}
+					rootDir = path.dirname(rootDir)
+				}
+			}
 			let relWebviewPath = pathname.startsWith("/webview")
 				? pathname.replace(/^\/webview\/?/, "") || "index.html"
 				: pathname.replace(/^\//, "")
@@ -289,13 +328,35 @@ window.acquireVsCodeApi = function() {
 							},
 						}),
 					)
+				} else if (clientMsg.type === "selectFolder") {
+					if (clientMsg.path && fs.existsSync(clientMsg.path)) {
+						try {
+							agentHost.setWorkspace(clientMsg.path)
+							const curPath = agentHost.getWorkspace()
+							const newWs: WorkspaceInfo = {
+								path: curPath,
+								name: path.basename(curPath),
+								branch: getGitBranch(curPath),
+								files: listWorkspaceFiles(curPath),
+							}
+							broadcast({ type: "workspaceInfo", workspace: newWs })
+							broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+						} catch (err) {
+							ws.send(JSON.stringify({ type: "error", message: String(err) }))
+						}
+					} else {
+						ws.send(JSON.stringify({ type: "error", message: `Folder does not exist: ${clientMsg.path}` }))
+					}
 				} else if (clientMsg.type === "readFile") {
+					const wsRoot = path.resolve(agentHost.getWorkspace())
 					const abs = path.isAbsolute(clientMsg.filePath)
-						? clientMsg.filePath
-						: path.join(agentHost.getWorkspace(), clientMsg.filePath)
-					if (fs.existsSync(abs)) {
+						? path.resolve(clientMsg.filePath)
+						: path.resolve(wsRoot, clientMsg.filePath)
+					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
 						const content = fs.readFileSync(abs, "utf-8")
 						ws.send(JSON.stringify({ type: "fileContent", filePath: clientMsg.filePath, content }))
+					} else {
+						ws.send(JSON.stringify({ type: "error", message: "File not found or outside workspace" }))
 					}
 				}
 			} catch (err) {
