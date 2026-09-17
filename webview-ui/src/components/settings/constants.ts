@@ -17,6 +17,7 @@ import {
 	fireworksModels,
 	minimaxModels,
 	basetenModels,
+	xkiroModels,
 } from "@roo-code/types"
 
 export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, ModelInfo>>> = {
@@ -36,9 +37,11 @@ export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, Mod
 	fireworks: fireworksModels,
 	minimax: minimaxModels,
 	baseten: basetenModels,
+	xkiro: xkiroModels,
 }
 
 export const PROVIDERS = [
+	{ value: "xkiro", label: "xKiro (Polecany - Darmowe tokeny)", proxy: false },
 	{ value: "openrouter", label: "OpenRouter", proxy: false },
 	{ value: "anthropic", label: "Anthropic", proxy: false },
 	{ value: "gemini", label: "Google Gemini", proxy: false },

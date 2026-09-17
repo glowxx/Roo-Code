@@ -165,9 +165,13 @@
 	})
 
 	// Files Search Filter
+	let searchDebounceTimer = null
 	filesSearchInput.addEventListener("input", (e) => {
-		const filter = e.target.value.toLowerCase()
-		renderFilesTree(filter)
+		clearTimeout(searchDebounceTimer)
+		searchDebounceTimer = setTimeout(() => {
+			const filter = e.target.value.toLowerCase()
+			renderFilesTree(filter)
+		}, 150)
 	})
 
 	// Setup Bidirectional Bridge with Iframe
@@ -604,18 +608,20 @@
 			`
 		})
 		filesTreeEl.innerHTML = html
-
-		filesTreeEl.querySelectorAll(".file-node").forEach((node) => {
-			node.addEventListener("click", () => {
-				const path = node.getAttribute("data-path")
-				selectedPreviewFile = path
-				previewFilenameEl.textContent = path
-				previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
-				sendToServer({ type: "readFile", filePath: path })
-				renderFilesTree(filesSearchInput.value.toLowerCase())
-			})
-		})
 	}
+
+	filesTreeEl?.addEventListener("click", (e) => {
+		const node = e.target.closest(".file-node")
+		if (!node) return
+		const path = node.getAttribute("data-path")
+		if (!path) return
+		selectedPreviewFile = path
+		filesTreeEl.querySelectorAll(".file-node.selected").forEach((n) => n.classList.remove("selected"))
+		node.classList.add("selected")
+		previewFilenameEl.textContent = path
+		previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
+		sendToServer({ type: "readFile", filePath: path })
+	})
 
 	function renderFilePreview(msg) {
 		currentPreviewMsg = msg
@@ -1042,6 +1048,14 @@
 		}
 		if (apiKeyInput) {
 			apiKeyInput.placeholder = preset.keyPlaceholder
+			let key = ""
+			if (providerKey === "xkiro") key = currentApiConfig?.xkiroApiKey || (currentApiConfig?.apiProvider === "xkiro" ? currentApiConfig?.apiKey : "") || ""
+			else if (providerKey === "openrouter") key = currentApiConfig?.openRouterApiKey || (currentApiConfig?.apiProvider === "openrouter" ? currentApiConfig?.apiKey : "") || ""
+			else if (providerKey === "anthropic") key = (currentApiConfig?.apiProvider === "anthropic" ? currentApiConfig?.apiKey : "") || ""
+			else if (providerKey === "openai" || providerKey === "openai-compatible") key = currentApiConfig?.openAiApiKey || (currentApiConfig?.apiProvider === "openai" ? currentApiConfig?.apiKey : "") || ""
+			else if (providerKey === "gemini") key = currentApiConfig?.geminiApiKey || (currentApiConfig?.apiProvider === "gemini" ? currentApiConfig?.apiKey : "") || ""
+			else if (providerKey === "ollama") key = currentApiConfig?.ollamaApiKey || ""
+			apiKeyInput.value = key
 		}
 		if (apiBaseUrlInput && (!apiBaseUrlInput.value || (groupBaseUrl && groupBaseUrl.style.display !== "none"))) {
 			apiBaseUrlInput.value = preset.defaultBaseUrl

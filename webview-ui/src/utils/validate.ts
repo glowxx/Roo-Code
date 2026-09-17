@@ -88,6 +88,11 @@ function validateModelsAndKeysProvided(apiConfiguration: ProviderSettings): stri
 				return i18next.t("settings:validation.apiKey")
 			}
 			break
+		case "xkiro":
+			if (!apiConfiguration.xkiroApiKey && !apiConfiguration.apiKey) {
+				return i18next.t("settings:validation.apiKey")
+			}
+			break
 		case "openai":
 			if (!apiConfiguration.openAiBaseUrl || !apiConfiguration.openAiApiKey || !apiConfiguration.openAiModelId) {
 				return i18next.t("settings:validation.openAi")

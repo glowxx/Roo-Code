@@ -92,20 +92,20 @@
 				</div>
 
 				<!-- AI Provider & API Key Indicator / Quick Setup -->
-				<button class="api-pill-btn" id="quick-api-btn" title="AI Provider & Model Configuration">
+				<button class="api-pill-btn" id="quick-api-btn" title="Konfiguracja API & Modeli AI (xKiro, Claude, GPT, Gemini)">
 					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
 					</svg>
-					<span class="api-pill-text" id="api-pill-label">API: Configure</span>
+					<span class="api-pill-text" id="api-pill-label">API: Konfiguruj</span>
 				</button>
 
 				<!-- Direct Settings Button -->
-				<button class="settings-pill-btn" id="settings-open-btn" title="Open Settings (Ustawienia)">
+				<button class="settings-pill-btn" id="settings-open-btn" title="Otwórz Ustawienia (Settings)">
 					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<circle cx="12" cy="12" r="3"></circle>
 						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
 					</svg>
-					<span>Settings</span>
+					<span>Ustawienia</span>
 				</button>
 
 				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Theme (Dark / Light)">
@@ -141,16 +141,16 @@
 				<div class="diffs-view">
 					<aside class="diffs-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Modified Files</span>
-							<span class="file-counter" id="diff-file-counter">0 files</span>
+							<span class="sidebar-title">Zmodyfikowane Pliki</span>
+							<span class="file-counter" id="diff-file-counter">0 plików</span>
 						</div>
 						<div class="diffs-list" id="diffs-file-list">
-							<div class="empty-state">No changes made by the agent yet.</div>
+							<div class="empty-state">Brak zarejestrowanych zmian w plikach.</div>
 						</div>
 					</aside>
 					<div class="diff-viewer-panel">
 						<div class="diff-viewer-header" id="diff-viewer-header">
-							<span class="diff-filename">Select a file from the sidebar to inspect changes</span>
+							<span class="diff-filename">Wybierz plik z listy po lewej, aby przejrzeć zmiany</span>
 						</div>
 						<div class="diff-content" id="diff-content">
 							<div class="diff-placeholder">
@@ -160,7 +160,7 @@
 									<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
 									<line x1="6" y1="9" x2="6" y2="21"></line>
 								</svg>
-								<p>When Roo Code creates or modifies files, you can review line-by-line diffs here.</p>
+								<p>Gdy agent tworzy lub edytuje pliki, tutaj pojawi się podgląd różnic linia po linii (diff).</p>
 							</div>
 						</div>
 					</div>
@@ -173,14 +173,20 @@
 					<div class="terminal-toolbar">
 						<div class="terminal-title">
 							<span class="terminal-prompt">$</span>
-							<span>Command Execution Stream</span>
+							<span>Logi Terminala i Poleceń Agenta</span>
 						</div>
 						<div class="terminal-actions">
-							<button class="terminal-btn" id="clear-terminal-btn">Clear Stream</button>
+							<button class="icon-btn" id="clear-terminal-btn" title="Wyczyść logi terminala">
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<polyline points="3 6 5 6 21 6"></polyline>
+									<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+								</svg>
+								<span>Wyczyść</span>
+							</button>
 						</div>
 					</div>
 					<div class="terminal-output" id="terminal-output">
-						<div class="terminal-empty">Terminal output from tools and commands executed by Roo Code will appear here.</div>
+						<div class="terminal-empty">Tutaj pojawią się polecenia i logi wykonania narzędzi terminala Roo Code.</div>
 					</div>
 				</div>
 			</section>
@@ -190,48 +196,48 @@
 				<div class="files-view">
 					<aside class="files-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Workspace Tree</span>
-							<input type="text" id="files-search" class="files-search-input" placeholder="Search files...">
+							<span class="sidebar-title">Pliki Projektu</span>
+							<input type="text" id="files-search" class="files-search-input" placeholder="Szukaj plików w projekcie...">
 						</div>
 						<div class="files-tree" id="files-tree">
-							<div class="empty-state">Loading workspace tree...</div>
+							<div class="empty-state">Wczytywanie drzewa plików...</div>
 						</div>
 					</aside>
 					<div class="file-preview-panel">
 						<div class="preview-header">
 							<div class="preview-header-left">
 								<span class="preview-file-icon" id="preview-file-icon">📄</span>
-								<span id="preview-filename">Select a file to preview</span>
+								<span id="preview-filename">Wybierz plik z drzewa do podglądu</span>
 								<span class="preview-badge" id="preview-file-badge" style="display: none;"></span>
 								<span class="preview-size" id="preview-file-size"></span>
 							</div>
 							<div class="preview-header-actions" id="preview-header-actions" style="display: none;">
-								<button class="preview-action-btn" id="preview-copy-btn" title="Copy File Content">
+								<button class="preview-action-btn" id="preview-copy-btn" title="Kopiuj zawartość lub ścieżkę">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
 										<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
 									</svg>
-									<span>Copy</span>
+									<span>Kopiuj</span>
 								</button>
-								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Toggle Word Wrap">
+								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Przełącz zawijanie wierszy">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<line x1="3" y1="6" x2="21" y2="6"></line>
 										<line x1="3" y1="12" x2="15" y2="12"></line>
 										<path d="M18 9l3 3-3 3"></path>
 										<line x1="3" y1="18" x2="21" y2="18"></line>
 									</svg>
-									<span>Wrap</span>
+									<span>Zawijaj</span>
 								</button>
-								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Toggle Raw / Rendered">
-									<span>View Source</span>
+								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Przełącz podgląd / źródło">
+									<span>Kod Źródłowy</span>
 								</button>
-								<button class="preview-action-btn" id="preview-open-external-btn" title="Reveal in File Explorer">
+								<button class="preview-action-btn" id="preview-open-external-btn" title="Pokaż w Eksploratorze Windows">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
 										<polyline points="15 3 21 3 21 9"></polyline>
 										<line x1="10" y1="14" x2="21" y2="3"></line>
 									</svg>
-									<span>Reveal</span>
+									<span>W Eksploratorze</span>
 								</button>
 							</div>
 						</div>
@@ -244,7 +250,7 @@
 									<line x1="16" y1="17" x2="8" y2="17"></line>
 									<polyline points="10 9 9 9 8 9"></polyline>
 								</svg>
-								<p>Select any file from the workspace tree to preview its content, image, or details.</p>
+								<p>Wybierz dowolny plik z drzewa projektu, aby wyświetlić jego kod, obraz lub szczegóły.</p>
 							</div>
 						</div>
 					</div>

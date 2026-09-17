@@ -92,6 +92,7 @@ import {
 	Fireworks,
 	VercelAiGateway,
 	MiniMax,
+	XKiro,
 } from "./providers"
 
 import { MODELS_BY_PROVIDER, PROVIDERS } from "./constants"
@@ -601,6 +602,14 @@ const ApiOptions = ({
 						<LMStudio
 							apiConfiguration={apiConfiguration}
 							setApiConfigurationField={setApiConfigurationField}
+						/>
+					)}
+
+					{selectedProvider === "xkiro" && (
+						<XKiro
+							apiConfiguration={apiConfiguration}
+							setApiConfigurationField={setApiConfigurationField}
+							simplifySettings={fromWelcomeView}
 						/>
 					)}
 
