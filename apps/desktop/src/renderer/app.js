@@ -36,8 +36,20 @@
 	// Files elements
 	const filesTreeEl = document.getElementById("files-tree")
 	const filesSearchInput = document.getElementById("files-search")
+	const previewFileIconEl = document.getElementById("preview-file-icon")
 	const previewFilenameEl = document.getElementById("preview-filename")
-	const previewCodeContentEl = document.getElementById("preview-code-content")
+	const previewFileBadgeEl = document.getElementById("preview-file-badge")
+	const previewFileSizeEl = document.getElementById("preview-file-size")
+	const previewHeaderActionsEl = document.getElementById("preview-header-actions")
+	const previewCopyBtn = document.getElementById("preview-copy-btn")
+	const previewToggleWrapBtn = document.getElementById("preview-toggle-wrap-btn")
+	const previewToggleViewBtn = document.getElementById("preview-toggle-view-btn")
+	const previewOpenExternalBtn = document.getElementById("preview-open-external-btn")
+	const previewContentAreaEl = document.getElementById("preview-content-area")
+
+	let currentPreviewMsg = null
+	let isCodeWrapped = false
+	let isSvgSourceView = false
 
 	// Setup Tabs Navigation
 	const tabs = document.querySelectorAll(".nav-tab")
@@ -231,7 +243,7 @@
 
 			case "fileContent":
 				if (msg.filePath === selectedPreviewFile) {
-					previewCodeContentEl.textContent = msg.content
+					renderFilePreview(msg)
 				}
 				break
 		}
@@ -409,6 +421,123 @@
 		terminalOutputEl.innerHTML = html
 	}
 
+	function formatBytes(bytes, decimals = 1) {
+		if (!bytes || bytes === 0) return "0 B"
+		const k = 1024
+		const dm = decimals < 0 ? 0 : decimals
+		const sizes = ["B", "KB", "MB", "GB", "TB"]
+		const i = Math.floor(Math.log(bytes) / Math.log(k))
+		return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i]
+	}
+
+	function getFileIconInfo(filePath) {
+		const ext = filePath.split(".").pop()?.toLowerCase() || ""
+		switch (ext) {
+			case "png":
+			case "jpg":
+			case "jpeg":
+			case "gif":
+			case "webp":
+			case "ico":
+			case "bmp":
+				return {
+					icon: `<svg class="file-icon icon-image" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
+					type: "image",
+					badge: ext.toUpperCase(),
+				}
+			case "svg":
+				return {
+					icon: `<svg class="file-icon icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+					type: "svg",
+					badge: "SVG",
+				}
+			case "ts":
+			case "tsx":
+				return {
+					icon: `<svg class="file-icon icon-ts" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+					type: "ts",
+					badge: ext.toUpperCase(),
+				}
+			case "js":
+			case "jsx":
+			case "mjs":
+			case "cjs":
+				return {
+					icon: `<svg class="file-icon icon-js" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+					type: "js",
+					badge: ext.toUpperCase(),
+				}
+			case "json":
+				return {
+					icon: `<svg class="file-icon icon-json" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6c0-1.1.9-2 2-2h2v4H6a2 2 0 0 1-2-2z"></path><path d="M20 6c0-1.1-.9-2-2-2h-2v4h2a2 2 0 0 1 2-2z"></path><path d="M4 18c0 1.1.9 2 2 2h2v-4H6a2 2 0 0 0-2 2z"></path><path d="M20 18c0 1.1-.9 2-2 2h-2v-4h2a2 2 0 0 0 2 2z"></path></svg>`,
+					type: "json",
+					badge: "JSON",
+				}
+			case "md":
+			case "markdown":
+				return {
+					icon: `<svg class="file-icon icon-md" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+					type: "md",
+					badge: "MD",
+				}
+			case "html":
+				return {
+					icon: `<svg class="file-icon icon-html" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
+					type: "html",
+					badge: "HTML",
+				}
+			case "css":
+			case "scss":
+			case "less":
+				return {
+					icon: `<svg class="file-icon icon-css" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>`,
+					type: "css",
+					badge: "CSS",
+				}
+			case "bat":
+			case "cmd":
+			case "sh":
+			case "ps1":
+				return {
+					icon: `<svg class="file-icon icon-script" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`,
+					type: "script",
+					badge: ext.toUpperCase(),
+				}
+			case "pdf":
+				return {
+					icon: `<svg class="file-icon icon-pdf" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+					type: "pdf",
+					badge: "PDF",
+				}
+			case "zip":
+			case "tar":
+			case "gz":
+			case "7z":
+			case "rar":
+				return {
+					icon: `<svg class="file-icon icon-zip" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>`,
+					type: "archive",
+					badge: ext.toUpperCase(),
+				}
+			case "exe":
+			case "dll":
+			case "bin":
+			case "msi":
+			case "pak":
+				return {
+					icon: `<svg class="file-icon icon-exe" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><circle cx="12" cy="12" r="3"></circle></svg>`,
+					type: "binary",
+					badge: ext.toUpperCase(),
+				}
+			default:
+				return {
+					icon: `<svg class="file-icon icon-doc" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
+					type: "text",
+					badge: ext ? ext.toUpperCase() : "FILE",
+				}
+		}
+	}
+
 	function renderFilesTree(filter = "") {
 		const files = currentWorkspace?.files || []
 		const filtered = filter ? files.filter((f) => f.toLowerCase().includes(filter)) : files
@@ -424,12 +553,10 @@
 			const parts = f.split("/")
 			const fileName = parts.pop() || f
 			const dirPath = parts.join("/")
+			const iconInfo = getFileIconInfo(f)
 			html += `
 				<div class="file-node ${isSelected}" data-path="${escapeHtml(f)}" title="${escapeHtml(f)}">
-					<svg class="file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-						<polyline points="13 2 13 9 20 9"></polyline>
-					</svg>
+					${iconInfo.icon}
 					<span class="file-name">${escapeHtml(fileName)}</span>
 					${dirPath ? `<span class="file-dir">${escapeHtml(dirPath)}</span>` : ""}
 				</div>
@@ -442,12 +569,189 @@
 				const path = node.getAttribute("data-path")
 				selectedPreviewFile = path
 				previewFilenameEl.textContent = path
-				previewCodeContentEl.textContent = "Loading file content..."
+				previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
 				sendToServer({ type: "readFile", filePath: path })
 				renderFilesTree(filesSearchInput.value.toLowerCase())
 			})
 		})
 	}
+
+	function renderFilePreview(msg) {
+		currentPreviewMsg = msg
+		const iconInfo = getFileIconInfo(msg.filePath)
+
+		previewFileIconEl.innerHTML = iconInfo.icon
+		previewFilenameEl.textContent = msg.fileName || msg.filePath
+		previewFileBadgeEl.textContent = iconInfo.badge
+		previewFileBadgeEl.style.display = "inline-block"
+		previewFileSizeEl.textContent = msg.size !== undefined ? `• ${formatBytes(msg.size)}` : ""
+		previewHeaderActionsEl.style.display = "flex"
+
+		// Reset view toggles
+		previewToggleViewBtn.style.display = msg.fileType === "svg" ? "inline-flex" : "none"
+		previewToggleWrapBtn.style.display = (msg.fileType === "text" || msg.fileType === "markdown" || msg.fileType === "json" || msg.fileType === "svg") ? "inline-flex" : "none"
+
+		if (msg.fileType === "image") {
+			previewContentAreaEl.innerHTML = `
+				<div class="image-preview-stage">
+					<div class="image-viewport">
+						<div class="image-checkerboard">
+							<img src="${msg.content}" class="preview-img" id="preview-img-target" alt="${escapeHtml(msg.fileName || '')}" />
+						</div>
+					</div>
+					<div class="image-meta-bar">
+						<span id="img-dim-text">Loading dimensions...</span>
+						<span class="meta-sep">•</span>
+						<span>${formatBytes(msg.size)}</span>
+						<span class="meta-sep">•</span>
+						<span>${msg.mimeType || 'image'}</span>
+					</div>
+				</div>
+			`
+			const imgEl = document.getElementById("preview-img-target")
+			if (imgEl) {
+				imgEl.onload = () => {
+					const dimEl = document.getElementById("img-dim-text")
+					if (dimEl) dimEl.textContent = `${imgEl.naturalWidth} × ${imgEl.naturalHeight} px`
+				}
+			}
+		} else if (msg.fileType === "svg") {
+			isSvgSourceView = false
+			renderSvgPreview()
+		} else if (msg.fileType === "media") {
+			const isVideo = [".mp4", ".webm"].some((ext) => (msg.filePath || "").toLowerCase().endsWith(ext))
+			if (isVideo) {
+				previewContentAreaEl.innerHTML = `
+					<div class="media-preview-container">
+						<video controls src="${msg.content}" class="preview-media-video"></video>
+					</div>
+				`
+			} else {
+				previewContentAreaEl.innerHTML = `
+					<div class="media-preview-container">
+						<audio controls src="${msg.content}" class="preview-media-audio"></audio>
+					</div>
+				`
+			}
+		} else if (msg.fileType === "pdf") {
+			previewContentAreaEl.innerHTML = `
+				<embed src="${msg.content}" type="application/pdf" class="preview-pdf-frame" />
+			`
+		} else if (msg.fileType === "binary") {
+			previewContentAreaEl.innerHTML = `
+				<div class="binary-preview-card">
+					<div class="binary-icon-wrap">${iconInfo.icon}</div>
+					<h3 class="binary-title">${escapeHtml(msg.fileName || msg.filePath)}</h3>
+					<p class="binary-desc">Binary file (${formatBytes(msg.size)}). This file cannot be displayed directly as text.</p>
+					<div class="binary-actions">
+						<button class="binary-open-btn" id="binary-reveal-btn">Reveal in File Explorer</button>
+					</div>
+				</div>
+			`
+			document.getElementById("binary-reveal-btn")?.addEventListener("click", () => {
+				revealCurrentFile()
+			})
+		} else {
+			// Text / JSON / Markdown
+			let textContent = msg.content || ""
+			if (msg.fileType === "json") {
+				try {
+					textContent = JSON.stringify(JSON.parse(textContent), null, 2)
+				} catch {}
+			}
+			renderCodeText(textContent)
+		}
+	}
+
+	function renderSvgPreview() {
+		if (!currentPreviewMsg) return
+		if (isSvgSourceView) {
+			renderCodeText(currentPreviewMsg.rawText || "")
+			previewToggleViewBtn.querySelector("span").textContent = "View Image"
+		} else {
+			previewToggleViewBtn.querySelector("span").textContent = "View Code"
+			previewContentAreaEl.innerHTML = `
+				<div class="image-preview-stage">
+					<div class="image-viewport">
+						<div class="image-checkerboard">
+							<img src="${currentPreviewMsg.content}" class="preview-img" alt="SVG Preview" />
+						</div>
+					</div>
+					<div class="image-meta-bar">
+						<span>Vector Graphic</span>
+						<span class="meta-sep">•</span>
+						<span>${formatBytes(currentPreviewMsg.size)}</span>
+						<span class="meta-sep">•</span>
+						<span>image/svg+xml</span>
+					</div>
+				</div>
+			`
+		}
+	}
+
+	function renderCodeText(text) {
+		const lines = text.split("\n")
+		let gutterHtml = ""
+		for (let i = 1; i <= lines.length; i++) {
+			gutterHtml += `${i}\n`
+		}
+
+		const wrapClass = isCodeWrapped ? "wrapped" : ""
+		previewContentAreaEl.innerHTML = `
+			<div class="code-preview-container">
+				<div class="code-gutter">${gutterHtml}</div>
+				<pre class="code-lines-body ${wrapClass}" id="code-lines-body"><code>${escapeHtml(text)}</code></pre>
+			</div>
+		`
+	}
+
+	function revealCurrentFile() {
+		if (!selectedPreviewFile) return
+		if (window.__desktopAPI?.showItemInFolder) {
+			window.__desktopAPI.showItemInFolder(selectedPreviewFile)
+		} else {
+			sendToServer({ type: "showItem", filePath: selectedPreviewFile })
+		}
+	}
+
+	// Preview Header Actions
+	previewCopyBtn?.addEventListener("click", () => {
+		if (!currentPreviewMsg) return
+		let textToCopy = ""
+		if (currentPreviewMsg.fileType === "image" || currentPreviewMsg.fileType === "media" || currentPreviewMsg.fileType === "pdf") {
+			textToCopy = currentPreviewMsg.filePath
+		} else if (currentPreviewMsg.fileType === "svg" && currentPreviewMsg.rawText) {
+			textToCopy = currentPreviewMsg.rawText
+		} else {
+			textToCopy = currentPreviewMsg.content || currentPreviewMsg.filePath
+		}
+		navigator.clipboard.writeText(textToCopy).then(() => {
+			const label = previewCopyBtn.querySelector("span")
+			if (label) {
+				const orig = label.textContent
+				label.textContent = "Copied!"
+				setTimeout(() => { label.textContent = orig }, 1500)
+			}
+		})
+	})
+
+	previewToggleWrapBtn?.addEventListener("click", () => {
+		isCodeWrapped = !isCodeWrapped
+		previewToggleWrapBtn.classList.toggle("active", isCodeWrapped)
+		const body = document.getElementById("code-lines-body")
+		if (body) {
+			body.classList.toggle("wrapped", isCodeWrapped)
+		}
+	})
+
+	previewToggleViewBtn?.addEventListener("click", () => {
+		isSvgSourceView = !isSvgSourceView
+		renderSvgPreview()
+	})
+
+	previewOpenExternalBtn?.addEventListener("click", () => {
+		revealCurrentFile()
+	})
 
 	function escapeHtml(text) {
 		return String(text)

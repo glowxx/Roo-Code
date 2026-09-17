@@ -87,7 +87,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	if (options.isElectron && process.versions.electron) {
 		try {
 			const electron = await import("electron")
-			const { app, BrowserWindow, dialog, ipcMain, Menu } = electron
+			const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = electron
 
 			await app.whenReady()
 
@@ -126,6 +126,30 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 					}
 				}
 				return null
+			})
+
+			ipcMain.handle("desktop:show-item", async (_event, filePath: string) => {
+				if (filePath && typeof filePath === "string") {
+					const wsRoot = path.resolve(agentHost.getWorkspace())
+					const abs = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
+					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
+						shell.showItemInFolder(abs)
+						return true
+					}
+				}
+				return false
+			})
+
+			ipcMain.handle("desktop:open-path", async (_event, filePath: string) => {
+				if (filePath && typeof filePath === "string") {
+					const wsRoot = path.resolve(agentHost.getWorkspace())
+					const abs = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
+					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
+						await shell.openPath(abs)
+						return true
+					}
+				}
+				return false
 			})
 
 			// Bridge agentHost events directly to Electron window

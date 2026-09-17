@@ -3,7 +3,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
-import { execSync } from "child_process"
+import { execSync, exec } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
 import type { DesktopClientMessage, DesktopServerMessage, WorkspaceInfo } from "../shared/types.js"
 
@@ -30,7 +30,7 @@ function getGitBranch(workspacePath: string): string | undefined {
 	}
 }
 
-function listWorkspaceFiles(dir: string, maxFiles = 300): string[] {
+function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
 	const results: string[] = []
 	const IGNORED_DIRS = new Set([
 		"node_modules",
@@ -48,21 +48,11 @@ function listWorkspaceFiles(dir: string, maxFiles = 300): string[] {
 		".cache",
 		"temp",
 		"tmp",
-		"bin",
-		"obj",
-		"target",
 	])
-	const IGNORED_EXTS = new Set([
-		".pak",
-		".bin",
-		".exe",
-		".dll",
-		".blockmap",
-		".node",
-		".log",
-		".lock",
-		".pyc",
-		".DS_Store",
+	const IGNORED_SYSTEM_FILES = new Set([
+		".ds_store",
+		"thumbs.db",
+		"desktop.ini",
 	])
 
 	function walk(currentDir: string, relPrefix = "") {
@@ -82,9 +72,11 @@ function listWorkspaceFiles(dir: string, maxFiles = 300): string[] {
 
 		for (const entry of entries) {
 			if (results.length >= maxFiles) break
-			if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) continue
-			const ext = path.extname(entry.name).toLowerCase()
-			if (IGNORED_EXTS.has(ext)) continue
+			if (entry.name.startsWith(".") && entry.name !== ".env" && !entry.name.startsWith(".env.")) {
+				if (entry.isDirectory() || IGNORED_DIRS.has(entry.name)) continue
+			}
+			if (IGNORED_DIRS.has(entry.name)) continue
+			if (IGNORED_SYSTEM_FILES.has(entry.name.toLowerCase())) continue
 
 			const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
 			if (entry.isDirectory()) {
@@ -194,12 +186,41 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			}
 
 			try {
-				const content = fs.readFileSync(absPath, "utf-8")
-				res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" })
-				res.end(content)
+				if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+					res.writeHead(404, { "Content-Type": "application/json" })
+					res.end(JSON.stringify({ error: "File not found" }))
+					return
+				}
+				const ext = path.extname(absPath).toLowerCase()
+				const mimeTypes: Record<string, string> = {
+					".png": "image/png",
+					".jpg": "image/jpeg",
+					".jpeg": "image/jpeg",
+					".gif": "image/gif",
+					".webp": "image/webp",
+					".ico": "image/x-icon",
+					".bmp": "image/bmp",
+					".svg": "image/svg+xml",
+					".html": "text/html; charset=utf-8",
+					".css": "text/css; charset=utf-8",
+					".js": "application/javascript; charset=utf-8",
+					".mjs": "application/javascript; charset=utf-8",
+					".ts": "text/plain; charset=utf-8",
+					".tsx": "text/plain; charset=utf-8",
+					".json": "application/json; charset=utf-8",
+					".md": "text/markdown; charset=utf-8",
+					".txt": "text/plain; charset=utf-8",
+					".pdf": "application/pdf",
+					".mp3": "audio/mpeg",
+					".wav": "audio/wav",
+					".mp4": "video/mp4",
+				}
+				const contentType = mimeTypes[ext] || "application/octet-stream"
+				res.writeHead(200, { "Content-Type": contentType })
+				fs.createReadStream(absPath).pipe(res)
 			} catch {
-				res.writeHead(404, { "Content-Type": "application/json" })
-				res.end(JSON.stringify({ error: "File not found" }))
+				res.writeHead(500, { "Content-Type": "application/json" })
+				res.end(JSON.stringify({ error: "Error reading file" }))
 			}
 			return
 		}
@@ -705,11 +726,128 @@ window.addEventListener("message", function(e) {
 					const abs = path.isAbsolute(clientMsg.filePath)
 						? path.resolve(clientMsg.filePath)
 						: path.resolve(wsRoot, clientMsg.filePath)
-					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
-						const content = fs.readFileSync(abs, "utf-8")
-						ws.send(JSON.stringify({ type: "fileContent", filePath: clientMsg.filePath, content }))
+					if (abs.startsWith(wsRoot) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+						try {
+							const stat = fs.statSync(abs)
+							const ext = path.extname(abs).toLowerCase()
+							const mimeTypes: Record<string, string> = {
+								".png": "image/png",
+								".jpg": "image/jpeg",
+								".jpeg": "image/jpeg",
+								".gif": "image/gif",
+								".webp": "image/webp",
+								".ico": "image/x-icon",
+								".bmp": "image/bmp",
+								".svg": "image/svg+xml",
+								".mp3": "audio/mpeg",
+								".wav": "audio/wav",
+								".ogg": "audio/ogg",
+								".mp4": "video/mp4",
+								".webm": "video/webm",
+								".pdf": "application/pdf",
+							}
+
+							const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp"].includes(ext)
+							const isSvg = ext === ".svg"
+							const isMedia = [".mp3", ".wav", ".ogg", ".mp4", ".webm"].includes(ext)
+							const isPdf = ext === ".pdf"
+
+							if (isImage || isMedia || isPdf) {
+								const buf = fs.readFileSync(abs)
+								const mime = mimeTypes[ext] || "application/octet-stream"
+								const dataUrl = `data:${mime};base64,${buf.toString("base64")}`
+								ws.send(
+									JSON.stringify({
+										type: "fileContent",
+										filePath: clientMsg.filePath,
+										fileType: isImage ? "image" : isMedia ? "media" : "pdf",
+										mimeType: mime,
+										size: stat.size,
+										content: dataUrl,
+										fileName: path.basename(abs),
+										ext: ext.replace(/^\./, ""),
+									}),
+								)
+							} else if (isSvg) {
+								const text = fs.readFileSync(abs, "utf-8")
+								const mime = "image/svg+xml"
+								const dataUrl = `data:${mime};base64,${Buffer.from(text).toString("base64")}`
+								ws.send(
+									JSON.stringify({
+										type: "fileContent",
+										filePath: clientMsg.filePath,
+										fileType: "svg",
+										mimeType: mime,
+										size: stat.size,
+										content: dataUrl,
+										rawText: text,
+										fileName: path.basename(abs),
+										ext: "svg",
+									}),
+								)
+							} else {
+								// Detect binary by reading first 1024 bytes and checking for null bytes
+								const fd = fs.openSync(abs, "r")
+								const sample = Buffer.alloc(Math.min(1024, stat.size))
+								fs.readSync(fd, sample, 0, sample.length, 0)
+								fs.closeSync(fd)
+
+								let isBinary = false
+								for (let i = 0; i < sample.length; i++) {
+									if (sample[i] === 0) {
+										isBinary = true
+										break
+									}
+								}
+
+								if (isBinary || stat.size > 3 * 1024 * 1024) {
+									ws.send(
+										JSON.stringify({
+											type: "fileContent",
+											filePath: clientMsg.filePath,
+											fileType: "binary",
+											size: stat.size,
+											fileName: path.basename(abs),
+											ext: ext.replace(/^\./, ""),
+											mtime: stat.mtimeMs,
+										}),
+									)
+								} else {
+									const content = fs.readFileSync(abs, "utf-8")
+									ws.send(
+										JSON.stringify({
+											type: "fileContent",
+											filePath: clientMsg.filePath,
+											fileType: ext === ".md" ? "markdown" : ext === ".json" ? "json" : "text",
+											size: stat.size,
+											content,
+											fileName: path.basename(abs),
+											ext: ext.replace(/^\./, ""),
+										}),
+									)
+								}
+							}
+						} catch (err) {
+							ws.send(JSON.stringify({ type: "error", message: `Failed to read file: ${String(err)}` }))
+						}
 					} else {
 						ws.send(JSON.stringify({ type: "error", message: "File not found or outside workspace" }))
+					}
+				} else if (clientMsg.type === "showItem" || clientMsg.type === "openFile") {
+					const wsRoot = path.resolve(agentHost.getWorkspace())
+					const abs = path.isAbsolute(clientMsg.filePath)
+						? path.resolve(clientMsg.filePath)
+						: path.resolve(wsRoot, clientMsg.filePath)
+					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
+						try {
+							if (process.platform === "win32") {
+								if (clientMsg.type === "showItem") {
+									exec(`explorer.exe /select,"${abs}"`, () => {})
+								} else {
+									exec(`start "" "${abs}"`, () => {})
+								}
+							}
+						} catch {}
 					}
 				}
 			} catch (err) {

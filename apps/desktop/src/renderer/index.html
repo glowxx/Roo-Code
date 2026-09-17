@@ -182,9 +182,54 @@
 					</aside>
 					<div class="file-preview-panel">
 						<div class="preview-header">
-							<span id="preview-filename">Select a file to preview</span>
+							<div class="preview-header-left">
+								<span class="preview-file-icon" id="preview-file-icon">📄</span>
+								<span id="preview-filename">Select a file to preview</span>
+								<span class="preview-badge" id="preview-file-badge" style="display: none;"></span>
+								<span class="preview-size" id="preview-file-size"></span>
+							</div>
+							<div class="preview-header-actions" id="preview-header-actions" style="display: none;">
+								<button class="preview-action-btn" id="preview-copy-btn" title="Copy File Content">
+									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+										<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+									</svg>
+									<span>Copy</span>
+								</button>
+								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Toggle Word Wrap">
+									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<line x1="3" y1="6" x2="21" y2="6"></line>
+										<line x1="3" y1="12" x2="15" y2="12"></line>
+										<path d="M18 9l3 3-3 3"></path>
+										<line x1="3" y1="18" x2="21" y2="18"></line>
+									</svg>
+									<span>Wrap</span>
+								</button>
+								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Toggle Raw / Rendered">
+									<span>View Source</span>
+								</button>
+								<button class="preview-action-btn" id="preview-open-external-btn" title="Reveal in File Explorer">
+									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+										<polyline points="15 3 21 3 21 9"></polyline>
+										<line x1="10" y1="14" x2="21" y2="3"></line>
+									</svg>
+									<span>Reveal</span>
+								</button>
+							</div>
 						</div>
-						<pre class="preview-code"><code id="preview-code-content">// File preview will be displayed here</code></pre>
+						<div class="preview-content-area" id="preview-content-area">
+							<div class="preview-placeholder">
+								<svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+									<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+									<polyline points="14 2 14 8 20 8"></polyline>
+									<line x1="16" y1="13" x2="8" y2="13"></line>
+									<line x1="16" y1="17" x2="8" y2="17"></line>
+									<polyline points="10 9 9 9 8 9"></polyline>
+								</svg>
+								<p>Select any file from the workspace tree to preview its content, image, or details.</p>
+							</div>
+						</div>
 					</div>
 				</div>
 			</section>
