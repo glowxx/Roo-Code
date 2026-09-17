@@ -8,6 +8,12 @@
 	let selectedDiffFile = null
 	let selectedPreviewFile = null
 	let isConnected = false
+	let currentApiConfig = null
+	let currentApiProfileName = "default"
+	try {
+		const saved = localStorage.getItem("roo-quick-api-config")
+		if (saved) currentApiConfig = JSON.parse(saved)
+	} catch (e) {}
 
 	// DOM Elements
 	const workspaceNameEl = document.getElementById("workspace-name")
@@ -22,6 +28,28 @@
 	const connectionStatusEl = document.getElementById("connection-status")
 	const webviewFrame = document.getElementById("webview-frame")
 	const themeToggleBtn = document.getElementById("theme-toggle")
+
+	// Header controls
+	const quickApiBtn = document.getElementById("quick-api-btn")
+	const apiPillLabel = document.getElementById("api-pill-label")
+	const settingsOpenBtn = document.getElementById("settings-open-btn")
+
+	// API Modal elements
+	const apiModalBackdrop = document.getElementById("api-modal-backdrop")
+	const closeApiModalBtn = document.getElementById("close-api-modal-btn")
+	const cancelApiModalBtn = document.getElementById("cancel-api-modal-btn")
+	const apiProviderSelect = document.getElementById("api-provider-select")
+	const apiBaseUrlInput = document.getElementById("api-base-url-input")
+	const groupBaseUrl = document.getElementById("group-base-url")
+	const baseUrlHint = document.getElementById("base-url-hint")
+	const apiKeyInput = document.getElementById("api-key-input")
+	const groupApiKey = document.getElementById("group-api-key")
+	const apiKeyHint = document.getElementById("api-key-hint")
+	const toggleKeyVisibilityBtn = document.getElementById("toggle-key-visibility-btn")
+	const apiModelInput = document.getElementById("api-model-input")
+	const modelSuggestions = document.getElementById("model-suggestions")
+	const saveApiConfigBtn = document.getElementById("save-api-config-btn")
+	const openFullSettingsFromModalBtn = document.getElementById("open-full-settings-from-modal-btn")
 
 	// Diffs elements
 	const diffsFileListEl = document.getElementById("diffs-file-list")
@@ -148,6 +176,10 @@
 		if (event.source === webviewFrame?.contentWindow) {
 			const data = event.data
 			if (data) {
+				if (data.type === "upsertApiConfiguration" && data.apiConfiguration) {
+					currentApiConfig = { ...currentApiConfig, ...data.apiConfiguration }
+					updateApiPill(currentApiConfig)
+				}
 				sendToServer({ type: "webviewMessage", message: data })
 			}
 		}
@@ -217,6 +249,15 @@
 		switch (msg.type) {
 			case "extensionMessage":
 				forwardToWebview(msg.message)
+				if (msg.message?.type === "state" && msg.message.state) {
+					if (msg.message.state.apiConfiguration) {
+						currentApiConfig = { ...currentApiConfig, ...msg.message.state.apiConfiguration }
+						updateApiPill(currentApiConfig)
+					}
+					if (msg.message.state.currentApiConfigName) {
+						currentApiProfileName = msg.message.state.currentApiConfigName
+					}
+				}
 				break
 
 			case "workspaceInfo":
@@ -691,16 +732,17 @@
 
 	function renderCodeText(text) {
 		const lines = text.split("\n")
-		let gutterHtml = ""
-		for (let i = 1; i <= lines.length; i++) {
-			gutterHtml += `${i}\n`
+		const wrapClass = isCodeWrapped ? "wrapped" : ""
+		let linesHtml = ""
+		for (let i = 0; i < lines.length; i++) {
+			const lineNum = i + 1
+			const lineContent = escapeHtml(lines[i]) || "&nbsp;"
+			linesHtml += `<div class="code-line"><span class="code-line-num">${lineNum}</span><span class="code-line-text">${lineContent}</span></div>`
 		}
 
-		const wrapClass = isCodeWrapped ? "wrapped" : ""
 		previewContentAreaEl.innerHTML = `
-			<div class="code-preview-container">
-				<div class="code-gutter">${gutterHtml}</div>
-				<pre class="code-lines-body ${wrapClass}" id="code-lines-body"><code>${escapeHtml(text)}</code></pre>
+			<div class="code-editor-view ${wrapClass}" id="code-editor-view">
+				${linesHtml}
 			</div>
 		`
 	}
@@ -738,9 +780,9 @@
 	previewToggleWrapBtn?.addEventListener("click", () => {
 		isCodeWrapped = !isCodeWrapped
 		previewToggleWrapBtn.classList.toggle("active", isCodeWrapped)
-		const body = document.getElementById("code-lines-body")
-		if (body) {
-			body.classList.toggle("wrapped", isCodeWrapped)
+		const view = document.getElementById("code-editor-view")
+		if (view) {
+			view.classList.toggle("wrapped", isCodeWrapped)
 		}
 	})
 
@@ -761,6 +803,374 @@
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#039;")
 	}
+
+	// ==========================================
+	// Provider Presets & Quick API Configuration
+	// ==========================================
+	const PROVIDER_PRESETS = {
+		xkiro: {
+			name: "xKiro",
+			defaultBaseUrl: "https://api.xkiro.com/v1",
+			defaultModel: "deepseek/deepseek-chat",
+			showBaseUrl: true,
+			baseUrlHint: "Dla xKiro domyślny adres to: https://api.xkiro.com/v1",
+			keyHint: 'Dla xKiro zarejestruj się na <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a>, aby odebrać darmowe tokeny.',
+			keyPlaceholder: "Wklej swój klucz API xKiro...",
+			models: [
+				{ id: "deepseek/deepseek-chat", label: "xKiro DeepSeek-V3 (Bardzo szybki i tani)" },
+				{ id: "deepseek/deepseek-reasoner", label: "xKiro DeepSeek-R1 (Myślenie i dedukcja)" },
+				{ id: "anthropic/claude-3.7-sonnet", label: "xKiro Claude 3.7 Sonnet (Najwyższa jakość)" },
+				{ id: "openai/gpt-4o", label: "xKiro GPT-4o" },
+				{ id: "google/gemini-2.5-pro", label: "xKiro Gemini 2.5 Pro" },
+				{ id: "qwen/qwen-2.5-coder-32b", label: "xKiro Qwen 2.5 Coder 32B" },
+			],
+		},
+		openrouter: {
+			name: "OpenRouter",
+			defaultBaseUrl: "https://openrouter.ai/api/v1",
+			defaultModel: "anthropic/claude-3.7-sonnet",
+			showBaseUrl: false,
+			baseUrlHint: "Domyślny adres OpenRouter: https://openrouter.ai/api/v1",
+			keyHint: 'Pobierz klucz z <a href="https://openrouter.ai/keys" target="_blank" class="link-accent">openrouter.ai/keys</a>',
+			keyPlaceholder: "sk-or-v1-...",
+			models: [
+				{ id: "anthropic/claude-3.7-sonnet", label: "Claude 3.7 Sonnet" },
+				{ id: "deepseek/deepseek-chat", label: "DeepSeek V3" },
+				{ id: "deepseek/deepseek-r1", label: "DeepSeek R1" },
+				{ id: "openai/gpt-4o", label: "GPT-4o" },
+				{ id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+			],
+		},
+		anthropic: {
+			name: "Anthropic",
+			defaultBaseUrl: "",
+			defaultModel: "claude-3-7-sonnet-20250219",
+			showBaseUrl: false,
+			baseUrlHint: "Oficjalny endpoint Anthropic",
+			keyHint: "Pobierz klucz z konsoli Anthropic (sk-ant-...)",
+			keyPlaceholder: "sk-ant-api03-...",
+			models: [
+				{ id: "claude-3-7-sonnet-20250219", label: "Claude 3.7 Sonnet" },
+				{ id: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet v2" },
+				{ id: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
+			],
+		},
+		openai: {
+			name: "OpenAI",
+			defaultBaseUrl: "",
+			defaultModel: "gpt-4o",
+			showBaseUrl: false,
+			baseUrlHint: "Oficjalny endpoint OpenAI",
+			keyHint: "Pobierz klucz ze strony OpenAI (sk-...)",
+			keyPlaceholder: "sk-...",
+			models: [
+				{ id: "gpt-4o", label: "GPT-4o" },
+				{ id: "gpt-4o-mini", label: "GPT-4o Mini" },
+				{ id: "o3-mini", label: "o3-mini" },
+			],
+		},
+		gemini: {
+			name: "Google Gemini",
+			defaultBaseUrl: "",
+			defaultModel: "gemini-2.5-pro",
+			showBaseUrl: false,
+			baseUrlHint: "Google Generative AI",
+			keyHint: "Pobierz klucz z Google AI Studio (AIza...)",
+			keyPlaceholder: "AIzaSy...",
+			models: [
+				{ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+				{ id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+				{ id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+			],
+		},
+		ollama: {
+			name: "Ollama",
+			defaultBaseUrl: "http://localhost:11434",
+			defaultModel: "llama3.1",
+			showBaseUrl: true,
+			baseUrlHint: "Domyślny adres instancji Ollama: http://localhost:11434",
+			keyHint: "Ollama działa lokalnie na Twoim komputerze. Klucz API nie jest wymagany.",
+			keyPlaceholder: "(Opcjonalny)",
+			models: [
+				{ id: "llama3.1", label: "Llama 3.1" },
+				{ id: "qwen2.5-coder:7b", label: "Qwen 2.5 Coder 7B" },
+				{ id: "deepseek-r1:8b", label: "DeepSeek R1 8B" },
+			],
+		},
+		"openai-compatible": {
+			name: "OpenAI Compatible",
+			defaultBaseUrl: "http://localhost:8000/v1",
+			defaultModel: "default",
+			showBaseUrl: true,
+			baseUrlHint: "Wpisz pełny endpoint kompatybilny z OpenAI (kończący się na /v1)",
+			keyHint: "Wpisz klucz API wymagany przez dany serwer.",
+			keyPlaceholder: "Klucz API...",
+			models: [],
+		},
+	}
+
+	function updateApiPill(config) {
+		if (!apiPillLabel) return
+		if (!config) {
+			apiPillLabel.textContent = "API: Konfiguruj"
+			return
+		}
+		const provider = config.apiProvider || "xkiro"
+		const model =
+			config.xkiroModelId ||
+			config.apiModelId ||
+			config.openAiModelId ||
+			config.openRouterModelId ||
+			config.ollamaModelId ||
+			""
+		const hasKey = !!(
+			config.apiKey ||
+			config.xkiroApiKey ||
+			config.openAiApiKey ||
+			config.openRouterApiKey ||
+			config.geminiApiKey ||
+			provider === "ollama"
+		)
+
+		const providerNames = {
+			xkiro: "xKiro",
+			openrouter: "OpenRouter",
+			anthropic: "Anthropic",
+			openai: "OpenAI",
+			gemini: "Gemini",
+			ollama: "Ollama",
+		}
+		const pName = providerNames[provider] || provider
+
+		let shortModel = ""
+		if (model) {
+			if (model.includes("deepseek-reasoner") || model.includes("deepseek-r1")) shortModel = "DeepSeek-R1"
+			else if (model.includes("deepseek")) shortModel = "DeepSeek"
+			else if (model.includes("claude-3-7") || model.includes("claude-3.7")) shortModel = "Claude 3.7"
+			else if (model.includes("claude-3-5") || model.includes("claude-3.5")) shortModel = "Claude 3.5"
+			else if (model.includes("gpt-4o-mini")) shortModel = "GPT-4o mini"
+			else if (model.includes("gpt-4o")) shortModel = "GPT-4o"
+			else if (model.includes("gemini-2.5")) shortModel = "Gemini 2.5"
+			else if (model.includes("qwen")) shortModel = "Qwen"
+			else shortModel = model.split("/").pop().split(":")[0]
+		}
+
+		if (!hasKey) {
+			apiPillLabel.textContent = `API: ${pName} (Brak klucza)`
+		} else if (shortModel) {
+			apiPillLabel.textContent = `API: ${pName} (${shortModel})`
+		} else {
+			apiPillLabel.textContent = `API: ${pName}`
+		}
+	}
+
+	function openSettingsTab() {
+		// Switch outer container to chat tab
+		const chatTabBtn = document.querySelector('.nav-tab[data-tab="chat"]')
+		if (chatTabBtn) {
+			chatTabBtn.click()
+		}
+		// Direct webview to settings tab
+		forwardToWebview({ type: "action", action: "switchTab", tab: "settings" })
+		sendToServer({ type: "webviewMessage", message: { type: "switchTab", tab: "settings" } })
+	}
+
+	function openApiModal() {
+		if (!apiModalBackdrop) return
+		apiModalBackdrop.style.display = "flex"
+		populateApiModalFromConfig(currentApiConfig)
+	}
+
+	function closeApiModal() {
+		if (!apiModalBackdrop) return
+		apiModalBackdrop.style.display = "none"
+	}
+
+	function populateApiModalFromConfig(config) {
+		let provider = config?.apiProvider || "xkiro"
+		if (provider === "openai" && config?.openAiBaseUrl && !config.openAiBaseUrl.includes("openai.com")) {
+			provider = "openai-compatible"
+		}
+		if (!PROVIDER_PRESETS[provider]) {
+			provider = "xkiro"
+		}
+
+		if (apiProviderSelect) {
+			apiProviderSelect.value = provider
+		}
+		updateModalFieldsForProvider(provider)
+
+		if (config) {
+			const key =
+				config.xkiroApiKey ||
+				config.apiKey ||
+				config.openAiApiKey ||
+				config.openRouterApiKey ||
+				config.geminiApiKey ||
+				""
+			if (key && apiKeyInput) apiKeyInput.value = key
+
+			const baseUrl =
+				config.xkiroBaseUrl ||
+				config.openAiBaseUrl ||
+				config.ollamaBaseUrl ||
+				config.openRouterBaseUrl ||
+				""
+			if (baseUrl && apiBaseUrlInput) apiBaseUrlInput.value = baseUrl
+
+			const model =
+				config.xkiroModelId ||
+				config.apiModelId ||
+				config.openAiModelId ||
+				config.openRouterModelId ||
+				config.ollamaModelId ||
+				""
+			if (model && apiModelInput) apiModelInput.value = model
+		}
+	}
+
+	function updateModalFieldsForProvider(providerKey) {
+		const preset = PROVIDER_PRESETS[providerKey] || PROVIDER_PRESETS.xkiro
+		if (groupBaseUrl) {
+			groupBaseUrl.style.display = preset.showBaseUrl ? "block" : "none"
+		}
+		if (baseUrlHint) {
+			baseUrlHint.innerHTML = preset.baseUrlHint
+		}
+		if (apiKeyHint) {
+			apiKeyHint.innerHTML = preset.keyHint
+		}
+		if (apiKeyInput) {
+			apiKeyInput.placeholder = preset.keyPlaceholder
+		}
+		if (apiBaseUrlInput && (!apiBaseUrlInput.value || (groupBaseUrl && groupBaseUrl.style.display !== "none"))) {
+			apiBaseUrlInput.value = preset.defaultBaseUrl
+		}
+		if (apiModelInput && (!apiModelInput.value || !preset.models.some((m) => m.id === apiModelInput.value))) {
+			apiModelInput.value = preset.defaultModel
+		}
+
+		// Populate datalist options
+		if (modelSuggestions) {
+			modelSuggestions.innerHTML = preset.models
+				.map((m) => `<option value="${m.id}">${m.label}</option>`)
+				.join("")
+		}
+	}
+
+	function saveApiConfig() {
+		const provider = apiProviderSelect ? apiProviderSelect.value : "xkiro"
+		const baseUrl = apiBaseUrlInput ? apiBaseUrlInput.value.trim() : ""
+		const apiKey = apiKeyInput ? apiKeyInput.value.trim() : ""
+		const model = apiModelInput ? apiModelInput.value.trim() : ""
+
+		let newConfig = {
+			apiProvider: provider === "openai-compatible" ? "openai" : provider,
+		}
+
+		if (provider === "xkiro") {
+			newConfig.apiKey = apiKey
+			newConfig.xkiroApiKey = apiKey
+			newConfig.xkiroBaseUrl = baseUrl || "https://api.xkiro.com/v1"
+			newConfig.xkiroModelId = model || "deepseek/deepseek-chat"
+			newConfig.openAiBaseUrl = baseUrl || "https://api.xkiro.com/v1"
+			newConfig.openAiApiKey = apiKey
+			newConfig.openAiModelId = model || "deepseek/deepseek-chat"
+			newConfig.apiModelId = model || "deepseek/deepseek-chat"
+		} else if (provider === "openrouter") {
+			newConfig.apiKey = apiKey
+			newConfig.openRouterApiKey = apiKey
+			newConfig.openRouterModelId = model || "anthropic/claude-3.7-sonnet"
+			newConfig.apiModelId = model || "anthropic/claude-3.7-sonnet"
+			if (baseUrl) newConfig.openRouterBaseUrl = baseUrl
+		} else if (provider === "anthropic") {
+			newConfig.apiKey = apiKey
+			newConfig.apiModelId = model || "claude-3-7-sonnet-20250219"
+			if (baseUrl) newConfig.anthropicBaseUrl = baseUrl
+		} else if (provider === "openai" || provider === "openai-compatible") {
+			newConfig.apiKey = apiKey
+			newConfig.openAiApiKey = apiKey
+			newConfig.openAiModelId = model || "gpt-4o"
+			newConfig.apiModelId = model || "gpt-4o"
+			if (baseUrl) newConfig.openAiBaseUrl = baseUrl
+		} else if (provider === "gemini") {
+			newConfig.apiKey = apiKey
+			newConfig.geminiApiKey = apiKey
+			newConfig.apiModelId = model || "gemini-2.5-pro"
+		} else if (provider === "ollama") {
+			newConfig.ollamaBaseUrl = baseUrl || "http://localhost:11434"
+			newConfig.ollamaModelId = model || "llama3.1"
+			newConfig.apiModelId = model || "llama3.1"
+			if (apiKey) newConfig.ollamaApiKey = apiKey
+		}
+
+		currentApiConfig = { ...currentApiConfig, ...newConfig }
+		localStorage.setItem("roo-quick-api-config", JSON.stringify(currentApiConfig))
+
+		// Send to server / extension
+		sendToServer({
+			type: "webviewMessage",
+			message: {
+				type: "upsertApiConfiguration",
+				text: currentApiProfileName || "default",
+				apiConfiguration: currentApiConfig,
+			},
+		})
+
+		// Also forward to webview iframe so it updates state immediately
+		forwardToWebview({
+			type: "action",
+			action: "state",
+			state: {
+				apiConfiguration: currentApiConfig,
+			},
+		})
+
+		updateApiPill(currentApiConfig)
+		closeApiModal()
+	}
+
+	// Attach Settings & API Listeners
+	settingsOpenBtn?.addEventListener("click", openSettingsTab)
+	openFullSettingsFromModalBtn?.addEventListener("click", () => {
+		closeApiModal()
+		openSettingsTab()
+	})
+
+	quickApiBtn?.addEventListener("click", openApiModal)
+	closeApiModalBtn?.addEventListener("click", closeApiModal)
+	cancelApiModalBtn?.addEventListener("click", closeApiModal)
+	saveApiConfigBtn?.addEventListener("click", saveApiConfig)
+
+	apiProviderSelect?.addEventListener("change", (e) => {
+		updateModalFieldsForProvider(e.target.value)
+	})
+
+	toggleKeyVisibilityBtn?.addEventListener("click", () => {
+		if (!apiKeyInput) return
+		if (apiKeyInput.type === "password") {
+			apiKeyInput.type = "text"
+			toggleKeyVisibilityBtn.textContent = "🙈"
+		} else {
+			apiKeyInput.type = "password"
+			toggleKeyVisibilityBtn.textContent = "👁️"
+		}
+	})
+
+	apiModalBackdrop?.addEventListener("click", (e) => {
+		if (e.target === apiModalBackdrop) {
+			closeApiModal()
+		}
+	})
+
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && apiModalBackdrop && apiModalBackdrop.style.display === "flex") {
+			closeApiModal()
+		}
+	})
+
+	// Initial pill sync
+	updateApiPill(currentApiConfig)
 
 	// Initialize
 	connectWebSocket()

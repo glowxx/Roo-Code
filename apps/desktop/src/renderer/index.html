@@ -91,6 +91,23 @@
 					<span class="status-text" id="status-text">Idle</span>
 				</div>
 
+				<!-- AI Provider & API Key Indicator / Quick Setup -->
+				<button class="api-pill-btn" id="quick-api-btn" title="AI Provider & Model Configuration">
+					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+					</svg>
+					<span class="api-pill-text" id="api-pill-label">API: Configure</span>
+				</button>
+
+				<!-- Direct Settings Button -->
+				<button class="settings-pill-btn" id="settings-open-btn" title="Open Settings (Ustawienia)">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<circle cx="12" cy="12" r="3"></circle>
+						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+					</svg>
+					<span>Settings</span>
+				</button>
+
 				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Theme (Dark / Light)">
 					<svg class="moon-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
@@ -248,6 +265,81 @@
 				<span class="footer-item footer-version">v1.0.0 Desktop</span>
 			</div>
 		</footer>
+	</div>
+
+	<!-- Quick API & AI Provider Config Modal -->
+	<div class="modal-backdrop" id="api-modal-backdrop" style="display: none;">
+		<div class="modal-card">
+			<div class="modal-header">
+				<div class="modal-title-row">
+					<div class="modal-icon-badge">⚡</div>
+					<div>
+						<h3 class="modal-title">Konfiguracja API & Modeli AI</h3>
+						<p class="modal-subtitle">Wybierz dostawcę (np. xKiro z darmowymi tokenami) i podaj klucz API</p>
+					</div>
+				</div>
+				<button class="modal-close-btn" id="close-api-modal-btn" title="Zamknij">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<line x1="18" y1="6" x2="6" y2="18"></line>
+						<line x1="6" y1="6" x2="18" y2="18"></line>
+					</svg>
+				</button>
+			</div>
+
+			<div class="modal-body">
+				<div class="form-group">
+					<label class="form-label" for="api-provider-select">Dostawca API (Provider)</label>
+					<select class="form-select" id="api-provider-select">
+						<option value="xkiro">xKiro (Polecany - Darmowe tokeny, DeepSeek, Claude, GPT)</option>
+						<option value="openrouter">OpenRouter (Wszystkie modele świata)</option>
+						<option value="anthropic">Anthropic (Claude 3.7 Sonnet, Claude 3.5 Sonnet)</option>
+						<option value="openai">OpenAI (GPT-4o, o3-mini)</option>
+						<option value="gemini">Google Gemini (Gemini 2.5 Pro, Flash)</option>
+						<option value="ollama">Ollama (100% lokalnie i za darmo na Twoim PC)</option>
+						<option value="openai-compatible">Własny OpenAI Compatible (Dowolny serwer)</option>
+					</select>
+				</div>
+
+				<div class="form-group" id="group-base-url">
+					<label class="form-label" for="api-base-url-input">Adres Bazowy API (Base URL)</label>
+					<input type="text" class="form-input" id="api-base-url-input" placeholder="https://api.xkiro.com/v1" />
+					<div class="form-hint" id="base-url-hint">Dla xKiro domyślny adres to: https://api.xkiro.com/v1</div>
+				</div>
+
+				<div class="form-group" id="group-api-key">
+					<label class="form-label" for="api-key-input">Klucz API (API Key)</label>
+					<div class="input-password-wrapper">
+						<input type="password" class="form-input" id="api-key-input" placeholder="Wklej swój klucz API..." />
+						<button type="button" class="toggle-password-btn" id="toggle-key-visibility-btn" title="Pokaż / Ukryj klucz">👁️</button>
+					</div>
+					<div class="form-hint" id="api-key-hint">Dla xKiro zarejestruj się na <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a>, aby odebrać darmowe tokeny.</div>
+				</div>
+
+				<div class="form-group">
+					<label class="form-label" for="api-model-input">Identyfikator Modelu (Model ID)</label>
+					<input type="text" class="form-input" id="api-model-input" list="model-suggestions" placeholder="Wpisz lub wybierz model..." />
+					<datalist id="model-suggestions">
+						<option value="deepseek/deepseek-chat">xKiro DeepSeek-V3 (Bardzo szybki i tani)</option>
+						<option value="deepseek/deepseek-reasoner">xKiro DeepSeek-R1 (Myślenie i dedukcja)</option>
+						<option value="anthropic/claude-3.7-sonnet">xKiro Claude 3.7 Sonnet (Najwyższa jakość)</option>
+						<option value="openai/gpt-4o">xKiro GPT-4o</option>
+						<option value="google/gemini-2.5-pro">xKiro Gemini 2.5 Pro</option>
+						<option value="qwen/qwen-2.5-coder-32b">xKiro Qwen 2.5 Coder 32B</option>
+					</datalist>
+					<div class="form-hint">Możesz wpisać dowolny model udostępniany przez wybranego dostawcę.</div>
+				</div>
+			</div>
+
+			<div class="modal-footer">
+				<button class="btn btn-secondary" id="open-full-settings-from-modal-btn">
+					⚙️ Otwórz Pełne Ustawienia
+				</button>
+				<div class="modal-footer-right">
+					<button class="btn btn-ghost" id="cancel-api-modal-btn">Anuluj</button>
+					<button class="btn btn-primary" id="save-api-config-btn">Zapisz i Zastosuj</button>
+				</div>
+			</div>
+		</div>
 	</div>
 
 	<script src="app.js"></script>

@@ -50,6 +50,8 @@ import {
 } from "@src/components/ui"
 import { DeleteModeDialog } from "@src/components/modes/DeleteModeDialog"
 import { useEscapeKey } from "@src/hooks/useEscapeKey"
+import { cn } from "@src/lib/utils"
+import { MODE_ICONS, ModeIcon, cleanModeName } from "./ModeIcon"
 
 // Get all available groups that should show in prompts view
 const availableGroups = (Object.keys(TOOL_GROUPS) as ToolGroup[]).filter((group) => !TOOL_GROUPS[group].alwaysAvailable)
@@ -311,6 +313,7 @@ const ModesView = () => {
 	const [newModeCustomInstructions, setNewModeCustomInstructions] = useState("")
 	const [newModeGroups, setNewModeGroups] = useState<GroupEntry[]>(availableGroups)
 	const [newModeSource, setNewModeSource] = useState<ModeSource>("global")
+	const [newModeIcon, setNewModeIcon] = useState("code")
 
 	// Field-specific error states
 	const [nameError, setNameError] = useState<string>("")
@@ -330,6 +333,7 @@ const ModesView = () => {
 		setNewModeWhenToUse("")
 		setNewModeCustomInstructions("")
 		setNewModeSource("global")
+		setNewModeIcon("code")
 		// Reset error states
 		setNameError("")
 		setSlugError("")
@@ -388,6 +392,7 @@ const ModesView = () => {
 			customInstructions: newModeCustomInstructions.trim() || undefined,
 			groups: newModeGroups,
 			source,
+			icon: newModeIcon,
 		}
 
 		// Validate the mode against the schema
@@ -436,6 +441,7 @@ const ModesView = () => {
 		newModeCustomInstructions,
 		newModeGroups,
 		newModeSource,
+		newModeIcon,
 		updateCustomMode,
 	])
 
@@ -723,10 +729,13 @@ const ModesView = () => {
 											aria-expanded={open}
 											className="justify-between grow"
 											data-testid="mode-select-trigger">
-											<div className="truncate">
-												{localRenames[visualMode] ??
-													getCurrentMode()?.name ??
-													t("prompts:modes.selectMode")}
+											<div className="flex items-center gap-2 truncate">
+												<ModeIcon icon={getCurrentMode()?.icon} slug={visualMode} className="size-4 shrink-0 text-vscode-focusBorder" />
+												<span className="truncate">
+													{cleanModeName(localRenames[visualMode] ??
+														getCurrentMode()?.name ??
+														t("prompts:modes.selectMode"))}
+												</span>
 											</div>
 											<ChevronDown className="opacity-50" />
 										</Button>
@@ -777,7 +786,7 @@ const ModesView = () => {
 																	setOpen(false)
 																}}
 																data-testid={`mode-option-${modeConfig.slug}`}>
-																<div className="flex items-center justify-between w-full">
+																<div className="flex items-center justify-between w-full gap-2">
 																	<span
 																		style={{
 																			whiteSpace: "nowrap",
@@ -785,8 +794,10 @@ const ModesView = () => {
 																			textOverflow: "ellipsis",
 																			flex: 2,
 																			minWidth: 0,
-																		}}>
-																		{modeConfig.name}
+																		}}
+																		className="flex items-center gap-2">
+																		<ModeIcon icon={modeConfig.icon} slug={modeConfig.slug} className="size-4 shrink-0 text-vscode-focusBorder" />
+																		<span className="truncate">{cleanModeName(modeConfig.name)}</span>
 																	</span>
 																	<span
 																		className="text-foreground"
@@ -1389,6 +1400,37 @@ const ModesView = () => {
 								<span className="codicon codicon-close"></span>
 							</Button>
 							<h2 className="mb-4">{t("prompts:createModeDialog.title")}</h2>
+							<div className="mb-4">
+								<div className="font-bold mb-1.5 flex items-center gap-2">
+									<span>Ikona Agenta</span>
+									<span className="p-1 rounded bg-[rgba(255,255,255,0.06)] border border-vscode-input-border inline-flex items-center">
+										<ModeIcon icon={newModeIcon} className="size-4 text-vscode-focusBorder" />
+									</span>
+									<span className="text-xs text-vscode-descriptionForeground font-normal">
+										({MODE_ICONS[newModeIcon]?.label || newModeIcon})
+									</span>
+								</div>
+								<div className="grid grid-cols-7 sm:grid-cols-9 gap-1.5 p-2 max-h-36 overflow-y-auto rounded-lg border border-vscode-input-border bg-vscode-input-background/50">
+									{Object.entries(MODE_ICONS).map(([key, { label, icon: IconComp }]) => {
+										const isSelected = newModeIcon === key
+										return (
+											<button
+												key={key}
+												type="button"
+												title={label}
+												onClick={() => setNewModeIcon(key)}
+												className={cn(
+													"flex items-center justify-center p-2 rounded-md transition-all duration-120 border cursor-pointer",
+													isSelected
+														? "bg-primary text-vscode-button-foreground border-primary shadow-sm scale-105"
+														: "bg-transparent text-vscode-foreground/80 border-transparent hover:bg-[rgba(255,255,255,0.08)] hover:text-vscode-foreground"
+												)}>
+												<IconComp className="size-4" />
+											</button>
+										)
+									})}
+								</div>
+							</div>
 							<div className="mb-4">
 								<div className="font-bold mb-1">{t("prompts:createModeDialog.name.label")}</div>
 								<Input

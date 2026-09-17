@@ -119,6 +119,7 @@ export const providerNames = [
 	"vertex",
 	"xai",
 	"zai",
+	"xkiro",
 ] as const
 
 export const providerNamesSchema = z.enum(providerNames)
@@ -381,6 +382,12 @@ const basetenSchema = apiModelIdProviderModelSchema.extend({
 	basetenApiKey: z.string().optional(),
 })
 
+const xkiroSchema = baseProviderSettingsSchema.extend({
+	xkiroApiKey: z.string().optional(),
+	xkiroBaseUrl: z.string().optional(),
+	xkiroModelId: z.string().optional(),
+})
+
 const defaultSchema = z.object({
 	apiProvider: z.undefined(),
 })
@@ -414,6 +421,7 @@ export const providerSettingsSchemaDiscriminated = z.discriminatedUnion("apiProv
 	fireworksSchema.merge(z.object({ apiProvider: z.literal("fireworks") })),
 	qwenCodeSchema.merge(z.object({ apiProvider: z.literal("qwen-code") })),
 	vercelAiGatewaySchema.merge(z.object({ apiProvider: z.literal("vercel-ai-gateway") })),
+	xkiroSchema.merge(z.object({ apiProvider: z.literal("xkiro") })),
 	defaultSchema,
 ])
 
@@ -447,6 +455,7 @@ export const providerSettingsSchema = z.object({
 	...fireworksSchema.shape,
 	...qwenCodeSchema.shape,
 	...vercelAiGatewaySchema.shape,
+	...xkiroSchema.shape,
 	...codebaseIndexProviderSchema.shape,
 })
 
@@ -521,6 +530,7 @@ export const modelIdKeysByProvider: Record<TypicalProvider, ModelIdKey> = {
 	zai: "apiModelId",
 	fireworks: "apiModelId",
 	"vercel-ai-gateway": "vercelAiGatewayModelId",
+	xkiro: "apiModelId",
 }
 
 /**
@@ -632,6 +642,18 @@ export const MODELS_BY_PROVIDER: Record<
 	requesty: { id: "requesty", label: "Requesty", models: [] },
 	unbound: { id: "unbound", label: "Unbound", models: [] },
 	"vercel-ai-gateway": { id: "vercel-ai-gateway", label: "Vercel AI Gateway", models: [] },
+	xkiro: {
+		id: "xkiro",
+		label: "xKiro (Darmowe tokeny / Free API)",
+		models: [
+			"deepseek/deepseek-chat",
+			"deepseek/deepseek-reasoner",
+			"anthropic/claude-3.7-sonnet",
+			"openai/gpt-4o",
+			"google/gemini-2.5-pro",
+			"qwen/qwen-2.5-coder-32b",
+		],
+	},
 
 	// Local providers; models discovered from localhost endpoints.
 	lmstudio: { id: "lmstudio", label: "LM Studio", models: [] },

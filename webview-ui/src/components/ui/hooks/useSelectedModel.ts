@@ -270,6 +270,11 @@ function getSelectedModel({
 			const info = customInfo ?? openAiModelInfoSaneDefaults
 			return { id, info }
 		}
+		case "xkiro": {
+			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? "deepseek/deepseek-chat"
+			const info = openAiModelInfoSaneDefaults
+			return { id, info }
+		}
 		case "ollama": {
 			const id = apiConfiguration.ollamaModelId ?? ""
 			const info = ollamaModels && ollamaModels[apiConfiguration.ollamaModelId!]

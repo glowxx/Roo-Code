@@ -133,6 +133,19 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				: new VertexHandler(options)
 		case "openai":
 			return new OpenAiHandler(options)
+		case "xkiro":
+			return new OpenAiHandler({
+				...options,
+				openAiBaseUrl: (options as any).xkiroBaseUrl || options.openAiBaseUrl || "https://api.xkiro.com/v1",
+				openAiApiKey: (options as any).xkiroApiKey || options.apiKey || options.openAiApiKey,
+				openAiModelId: (options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat",
+				openAiCustomModelInfo: options.openAiCustomModelInfo || {
+					maxTokens: 8192,
+					contextWindow: 128000,
+					supportsImages: true,
+					supportsPromptCache: true,
+				},
+			})
 		case "ollama":
 			return new NativeOllamaHandler(options)
 		case "lmstudio":

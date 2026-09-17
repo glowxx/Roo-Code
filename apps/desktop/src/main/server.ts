@@ -356,52 +356,53 @@ export function createDesktopServer(options: DesktopServerOptions): {
 }
 
 body.vscode-light {
-	--vscode-editor-background: #ffffff;
-	--vscode-editor-foreground: #1d2939;
-	--vscode-foreground: #101828;
-	--vscode-descriptionForeground: #475467;
-	--vscode-disabledForeground: #98a2b3;
-	--vscode-errorForeground: #d92d20;
+	/* Warm paper slate anti-glare background */
+	--vscode-editor-background: #f1f3f6;
+	--vscode-editor-foreground: #1e293b;
+	--vscode-foreground: #0f172a;
+	--vscode-descriptionForeground: #475569;
+	--vscode-disabledForeground: #94a3b8;
+	--vscode-errorForeground: #dc2626;
 
-	--vscode-input-background: #fcfcfd;
-	--vscode-input-foreground: #101828;
-	--vscode-input-border: #d0d5dd;
-	--vscode-input-placeholderForeground: #98a2b3;
+	--vscode-input-background: #ffffff;
+	--vscode-input-foreground: #0f172a;
+	--vscode-input-border: #cbd5e1;
+	--vscode-input-placeholderForeground: #94a3b8;
 	--vscode-focusBorder: #2563eb;
 
 	--vscode-button-background: #2563eb;
 	--vscode-button-foreground: #ffffff;
 	--vscode-button-hoverBackground: #1d4ed8;
-	--vscode-button-secondaryBackground: #f2f4f7;
-	--vscode-button-secondaryForeground: #1d2939;
-	--vscode-button-secondaryHoverBackground: #e4e7ec;
+	--vscode-button-secondaryBackground: #e2e8f0;
+	--vscode-button-secondaryForeground: #1e293b;
+	--vscode-button-secondaryHoverBackground: #cbd5e1;
 
 	--vscode-dropdown-background: #ffffff;
-	--vscode-dropdown-foreground: #101828;
-	--vscode-dropdown-border: #d0d5dd;
+	--vscode-dropdown-foreground: #0f172a;
+	--vscode-dropdown-border: #cbd5e1;
 	--vscode-dropdown-listBackground: #ffffff;
 
 	--vscode-menu-background: #ffffff;
-	--vscode-menu-foreground: #101828;
+	--vscode-menu-foreground: #0f172a;
 
-	--vscode-list-hoverBackground: #f2f4f7;
-	--vscode-list-hoverForeground: #101828;
+	--vscode-list-hoverBackground: #e2e8f0;
+	--vscode-list-hoverForeground: #0f172a;
 	--vscode-list-activeSelectionBackground: #2563eb;
 	--vscode-list-activeSelectionForeground: #ffffff;
 
 	--vscode-badge-background: #2563eb;
 	--vscode-badge-foreground: #ffffff;
 
-	--vscode-textLink-foreground: #1570ef;
-	--vscode-textLink-activeForeground: #175cd3;
-	--vscode-textCodeBlock-background: #f8fafc;
+	--vscode-textLink-foreground: #2563eb;
+	--vscode-textLink-activeForeground: #1d4ed8;
+	--vscode-textCodeBlock-background: #e2e8f0;
 
-	--vscode-sideBar-background: #ffffff;
-	--vscode-sideBar-foreground: #1d2939;
-	--vscode-panel-border: #eaecf0;
-	--vscode-editorGroup-border: #eaecf0;
-	--vscode-widget-border: #eaecf0;
-	--vscode-widget-shadow: rgba(16, 24, 40, 0.08);
+	--vscode-sideBar-background: #e8ecf1;
+	--vscode-sideBar-foreground: #1e293b;
+	--vscode-panel-border: #cbd5e1;
+	--vscode-editorGroup-border: #cbd5e1;
+	--vscode-widget-border: #cbd5e1;
+	--vscode-widget-shadow: rgba(15, 23, 42, 0.08);
 }
 
 html, body {

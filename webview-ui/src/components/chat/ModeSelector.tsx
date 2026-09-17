@@ -14,6 +14,7 @@ import { useRooPortal } from "@/components/ui/hooks/useRooPortal"
 import { Popover, PopoverContent, PopoverTrigger, StandardTooltip } from "@/components/ui"
 
 import { IconButton } from "./IconButton"
+import { ModeIcon, cleanModeName } from "@/components/modes/ModeIcon"
 
 const SEARCH_THRESHOLD = 6
 
@@ -229,7 +230,10 @@ export const ModeSelector = ({
 							? "bg-primary opacity-90 hover:bg-primary-hover text-vscode-button-foreground"
 							: null,
 					)}>
-					<span className="truncate">{selectedMode?.name || ""}</span>
+					<span className="flex items-center gap-1.5 truncate">
+						<ModeIcon icon={selectedMode?.icon} slug={selectedMode?.slug} className="size-3.5 opacity-80" />
+						<span className="truncate">{cleanModeName(selectedMode?.name || "")}</span>
+					</span>
 				</PopoverTrigger>
 			</StandardTooltip>
 			<PopoverContent
@@ -288,13 +292,18 @@ export const ModeSelector = ({
 													: "",
 											)}
 											data-testid="mode-selector-item">
-											<div className="flex-1 min-w-0">
-												<div className="font-bold truncate">{mode.name}</div>
-												{mode.description && (
-													<div className="text-xs text-vscode-descriptionForeground truncate">
-														{mode.description}
-													</div>
-												)}
+											<div className="flex items-center gap-2.5 flex-1 min-w-0">
+												<div className="p-1 rounded bg-[rgba(255,255,255,0.06)] text-vscode-foreground shrink-0">
+													<ModeIcon icon={mode.icon} slug={mode.slug} className="size-4" />
+												</div>
+												<div className="flex-1 min-w-0">
+													<div className="font-bold truncate">{cleanModeName(mode.name)}</div>
+													{mode.description && (
+														<div className="text-xs text-vscode-descriptionForeground truncate">
+															{mode.description}
+														</div>
+													)}
+												</div>
 											</div>
 											{isSelected && <Check className="ml-auto size-4 p-0.5" />}
 										</div>
