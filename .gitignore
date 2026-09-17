@@ -11,6 +11,7 @@ out/
 out-*/
 build/
 bin/
+release/
 *.tsbuildinfo
 .turbo/
 .vite-port
@@ -54,6 +55,8 @@ transcripts/
 /local-prompts/
 AGENTS.local.md
 plans/
+graphify-out/
+.graphify*
 
 # Local databases & persistent state
 .roo-desktop-data/

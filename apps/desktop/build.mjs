@@ -28,12 +28,11 @@ async function runBuild() {
 		format: "esm",
 		target: "node20",
 		sourcemap: true,
+		banner: {
+			js: 'import { createRequire as __topLevelCreateRequire } from "module"; const require = __topLevelCreateRequire(import.meta.url);',
+		},
 		external: [
 			"electron",
-			"ws",
-			"open",
-			"commander",
-			"p-wait-for",
 			"@vscode/ripgrep",
 			"fsevents",
 		],
@@ -64,6 +63,79 @@ async function runBuild() {
 		if (fs.statSync(srcPath).isFile()) {
 			fs.copyFileSync(srcPath, path.join(rendererDist, file))
 		}
+	}
+
+	function copyDir(src, dest) {
+		if (!fs.existsSync(src)) return
+		fs.mkdirSync(dest, { recursive: true })
+		for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+			const srcEntry = path.join(src, entry.name)
+			const destEntry = path.join(dest, entry.name)
+			if (entry.isDirectory()) {
+				copyDir(srcEntry, destEntry)
+			} else if (entry.isFile()) {
+				fs.copyFileSync(srcEntry, destEntry)
+			}
+		}
+	}
+
+	// 4. Copy engine if built
+	let rootDir = __dirname
+	while (rootDir !== path.dirname(rootDir)) {
+		if (fs.existsSync(path.join(rootDir, "src", "dist", "extension.js"))) break
+		rootDir = path.dirname(rootDir)
+	}
+	const engineSrc = path.join(rootDir, "src", "dist")
+	if (fs.existsSync(engineSrc)) {
+		console.log("📦 Bundling engine files into dist/engine...")
+		copyDir(engineSrc, path.join(outDir, "engine"))
+		fs.writeFileSync(
+			path.join(outDir, "engine", "package.json"),
+			JSON.stringify({ name: "@roo-code/engine", type: "commonjs" }, null, 2)
+		)
+	}
+
+	// 5. Copy webview if built
+	const webviewSrc = path.join(rootDir, "src", "webview-ui", "build")
+	if (fs.existsSync(webviewSrc)) {
+		console.log("🎨 Bundling webview UI into dist/webview...")
+		copyDir(webviewSrc, path.join(outDir, "webview"))
+	}
+
+	// 6. Copy ripgrep binary into dist/node_modules/@vscode/ripgrep/bin/
+	const rgBinaryName = process.platform === "win32" ? "rg.exe" : "rg"
+	let rgSrc = ""
+	function findRg(dir, depth = 0) {
+		if (depth > 6 || !fs.existsSync(dir)) return
+		try {
+			const entries = fs.readdirSync(dir, { withFileTypes: true })
+			for (const entry of entries) {
+				const full = path.join(dir, entry.name)
+				if (entry.isFile() && entry.name === rgBinaryName) {
+					rgSrc = full
+					return
+				}
+				if (
+					entry.isDirectory() &&
+					(entry.name === "node_modules" ||
+						entry.name.includes("ripgrep") ||
+						entry.name === ".pnpm" ||
+						entry.name === "bin" ||
+						entry.name === "@vscode")
+				) {
+					findRg(full, depth + 1)
+					if (rgSrc) return
+				}
+			}
+		} catch {}
+	}
+	findRg(path.join(rootDir, "node_modules"))
+	if (rgSrc) {
+		console.log(`🔍 Found ripgrep binary at: ${rgSrc}`)
+		const rgDestDir = path.join(outDir, "node_modules", "@vscode", "ripgrep", "bin")
+		fs.mkdirSync(rgDestDir, { recursive: true })
+		fs.copyFileSync(rgSrc, path.join(rgDestDir, rgBinaryName))
+		console.log(`📦 Bundled ripgrep into dist/node_modules/@vscode/ripgrep/bin/${rgBinaryName}`)
 	}
 
 	console.log("✅ @roo-code/desktop build complete!")

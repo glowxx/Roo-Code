@@ -8,12 +8,17 @@
 	"bin": {
 		"roo-desktop": "dist/cli.js"
 	},
+	"author": {
+		"name": "Roo Code"
+	},
 	"scripts": {
 		"build": "node build.mjs",
 		"start": "node dist/cli.js --electron",
 		"web": "node dist/cli.js --web",
 		"dev": "node dist/cli.js --web --dev",
-		"clean": "rimraf dist .turbo"
+		"package:win": "electron-builder --win --x64",
+		"package:dir": "electron-builder --win --dir",
+		"clean": "rimraf dist release .turbo"
 	},
 	"dependencies": {
 		"@roo-code/core": "workspace:^",
@@ -30,8 +35,42 @@
 		"@types/node": "^24.1.0",
 		"@types/ws": "^8.5.14",
 		"electron": "^34.0.0",
+		"electron-builder": "^26.15.3",
 		"esbuild": "^0.25.0",
 		"rimraf": "^6.0.1",
 		"typescript": "5.8.3"
+	},
+	"build": {
+		"appId": "com.roocode.desktop",
+		"productName": "Roo Code",
+		"copyright": "Copyright © 2026 Roo Code",
+		"directories": {
+			"output": "release"
+		},
+		"files": [
+			"dist/**/*",
+			"assets/**/*",
+			"package.json"
+		],
+		"win": {
+			"target": [
+				{
+					"target": "nsis",
+					"arch": [
+						"x64"
+					]
+				}
+			],
+			"icon": "assets/icon.ico"
+		},
+		"nsis": {
+			"oneClick": false,
+			"perMachine": false,
+			"allowToChangeInstallationDirectory": true,
+			"createDesktopShortcut": true,
+			"createStartMenuShortcut": true,
+			"shortcutName": "Roo Code",
+			"runAfterFinish": true
+		}
 	}
 }

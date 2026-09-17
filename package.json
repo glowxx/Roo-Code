@@ -18,6 +18,7 @@
 		"desktop": "pnpm --filter @roo-code/desktop start",
 		"desktop:dev": "pnpm --filter @roo-code/desktop dev",
 		"desktop:web": "pnpm --filter @roo-code/desktop web",
+		"desktop:package:win": "pnpm --filter @roo-code/desktop package:win",
 		"cli": "pnpm --filter @roo-code/cli dev",
 		"cli:build": "pnpm --filter @roo-code/cli build",
 		"clean": "turbo clean --log-order grouped --output-logs new-only && rimraf dist out bin .vite-port .turbo",
@@ -49,22 +50,5 @@
 		"*.{js,jsx,ts,tsx,json,css,md}": [
 			"prettier --write"
 		]
-	},
-	"pnpm": {
-		"onlyBuiltDependencies": [
-			"@vscode/ripgrep"
-		],
-		"overrides": {
-			"tar-fs": ">=3.1.1",
-			"esbuild": ">=0.25.0",
-			"undici": ">=5.29.0",
-			"brace-expansion": "^2.0.2",
-			"form-data": ">=4.0.4",
-			"bluebird": ">=3.7.2",
-			"glob": ">=11.1.0",
-			"@types/react": "^18.3.23",
-			"@types/react-dom": "^18.3.5",
-			"zod": "3.25.76"
-		}
 	}
 }
