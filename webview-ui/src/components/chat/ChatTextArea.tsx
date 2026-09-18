@@ -26,6 +26,7 @@ import { StandardTooltip } from "@src/components/ui"
 
 import Thumbnails from "../common/Thumbnails"
 import { ModeSelector } from "./ModeSelector"
+import { ModelSelector } from "./ModelSelector"
 import { ApiConfigSelector } from "./ApiConfigSelector"
 import { AutoApproveDropdown } from "./AutoApproveDropdown"
 import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
@@ -1304,6 +1305,10 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							modeShortcutText={modeShortcutText}
 							customModes={customModes}
 							customModePrompts={customModePrompts}
+						/>
+						<ModelSelector
+							disabled={selectApiConfigDisabled}
+							triggerClassName="min-w-[28px] text-ellipsis overflow-hidden flex-shrink"
 						/>
 						<ApiConfigSelector
 							value={currentConfigId}

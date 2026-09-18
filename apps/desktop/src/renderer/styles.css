@@ -330,6 +330,70 @@ body {
 	border-color: var(--border-light);
 }
 
+/* Quick Model Select in Header */
+.quick-model-wrapper {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 30px;
+	padding: 0 8px 0 10px;
+	border-radius: 6px;
+	background: var(--bg-subtle);
+	border: 1px solid var(--border-subtle);
+	color: var(--text-primary);
+	font-size: 12px;
+	font-weight: 500;
+	transition: all 0.15s ease;
+	position: relative;
+}
+
+.quick-model-wrapper:hover {
+	background: var(--bg-hover);
+	border-color: var(--border-light);
+}
+
+.quick-model-wrapper svg {
+	color: #a78bfa;
+	flex-shrink: 0;
+}
+
+.quick-model-select {
+	background: transparent;
+	border: none;
+	color: var(--text-primary);
+	font-size: 12px;
+	font-weight: 550;
+	cursor: pointer;
+	outline: none;
+	padding-right: 4px;
+	max-width: 170px;
+	text-overflow: ellipsis;
+}
+
+.quick-model-select option {
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+}
+
+body.light-theme .quick-model-wrapper {
+	background: #ffffff;
+	border-color: rgba(0, 0, 0, 0.12);
+}
+
+body.light-theme .quick-model-wrapper:hover {
+	background: #f8fafc;
+	border-color: rgba(0, 0, 0, 0.2);
+}
+
+body.light-theme .quick-model-select {
+	color: #1e293b;
+}
+
+body.light-theme .quick-model-select option {
+	background: #ffffff;
+	color: #1e293b;
+}
+
 /* AI Provider Pill Button in Header */
 .api-pill-btn {
 	display: inline-flex;

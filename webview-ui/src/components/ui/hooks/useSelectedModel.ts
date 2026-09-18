@@ -24,6 +24,7 @@ import {
 	fireworksModels,
 	basetenModels,
 	qwenCodeModels,
+	xkiroModels,
 	litellmDefaultModelInfo,
 	lMStudioDefaultModelInfo,
 	BEDROCK_1M_CONTEXT_MODEL_IDS,
@@ -271,8 +272,8 @@ function getSelectedModel({
 			return { id, info }
 		}
 		case "xkiro": {
-			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? "deepseek/deepseek-chat"
-			const info = openAiModelInfoSaneDefaults
+			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
+			const info = xkiroModels[id as keyof typeof xkiroModels]
 			return { id, info }
 		}
 		case "ollama": {

@@ -32,6 +32,7 @@
 	// Header controls
 	const quickApiBtn = document.getElementById("quick-api-btn")
 	const apiPillLabel = document.getElementById("api-pill-label")
+	const quickModelSelect = document.getElementById("quick-model-select")
 	const settingsOpenBtn = document.getElementById("settings-open-btn")
 
 	// API Modal elements
@@ -968,6 +969,36 @@
 		} else {
 			apiPillLabel.textContent = `API: ${pName}`
 		}
+
+		updateQuickModelSelect(config)
+	}
+
+	function updateQuickModelSelect(config) {
+		if (!quickModelSelect) return
+		const provider = config?.apiProvider || "xkiro"
+		const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.xkiro
+		const activeModel =
+			config?.xkiroModelId ||
+			config?.apiModelId ||
+			config?.openAiModelId ||
+			config?.openRouterModelId ||
+			config?.ollamaModelId ||
+			preset.defaultModel
+
+		let models = [...preset.models]
+		// If current active model is not in the preset list, add it at the beginning
+		if (activeModel && !models.some((m) => m.id === activeModel)) {
+			models.unshift({
+				id: activeModel,
+				label: activeModel.split("/").pop(),
+			})
+		}
+
+		quickModelSelect.innerHTML = models
+			.map((m) => `<option value="${m.id}" ${m.id === activeModel ? "selected" : ""}>${m.label}</option>`)
+			.join("")
+
+		quickModelSelect.value = activeModel
 	}
 
 	function openSettingsTab() {
@@ -1155,6 +1186,50 @@
 	closeApiModalBtn?.addEventListener("click", closeApiModal)
 	cancelApiModalBtn?.addEventListener("click", closeApiModal)
 	saveApiConfigBtn?.addEventListener("click", saveApiConfig)
+
+	quickModelSelect?.addEventListener("change", (e) => {
+		const selectedModel = e.target.value
+		if (!selectedModel) return
+
+		const provider = currentApiConfig?.apiProvider || "xkiro"
+		let modelPatch = {
+			apiModelId: selectedModel,
+		}
+		if (provider === "xkiro") {
+			modelPatch.xkiroModelId = selectedModel
+			modelPatch.openAiModelId = selectedModel
+		} else if (provider === "openrouter") {
+			modelPatch.openRouterModelId = selectedModel
+		} else if (provider === "openai" || provider === "openai-compatible") {
+			modelPatch.openAiModelId = selectedModel
+		} else if (provider === "ollama") {
+			modelPatch.ollamaModelId = selectedModel
+		}
+
+		currentApiConfig = { ...currentApiConfig, ...modelPatch }
+		localStorage.setItem("roo-quick-api-config", JSON.stringify(currentApiConfig))
+
+		// Send to server / extension
+		sendToServer({
+			type: "webviewMessage",
+			message: {
+				type: "upsertApiConfiguration",
+				text: currentApiProfileName || "default",
+				apiConfiguration: currentApiConfig,
+			},
+		})
+
+		// Also forward to webview iframe so it updates state immediately
+		forwardToWebview({
+			type: "action",
+			action: "state",
+			state: {
+				apiConfiguration: currentApiConfig,
+			},
+		})
+
+		updateApiPill(currentApiConfig)
+	})
 
 	apiProviderSelect?.addEventListener("change", (e) => {
 		updateModalFieldsForProvider(e.target.value)

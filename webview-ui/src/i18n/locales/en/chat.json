@@ -131,6 +131,7 @@
 		}
 	},
 	"selectMode": "Select mode for interaction",
+	"selectModel": "Select AI model",
 	"selectApiConfig": "Select API configuration",
 	"lockApiConfigAcrossModes": "Lock API configuration across all modes in this workspace",
 	"unlockApiConfigAcrossModes": "API configuration is locked across all modes in this workspace (click to unlock)",
@@ -141,6 +142,14 @@
 		"description": "Specialized personas that tailor Roo's behavior.",
 		"searchPlaceholder": "Search modes...",
 		"noResults": "No results found"
+	},
+	"modelSelector": {
+		"title": "AI Models",
+		"settings": "API & Provider Settings",
+		"description": "Choose the AI model for this session.",
+		"searchPlaceholder": "Search AI models...",
+		"noResults": "No matching models found",
+		"configureMore": "Configure API & providers in Settings..."
 	},
 	"enhancePromptDescription": "The 'Enhance Prompt' button helps improve your prompt by providing additional context, clarification, or rephrasing. Try typing a prompt in here and clicking the button again to see how it works.",
 	"addImages": "Add images to message",

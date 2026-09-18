@@ -104,6 +104,7 @@
 		}
 	},
 	"selectMode": "Wybierz tryb interakcji",
+	"selectModel": "Wybierz model AI",
 	"selectApiConfig": "Wybierz konfigurację API",
 	"lockApiConfigAcrossModes": "Zablokuj konfigurację API dla wszystkich trybów w tym obszarze roboczym",
 	"unlockApiConfigAcrossModes": "Konfiguracja API jest zablokowana dla wszystkich trybów w tym obszarze roboczym (kliknij, aby odblokować)",
@@ -124,6 +125,14 @@
 		"description": "Wyspecjalizowane persony, które dostosowują zachowanie Roo.",
 		"searchPlaceholder": "Szukaj trybów...",
 		"noResults": "Nie znaleziono wyników"
+	},
+	"modelSelector": {
+		"title": "Modele AI",
+		"settings": "Ustawienia API i Dostawców",
+		"description": "Wybierz model AI do bieżącej sesji.",
+		"searchPlaceholder": "Szukaj modeli AI...",
+		"noResults": "Nie znaleziono pasujących modeli",
+		"configureMore": "Skonfiguruj dostawców i klucze w Ustawieniach..."
 	},
 	"errorReadingFile": "Błąd odczytu pliku",
 	"noValidImages": "Nie przetworzono żadnych prawidłowych obrazów",
