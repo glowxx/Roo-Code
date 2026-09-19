@@ -5,6 +5,7 @@ import {
 	extractModelFamily,
 	extractModelVersion,
 	promoteDynamicFlagships,
+	sanitizeCustomModelId,
 } from "../ModelSelector"
 import { vscode } from "@/utils/vscode"
 
@@ -71,6 +72,20 @@ describe("ModelSelector", () => {
 		expect(cleanModelDisplayName("google/gemini-2.5-pro")).toBe("Gemini 2.5 Pro")
 		expect(cleanModelDisplayName("google/gemini-3-pro")).toBe("Gemini 3 Pro")
 		expect(cleanModelDisplayName("qwen/qwen-3-coder")).toBe("Qwen 3 Coder")
+	})
+
+	test("cleanModelDisplayName safely falls back for unusual identifiers", () => {
+		expect(cleanModelDisplayName("")).toBe("Select Model")
+		expect(cleanModelDisplayName("/")).toBe("/")
+		expect(cleanModelDisplayName("vendor/")).toBe("vendor/")
+		expect(cleanModelDisplayName(":")).toBe(":")
+	})
+
+	test("sanitizeCustomModelId strips spaces, newlines, and special characters (#, ?, &)", () => {
+		expect(sanitizeCustomModelId("  my-model #frag ?key=1 &b=2 \n ")).toBe("my-modelfragkey%3D1b%3D2")
+		expect(sanitizeCustomModelId("")).toBe("")
+		expect(sanitizeCustomModelId("   \n#?&  ")).toBe("")
+		expect(sanitizeCustomModelId("provider/model-name:latest")).toBe("provider/model-name:latest")
 	})
 
 	test("renders the trigger button with current model display name", () => {
@@ -196,5 +211,43 @@ describe("ModelSelector", () => {
 		expect(screen.getAllByText("Fast").length).toBeGreaterThan(0)
 		expect(screen.getAllByText("Coder").length).toBeGreaterThan(0)
 		expect(screen.getAllByText("Vision").length).toBeGreaterThan(0)
+	})
+
+	test("submitting custom model form sanitizes model ID and updates state", () => {
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const input = screen.getByPlaceholderText("Enter custom model ID...")
+		fireEvent.change(input, { target: { value: "  my-org/custom-model #hash ?v=1 \n " } })
+
+		const setButton = screen.getByRole("button", { name: "Set" })
+		fireEvent.click(setButton)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "my-org/custom-modelhashv%3D1",
+				xkiroModelId: "my-org/custom-modelhashv%3D1",
+			}),
+		)
+	})
+
+	test("clicking Use custom model from search input sanitizes model ID and updates state", () => {
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const searchInput = screen.getByPlaceholderText("chat:modelSelector.searchPlaceholder")
+		fireEvent.change(searchInput, { target: { value: "  new-custom-model #frag &x=2 \n " } })
+
+		const customModelButton = screen.getByText(/Use custom model/)
+		fireEvent.click(customModelButton)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "new-custom-modelfragx%3D2",
+				xkiroModelId: "new-custom-modelfragx%3D2",
+			}),
+		)
 	})
 })

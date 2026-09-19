@@ -286,7 +286,41 @@ export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): s
 
 	const parts = modelId.split("/")
 	const lastPart = parts[parts.length - 1]
-	return lastPart.split(":")[0]
+	const cleaned = lastPart.split(":")[0]?.trim()
+	return cleaned || modelId.trim() || "Select Model"
+}
+
+export const sanitizeCustomModelId = (rawModelId: string): string => {
+	if (!rawModelId) return ""
+
+	// Sanitize: strip whitespace, newlines, and special characters (#, ?, &)
+	let sanitized = rawModelId.replace(/[\s\r\n\t#?&]+/g, "")
+	if (!sanitized) return ""
+
+	// Apply encodeURIComponent for URL fragments/segments (preserving path delimiters / and :)
+	try {
+		sanitized = sanitized
+			.split("/")
+			.map((segment) =>
+				segment
+					.split(":")
+					.map((part) => encodeURIComponent(decodeURIComponent(part)))
+					.join(":"),
+			)
+			.join("/")
+	} catch {
+		sanitized = sanitized
+			.split("/")
+			.map((segment) =>
+				segment
+					.split(":")
+					.map((part) => encodeURIComponent(part))
+					.join(":"),
+			)
+			.join("/")
+	}
+
+	return sanitized
 }
 
 export const formatContextWindow = (tokens?: number): string | null => {
@@ -778,6 +812,16 @@ export const ModelSelector = ({
 		[apiConfiguration, extCurrentApiConfigName, setApiConfiguration],
 	)
 
+	// Select custom model with sanitization
+	const handleSelectCustomModel = useCallback(
+		(rawModelId: string) => {
+			const sanitized = sanitizeCustomModelId(rawModelId)
+			if (!sanitized) return
+			handleSelectModel(sanitized)
+		},
+		[handleSelectModel],
+	)
+
 	// Switch API profile
 	const handleSelectApiProfile = useCallback(
 		(configId: string) => {
@@ -985,7 +1029,7 @@ export const ModelSelector = ({
 						{filteredModels.length === 0 ? (
 							searchQuery.trim() ? (
 								<div
-									onClick={() => handleSelectModel(searchQuery.trim())}
+									onClick={() => handleSelectCustomModel(searchQuery.trim())}
 									className="px-2.5 py-2 text-xs cursor-pointer flex items-center gap-2 rounded-md transition-colors mx-1 hover:bg-vscode-list-hoverBackground text-vscode-textLink-foreground">
 									<Plus className="size-3.5 flex-shrink-0" />
 									<span className="truncate">Use custom model "{searchQuery.trim()}"</span>
@@ -1229,7 +1273,7 @@ export const ModelSelector = ({
 										(m) => m.id.toLowerCase() === searchQuery.trim().toLowerCase(),
 									) && (
 										<div
-											onClick={() => handleSelectModel(searchQuery.trim())}
+											onClick={() => handleSelectCustomModel(searchQuery.trim())}
 											className="px-2.5 py-1.5 text-xs cursor-pointer flex items-center gap-2 rounded-md transition-colors mx-1 border-t border-vscode-dropdown-border/30 hover:bg-vscode-list-hoverBackground text-vscode-textLink-foreground">
 											<Plus className="size-3.5 flex-shrink-0" />
 											<span className="truncate">Use custom model "{searchQuery.trim()}"</span>
@@ -1256,7 +1300,7 @@ export const ModelSelector = ({
 							onSubmit={(e) => {
 								e.preventDefault()
 								if (customModelInput.trim()) {
-									handleSelectModel(customModelInput.trim())
+									handleSelectCustomModel(customModelInput.trim())
 									setCustomModelInput("")
 								}
 							}}

@@ -945,6 +945,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-modes"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>{t("settings:sections.modes")}</SectionHeader>
 												<ModesView />
 											</div>
 											<div
