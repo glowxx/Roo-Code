@@ -73,10 +73,17 @@ describe("RooIgnoreController Security Tests", () => {
 			// Commands with pipes
 			expect(controller.validateCommand("cat secrets/creds.json | grep password")).toBe("secrets/creds.json")
 
-			// The implementation doesn't handle quoted paths as expected
-			// Let's test with simple paths instead
 			expect(controller.validateCommand("less private/notes.txt")).toBe("private/notes.txt")
 			expect(controller.validateCommand("more private/data.csv")).toBe("private/data.csv")
+
+			// Quoted paths with and without spaces
+			expect(controller.validateCommand('cat "secrets/creds.json"')).toBe("secrets/creds.json")
+			expect(controller.validateCommand('cat "secrets/path with spaces/secret.txt"')).toBe(
+				"secrets/path with spaces/secret.txt",
+			)
+			expect(controller.validateCommand("cat 'secrets/path with spaces/secret.txt'")).toBe(
+				"secrets/path with spaces/secret.txt",
+			)
 		})
 
 		/**
@@ -182,21 +189,21 @@ describe("RooIgnoreController Security Tests", () => {
 			const absolutePathToAllowed = path.join(TEST_CWD, "src/app.js")
 			expect(controller.validateAccess(absolutePathToAllowed)).toBe(true)
 
-			// Absolute path outside cwd should be allowed
-			expect(controller.validateAccess("/etc/hosts")).toBe(true)
-			expect(controller.validateAccess("/var/log/system.log")).toBe(true)
+			// Absolute path outside cwd should be denied
+			expect(controller.validateAccess("/etc/hosts")).toBe(false)
+			expect(controller.validateAccess("/var/log/system.log")).toBe(false)
 		})
 
 		/**
-		 * Tests that paths outside cwd are allowed
+		 * Tests that paths outside cwd are denied
 		 */
-		it("should allow paths outside the current working directory", () => {
-			// Paths outside cwd should be allowed
-			expect(controller.validateAccess("../outside-project/file.txt")).toBe(true)
-			expect(controller.validateAccess("../../other-project/secrets/keys.json")).toBe(true)
+		it("should deny paths outside the current working directory", () => {
+			// Paths outside cwd should be denied
+			expect(controller.validateAccess("../outside-project/file.txt")).toBe(false)
+			expect(controller.validateAccess("../../other-project/secrets/keys.json")).toBe(false)
 
 			// Edge case: path that would be ignored if inside cwd
-			expect(controller.validateAccess("/other/path/secrets/keys.json")).toBe(true)
+			expect(controller.validateAccess("/other/path/secrets/keys.json")).toBe(false)
 		})
 	})
 

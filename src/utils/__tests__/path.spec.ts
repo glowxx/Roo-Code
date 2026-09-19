@@ -51,9 +51,14 @@ describe("Path Utilities", () => {
 			expect(unixPath.toPosix()).toBe("/home/user/file.txt")
 		})
 
-		it("should preserve extended-length Windows paths", () => {
+		it("should strip extended-length prefix and convert backslashes to forward slashes", () => {
 			const extendedPath = "\\\\?\\C:\\Very\\Long\\Path"
-			expect(extendedPath.toPosix()).toBe("\\\\?\\C:\\Very\\Long\\Path")
+			expect(extendedPath.toPosix()).toBe("C:/Very/Long/Path")
+		})
+
+		it("should handle UNC extended-length Windows paths", () => {
+			const uncExtendedPath = "\\\\?\\UNC\\server\\share\\file.txt"
+			expect(uncExtendedPath.toPosix()).toBe("//server/share/file.txt")
 		})
 	})
 	describe("getWorkspacePath", () => {

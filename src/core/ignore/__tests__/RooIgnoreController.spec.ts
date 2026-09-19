@@ -102,6 +102,18 @@ describe("RooIgnoreController", () => {
 			expect(controller.validateAccess("secrets.json")).toBe(false)
 		})
 
+		it("should normalize backslashes in .rooignore patterns while preserving comments and empty lines", async () => {
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue("# Comment with backslash \\path\n\nwindows\\folder\\file.txt\nsub\\dir\\*")
+
+			await controller.initialize()
+
+			expect(controller.validateAccess("windows/folder/file.txt")).toBe(false)
+			expect(controller.validateAccess("windows\\folder\\file.txt")).toBe(false)
+			expect(controller.validateAccess("sub/dir/test.ts")).toBe(false)
+			expect(controller.validateAccess("other/file.txt")).toBe(true)
+		})
+
 		/**
 		 * Tests the controller behavior when .rooignore doesn't exist
 		 */
@@ -201,12 +213,12 @@ describe("RooIgnoreController", () => {
 		/**
 		 * Tests handling of paths outside cwd
 		 */
-		it("should allow access to paths outside cwd", () => {
+		it("should deny access to paths outside cwd", () => {
 			// Path traversal outside cwd
-			expect(controller.validateAccess("../outside-project/file.txt")).toBe(true)
+			expect(controller.validateAccess("../outside-project/file.txt")).toBe(false)
 
 			// Completely different path
-			expect(controller.validateAccess("/etc/hosts")).toBe(true)
+			expect(controller.validateAccess("/etc/hosts")).toBe(false)
 		})
 
 		/**

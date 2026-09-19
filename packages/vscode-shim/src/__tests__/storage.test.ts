@@ -175,4 +175,127 @@ describe("FileSecretStorage", () => {
 		// Should be 0600 (owner read/write only)
 		expect(mode).toBe(0o600)
 	})
+
+	it("should create a backup file when saving existing non-empty secrets", async () => {
+		const storage = new FileSecretStorage(tempDir)
+		await storage.store("key1", "val1")
+
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		expect(fs.existsSync(secretsPath)).toBe(true)
+
+		await storage.store("key2", "val2")
+		expect(fs.existsSync(backupPath)).toBe(true)
+
+		const backupContent = JSON.parse(fs.readFileSync(backupPath, "utf-8"))
+		expect(backupContent).toEqual({ key1: "val1" })
+	})
+
+	it("should recover from backup if primary file is corrupted", async () => {
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		// Write valid backup and corrupted primary
+		fs.writeFileSync(backupPath, JSON.stringify({ recoveredKey: "recoveredVal" }))
+		fs.writeFileSync(secretsPath, "corrupted json {")
+
+		const storage = new FileSecretStorage(tempDir)
+		expect(await storage.get("recoveredKey")).toBe("recoveredVal")
+	})
+
+	it("should recover from backup if primary file is empty", async () => {
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		fs.writeFileSync(backupPath, JSON.stringify({ fromBak: "ok" }))
+		fs.writeFileSync(secretsPath, "   ")
+
+		const storage = new FileSecretStorage(tempDir)
+		expect(await storage.get("fromBak")).toBe("ok")
+	})
+
+	it("should not reset existing secrets if load fails and secrets already present", async () => {
+		const storage = new FileSecretStorage(tempDir)
+		await storage.store("existing", "keepMe")
+
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		// Corrupt both
+		fs.writeFileSync(secretsPath, "corrupted {")
+		if (fs.existsSync(backupPath)) {
+			fs.writeFileSync(backupPath, "corrupted bak {")
+		}
+
+		// Re-trigger load
+		;(storage as any).loadFromFile()
+
+		// Secrets in memory must not be erased to empty object
+		expect(await storage.get("existing")).toBe("keepMe")
+	})
+
+	it("should not overwrite backup file if storage is corrupted", async () => {
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		// Both primary and backup are corrupted
+		fs.writeFileSync(secretsPath, "corrupted primary {")
+		fs.writeFileSync(backupPath, "precious backup content")
+
+		const storage = new FileSecretStorage(tempDir)
+		expect((storage as any).isCorrupted).toBe(true)
+
+		// Saving a new secret should NOT overwrite the backup
+		await storage.store("key1", "val1")
+
+		expect(fs.readFileSync(backupPath, "utf-8")).toBe("precious backup content")
+		expect((storage as any).isCorrupted).toBe(false)
+	})
+
+	it("should not create backup if primary file contains invalid JSON", async () => {
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		// Create storage with valid file first
+		const storage = new FileSecretStorage(tempDir)
+		await storage.store("k1", "v1")
+
+		// Manually remove backup and corrupt the primary file
+		if (fs.existsSync(backupPath)) {
+			fs.unlinkSync(backupPath)
+		}
+		fs.writeFileSync(secretsPath, "invalid json {")
+
+		// Attempt saving - should not create backup from invalid JSON
+		;(storage as any).saveToFile()
+		expect(fs.existsSync(backupPath)).toBe(false)
+	})
+
+	it("should not create backup if primary file is empty", async () => {
+		const secretsPath = path.join(tempDir, "secrets.json")
+		const backupPath = path.join(tempDir, "secrets.json.bak")
+
+		const storage = new FileSecretStorage(tempDir)
+		fs.writeFileSync(secretsPath, "   ")
+
+		;(storage as any).saveToFile()
+		expect(fs.existsSync(backupPath)).toBe(false)
+	})
+
+	it("should clean up orphaned secrets.json.tmp.* files on initialization", async () => {
+		const tmpFile1 = path.join(tempDir, "secrets.json.tmp.12345")
+		const tmpFile2 = path.join(tempDir, "secrets.json.tmp.67890")
+		const otherFile = path.join(tempDir, "other.tmp")
+
+		fs.writeFileSync(tmpFile1, "tmp1")
+		fs.writeFileSync(tmpFile2, "tmp2")
+		fs.writeFileSync(otherFile, "keep")
+
+		new FileSecretStorage(tempDir)
+
+		expect(fs.existsSync(tmpFile1)).toBe(false)
+		expect(fs.existsSync(tmpFile2)).toBe(false)
+		expect(fs.existsSync(otherFile)).toBe(true)
+	})
 })

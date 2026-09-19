@@ -93,10 +93,11 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 			}
 
 			let fileContent: string
+			let isCRLF = false
 			try {
-				fileContent = await fs.readFile(absolutePath, "utf8")
-				// Normalize line endings to LF for consistent matching
-				fileContent = fileContent.replace(/\r\n/g, "\n")
+				const rawContent = await fs.readFile(absolutePath, "utf8")
+				isCRLF = rawContent.includes("\r\n")
+				fileContent = rawContent.replace(/\r\n/g, "\n")
 			} catch (error) {
 				task.consecutiveMistakeCount++
 				task.recordToolError("search_replace")
@@ -136,7 +137,7 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 			}
 
 			// Apply the single replacement
-			const newContent = fileContent.replace(normalizedOldString, normalizedNewString)
+			let newContent = fileContent.replace(normalizedOldString, normalizedNewString)
 
 			// Check if any changes were made
 			if (newContent === fileContent) {
@@ -145,6 +146,10 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 			}
 
 			task.consecutiveMistakeCount = 0
+
+			if (isCRLF) {
+				newContent = newContent.replace(/\r?\n/g, "\r\n")
+			}
 
 			// Initialize diff view
 			task.diffViewProvider.editType = "modify"

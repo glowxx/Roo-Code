@@ -69,7 +69,17 @@ export class RooIgnoreController {
 			if (await fileExistsAtPath(ignorePath)) {
 				const content = await fs.readFile(ignorePath, "utf8")
 				this.rooIgnoreContent = content
-				this.ignoreInstance.add(content)
+				const normalizedPatterns = content
+					.split(/\r?\n/)
+					.map((line) => {
+						const trimmed = line.trim()
+						if (!trimmed || trimmed.startsWith("#")) {
+							return line
+						}
+						return line.replace(/\\/g, "/")
+					})
+					.join("\n")
+				this.ignoreInstance.add(normalizedPatterns)
 				this.ignoreInstance.add(".rooignore")
 			} else {
 				this.rooIgnoreContent = undefined
@@ -78,6 +88,54 @@ export class RooIgnoreController {
 			// Should never happen: reading file failed even though it exists
 			console.error("Unexpected error loading .rooignore:", error)
 		}
+	}
+
+	/**
+	 * Splits a command string into tokens taking quotes into account
+	 */
+	private splitCommandTokens(command: string): string[] {
+		const tokens: string[] = []
+		let current = ""
+		let inQuote: '"' | "'" | null = null
+
+		for (let i = 0; i < command.length; i++) {
+			const char = command[i]
+
+			if (inQuote) {
+				current += char
+				if (char === inQuote) {
+					inQuote = null
+				}
+			} else {
+				if (char === '"' || char === "'") {
+					inQuote = char
+					current += char
+				} else if (/\s/.test(char)) {
+					if (current.length > 0) {
+						tokens.push(current)
+						current = ""
+					}
+				} else {
+					current += char
+				}
+			}
+		}
+
+		if (current.length > 0) {
+			tokens.push(current)
+		}
+
+		return tokens
+	}
+
+	/**
+	 * Removes surrounding single or double quotes from a token
+	 */
+	private stripQuotes(value: string): string {
+		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+			return value.slice(1, -1)
+		}
+		return value
 	}
 
 	/**
@@ -110,8 +168,8 @@ export class RooIgnoreController {
 			// Check if the real path is ignored
 			return !this.ignoreInstance.ignores(relativePath)
 		} catch (error) {
-			// Allow access to files outside cwd or on errors (backward compatibility)
-			return true
+			// Deny access on errors or invalid paths
+			return false
 		}
 	}
 
@@ -126,9 +184,12 @@ export class RooIgnoreController {
 			return undefined
 		}
 
-		// Split command into parts and get the base command
-		const parts = command.trim().split(/\s+/)
-		const baseCommand = parts[0].toLowerCase()
+		// Split command into parts taking quotes into account and get the base command
+		const parts = this.splitCommandTokens(command.trim())
+		if (parts.length === 0) {
+			return undefined
+		}
+		const baseCommand = this.stripQuotes(parts[0]).toLowerCase()
 
 		// Commands that read file contents
 		const fileReadingCommands = [
@@ -152,13 +213,18 @@ export class RooIgnoreController {
 		if (fileReadingCommands.includes(baseCommand)) {
 			// Check each argument that could be a file path
 			for (let i = 1; i < parts.length; i++) {
-				const arg = parts[i]
+				let arg = parts[i]
 				// Skip command flags/options (both Unix and PowerShell style)
 				if (arg.startsWith("-") || arg.startsWith("/")) {
 					continue
 				}
-				// Ignore PowerShell parameter names
-				if (arg.includes(":")) {
+				// Remove surrounding quotes before path validation
+				arg = this.stripQuotes(arg)
+				if (!arg) {
+					continue
+				}
+				// Ignore PowerShell parameter names, but not Windows drive paths (e.g. C:\)
+				if (arg.includes(":") && !/^[a-zA-Z]:[\\/]/.test(arg)) {
 					continue
 				}
 				// Validate file access

@@ -72,8 +72,10 @@ export class ExtensionContextImpl implements ExtensionContext {
 	public logPath: string
 	public extensionMode: ExtensionMode
 	public extension: Extension<unknown> | undefined
+	private options: ExtensionContextOptions
 
 	constructor(options: ExtensionContextOptions) {
+		this.options = options
 		this.extensionPath = options.extensionPath
 		this.extensionUri = Uri.file(options.extensionPath)
 		this.extensionMode = options.extensionMode || 1 // Default to Production
@@ -112,6 +114,17 @@ export class ExtensionContextImpl implements ExtensionContext {
 
 		// Load extension metadata (packageJSON)
 		this.extension = this.loadExtensionMetadata()
+	}
+
+	public updateWorkspace(newWorkspacePath: string): void {
+		const baseStorageDir =
+			this.options.storageDir || path.join(process.env.HOME || process.env.USERPROFILE || ".", ".vscode-mock")
+		const workspaceHash = hashWorkspacePath(newWorkspacePath)
+		const workspaceStoragePath = path.join(baseStorageDir, "workspace-storage", workspaceHash)
+		this.storagePath = workspaceStoragePath
+		this.storageUri = Uri.file(workspaceStoragePath)
+		ensureDirectoryExists(workspaceStoragePath)
+		this.workspaceState = new FileMemento(path.join(workspaceStoragePath, "workspace-state.json"))
 	}
 
 	/**

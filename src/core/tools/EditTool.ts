@@ -88,10 +88,11 @@ export class EditTool extends BaseTool<"edit"> {
 			}
 
 			let fileContent: string
+			let isCRLF = false
 			try {
-				fileContent = await fs.readFile(absolutePath, "utf8")
-				// Normalize line endings to LF for consistent matching
-				fileContent = fileContent.replace(/\r\n/g, "\n")
+				const rawContent = await fs.readFile(absolutePath, "utf8")
+				isCRLF = rawContent.includes("\r\n")
+				fileContent = rawContent.replace(/\r\n/g, "\n")
 			} catch (error) {
 				task.consecutiveMistakeCount++
 				task.recordToolError("edit")
@@ -149,6 +150,10 @@ export class EditTool extends BaseTool<"edit"> {
 			}
 
 			task.consecutiveMistakeCount = 0
+
+			if (isCRLF) {
+				newContent = newContent.replace(/\r?\n/g, "\r\n")
+			}
 
 			// Initialize diff view
 			task.diffViewProvider.editType = "modify"

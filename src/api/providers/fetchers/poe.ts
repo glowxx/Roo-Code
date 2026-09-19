@@ -36,9 +36,10 @@ export async function getPoeModels(apiKey?: string, baseURL?: string): Promise<M
 
 		return models
 	} catch (error) {
-		console.error(
-			`[Poe] Error fetching models: ${JSON.stringify(error, Object.getOwnPropertyNames(error as object), 2)}`,
-		)
+		const status = (error as any)?.response?.status
+		const statusStr = status ? ` (status: ${status})` : ""
+		const msg = error instanceof Error ? error.message : String(error)
+		console.error(`[Poe] Error fetching models${statusStr}: ${msg}`)
 		return {}
 	}
 }

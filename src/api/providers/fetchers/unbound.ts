@@ -33,7 +33,10 @@ export async function getUnboundModels(apiKey?: string | null): Promise<Record<s
 			models[rawModel.id] = modelInfo
 		}
 	} catch (error) {
-		console.error(`Error fetching Unbound models: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`)
+		const status = (error as any)?.response?.status
+		const statusStr = status ? ` (status: ${status})` : ""
+		const msg = error instanceof Error ? error.message : String(error)
+		console.error(`Error fetching Unbound models${statusStr}: ${msg}`)
 	}
 
 	return models

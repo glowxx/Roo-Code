@@ -22,9 +22,10 @@ function getBaseStorageDir(): string {
  * @returns A hexadecimal hash string
  */
 export function hashWorkspacePath(workspacePath: string): string {
+	const normalized = path.normalize(workspacePath).toLowerCase().replace(/\\/g, "/")
 	let hash = 0
-	for (let i = 0; i < workspacePath.length; i++) {
-		const char = workspacePath.charCodeAt(i)
+	for (let i = 0; i < normalized.length; i++) {
+		const char = normalized.charCodeAt(i)
 		hash = (hash << 5) - hash + char
 		hash = hash & hash // Convert to 32-bit integer
 	}

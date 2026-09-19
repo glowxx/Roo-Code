@@ -28,11 +28,12 @@ Observations:
 */
 
 function toPosixPath(p: string) {
-	// Extended-Length Paths in Windows start with "\\?\" to allow longer paths and bypass usual parsing. If detected, we return the path unmodified to maintain functionality, as altering these paths could break their special syntax.
-	const isExtendedLengthPath = p.startsWith("\\\\?\\")
-
-	if (isExtendedLengthPath) {
-		return p
+	// Extended-Length Paths in Windows start with "\\?\" to allow longer paths and bypass usual parsing.
+	// Strip the prefix before converting backslashes to forward slashes so pattern matching engines receive POSIX paths.
+	if (p.startsWith("\\\\?\\UNC\\")) {
+		p = "\\\\" + p.slice(8)
+	} else if (p.startsWith("\\\\?\\")) {
+		p = p.slice(4)
 	}
 
 	return p.replace(/\\/g, "/")

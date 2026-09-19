@@ -37,6 +37,7 @@ export class FileSecretStorage implements SecretStorage {
 	private secrets: Record<string, string> = {}
 	private _onDidChange = new EventEmitter<SecretStorageChangeEvent>()
 	private filePath: string
+	private isCorrupted = false
 
 	/**
 	 * Create a new FileSecretStorage
@@ -45,21 +46,67 @@ export class FileSecretStorage implements SecretStorage {
 	 */
 	constructor(storagePath: string) {
 		this.filePath = path.join(storagePath, "secrets.json")
+		this.cleanOrphanedTempFiles(storagePath)
 		this.loadFromFile()
+	}
+
+	/**
+	 * Remove orphaned temporary files (secrets.json.tmp.*) from storage directory
+	 */
+	private cleanOrphanedTempFiles(storagePath: string): void {
+		try {
+			if (!fs.existsSync(storagePath)) {
+				return
+			}
+			const files = fs.readdirSync(storagePath)
+			for (const file of files) {
+				if (file.startsWith("secrets.json.tmp.") || file === "secrets.json.tmp") {
+					try {
+						fs.unlinkSync(path.join(storagePath, file))
+					} catch (unlinkError) {
+						console.warn(`Failed to remove orphaned temp file ${file}:`, unlinkError)
+					}
+				}
+			}
+		} catch (error) {
+			console.warn(`Failed to clean orphaned temp files in ${storagePath}:`, error)
+		}
 	}
 
 	/**
 	 * Load secrets from the JSON file
 	 */
 	private loadFromFile(): void {
-		try {
-			if (fs.existsSync(this.filePath)) {
+		if (fs.existsSync(this.filePath)) {
+			try {
 				const content = fs.readFileSync(this.filePath, "utf-8")
+				if (!content.trim()) {
+					throw new Error("Secrets file is empty")
+				}
 				this.secrets = JSON.parse(content)
+				this.isCorrupted = false
+				return
+			} catch (error) {
+				const backupPath = `${this.filePath}.bak`
+				if (fs.existsSync(backupPath)) {
+					try {
+						const backupContent = fs.readFileSync(backupPath, "utf-8")
+						if (!backupContent.trim()) {
+							throw new Error("Backup secrets file is empty")
+						}
+						this.secrets = JSON.parse(backupContent)
+						this.isCorrupted = false
+						return
+					} catch (backupError) {
+						console.warn(`Failed to load secrets from backup ${backupPath}:`, backupError)
+					}
+				}
+				console.warn(`Failed to load secrets from ${this.filePath}:`, error)
+				this.isCorrupted = true
+				if (!this.secrets) {
+					this.secrets = {}
+				}
 			}
-		} catch (error) {
-			console.warn(`Failed to load secrets from ${this.filePath}:`, error)
-			this.secrets = {}
 		}
 	}
 
@@ -72,17 +119,36 @@ export class FileSecretStorage implements SecretStorage {
 			const dir = path.dirname(this.filePath)
 			ensureDirectoryExists(dir)
 
-			// Write the file
-			fs.writeFileSync(this.filePath, JSON.stringify(this.secrets, null, 2))
+			// Backup before saving only if:
+			// 1. Not in corrupted state (avoid overwriting .bak with corrupted state)
+			// 2. Primary file exists and is a valid, non-empty JSON document
+			if (!this.isCorrupted && fs.existsSync(this.filePath)) {
+				try {
+					const currentContent = fs.readFileSync(this.filePath, "utf-8")
+					if (currentContent.trim()) {
+						JSON.parse(currentContent)
+						fs.copyFileSync(this.filePath, `${this.filePath}.bak`)
+					}
+				} catch (backupError) {
+					console.warn(`Failed to create backup of secrets file:`, backupError)
+				}
+			}
+
+			// Atomic write via temporary file
+			const tmpPath = `${this.filePath}.tmp.${Date.now()}`
+			fs.writeFileSync(tmpPath, JSON.stringify(this.secrets, null, 2))
 
 			// Set restrictive permissions (owner read/write only) on Unix-like systems
 			if (process.platform !== "win32") {
 				try {
-					fs.chmodSync(this.filePath, 0o600)
+					fs.chmodSync(tmpPath, 0o600)
 				} catch {
 					// Ignore chmod errors (might not be supported on some filesystems)
 				}
 			}
+
+			fs.renameSync(tmpPath, this.filePath)
+			this.isCorrupted = false
 		} catch (error) {
 			console.warn(`Failed to save secrets to ${this.filePath}:`, error)
 		}
