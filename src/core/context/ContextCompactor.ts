@@ -37,6 +37,7 @@ export interface CompactHistoryOptions {
 	cwd?: string
 	rooIgnoreController?: RooIgnoreController
 	metadata?: ApiHandlerCreateMessageMetadata
+	abortSignal?: AbortSignal
 }
 
 export interface CompactHistoryResult {
@@ -121,6 +122,77 @@ async function countTokensForHistory(
 		}, systemPrompt?.length ?? 0)
 		return Math.ceil(charCount / 4)
 	}
+}
+
+/**
+ * Helper to normalize any message content into an array of ContentBlockParam.
+ */
+export function toContentBlocks(
+	content: string | Anthropic.Messages.ContentBlockParam[] | undefined,
+): Anthropic.Messages.ContentBlockParam[] {
+	if (!content) {
+		return []
+	}
+	if (typeof content === "string") {
+		return [{ type: "text", text: content }]
+	}
+	if (Array.isArray(content)) {
+		return content.map((block) => {
+			if (typeof block === "string") {
+				return { type: "text", text: block }
+			}
+			return block
+		})
+	}
+	return [{ type: "text", text: String(content) }]
+}
+
+/**
+ * Sanitizes an ApiMessage history array to ensure strictly alternating roles,
+ * merging adjacent messages of the same role (specifically consecutive user messages)
+ * into a single multi-block message (`ContentBlockParam[]`).
+ *
+ * This prevents HTTP 400 errors from LLM providers like Anthropic and Bedrock
+ * which reject conversations with consecutive user messages.
+ */
+export function sanitizeRoleAlternation(history: ApiMessage[]): ApiMessage[] {
+	if (!history || history.length === 0) {
+		return []
+	}
+
+	const sanitized: ApiMessage[] = []
+
+	for (const msg of history) {
+		const prev = sanitized[sanitized.length - 1]
+		if (prev && prev.role === msg.role) {
+			// Merge consecutive messages with identical roles into a multi-block message
+			const prevBlocks = toContentBlocks(prev.content)
+			const currBlocks = toContentBlocks(msg.content)
+			prev.content = [...prevBlocks, ...currBlocks]
+
+			// Preserve metadata flags
+			if (msg.isSummary) {
+				prev.isSummary = true
+			}
+			if (msg.condenseId) {
+				prev.condenseId = msg.condenseId
+			}
+			if (msg.ts && !prev.ts) {
+				prev.ts = msg.ts
+			}
+		} else {
+			sanitized.push({
+				...msg,
+				content: Array.isArray(msg.content)
+					? [...msg.content]
+					: typeof msg.content === "string"
+						? msg.content
+						: toContentBlocks(msg.content),
+			})
+		}
+	}
+
+	return sanitized
 }
 
 /**
@@ -256,8 +328,13 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		throw new Error("API handler is invalid for condensing. Cannot proceed.")
 	}
 
+	if (options.abortSignal?.aborted) {
+		throw new Error("Context condensation was aborted.")
+	}
+
 	let summary = ""
 	let cost = 0
+	let finishReason: string | undefined
 
 	const condensingMetadata: ApiHandlerCreateMessageMetadata = {
 		taskId,
@@ -277,6 +354,21 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		}, CONDENSATION_TIMEOUT_MS)
 	})
 
+	const abortPromise = new Promise<never>((_, reject) => {
+		if (options.abortSignal?.aborted) {
+			reject(new Error("Context condensation was aborted."))
+			return
+		}
+		options.abortSignal?.addEventListener(
+			"abort",
+			() => {
+				abortController.abort()
+				reject(new Error("Context condensation was aborted."))
+			},
+			{ once: true },
+		)
+	})
+
 	let iterator: AsyncIterator<any> | undefined
 
 	try {
@@ -288,6 +380,9 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		iterator = stream[Symbol.asyncIterator]()
 
 		while (true) {
+			if (options.abortSignal?.aborted) {
+				throw new Error("Context condensation was aborted.")
+			}
 			if (abortController.signal.aborted) {
 				throw new Error("Context condensation timed out after 60 seconds.")
 			}
@@ -295,6 +390,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 			const { value: chunk, done } = await Promise.race([
 				iterator.next(),
 				timeoutPromise,
+				abortPromise,
 			])
 
 			if (done) {
@@ -308,6 +404,15 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 			} else if (chunk.type === "error") {
 				throw new Error(chunk.message || chunk.error || "Stream error")
 			}
+
+			const reason =
+				(chunk as any).finish_reason ??
+				(chunk as any).finishReason ??
+				(chunk as any).stop_reason ??
+				(chunk as any).stopReason
+			if (reason) {
+				finishReason = reason
+			}
 		}
 	} catch (error) {
 		if (iterator?.return) {
@@ -316,6 +421,10 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 			} catch {
 				// ignore cleanup error
 			}
+		}
+
+		if (options.abortSignal?.aborted || (error instanceof Error && error.message.includes("aborted"))) {
+			throw new Error("Context condensation was aborted.")
 		}
 
 		if (didTimeout || (error instanceof Error && error.message.includes("timed out after 60 seconds"))) {
@@ -331,6 +440,13 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		}
 	}
 
+	// Verify finish_reason
+	if (finishReason === "max_tokens" || finishReason === "length") {
+		throw new Error(
+			`Context condensation incomplete: model output was truncated (finish_reason: ${finishReason}).`,
+		)
+	}
+
 	summary = summary.trim()
 	if (!summary) {
 		throw new Error("Context condensation failed: received empty summary from model.")
@@ -344,12 +460,12 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		isSummary: true,
 	}
 
-	// Construct newHistory: [messages[0], summaryMessage, ...preservedRecentMessages]
-	const newHistory: ApiMessage[] = [
+	// Construct newHistory with sanitized role alternation: [messages[0], summaryMessage, ...preservedRecentMessages]
+	const newHistory: ApiMessage[] = sanitizeRoleAlternation([
 		initialMessage,
 		summaryMessage,
 		...preservedRecentMessages,
-	]
+	])
 
 	// Calculate new tokens after compaction
 	const newTokens = await countTokensForHistory(newHistory, apiHandler, systemPrompt)

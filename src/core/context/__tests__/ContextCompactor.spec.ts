@@ -4,7 +4,7 @@ import type { ModelInfo } from "@roo-code/types"
 
 import { BaseProvider } from "../../../api/providers/base-provider"
 import { ApiMessage } from "../../task-persistence/apiMessages"
-import { compactHistory, CONDENSING_SYSTEM_PROMPT } from "../ContextCompactor"
+import { compactHistory, CONDENSING_SYSTEM_PROMPT, sanitizeRoleAlternation } from "../ContextCompactor"
 
 class MockApiHandler extends BaseProvider {
 	public lastSystemPrompt?: string
@@ -117,20 +117,29 @@ describe("ContextCompactor", () => {
 		})
 
 		// Preserved recent messages are indices 4, 5, 6, 7 (4 messages)
-		// Message 0 is preserved as first message
-		// Summary message is in index 1
-		expect(result.newHistory).toHaveLength(6) // 1 (m0) + 1 (summary) + 4 (preserved)
-		expect(result.newHistory[0]).toEqual(messages[0])
+		// With sanitizeRoleAlternation, adjacent user messages (m0, summary, m4)
+		// are merged into a single multi-block user message to prevent HTTP 400 errors.
+		expect(result.newHistory).toHaveLength(4)
 
-		const summaryMsg = result.newHistory[1]
-		expect(summaryMsg.role).toBe("user")
-		expect(summaryMsg.isSummary).toBe(true)
-		expect(Array.isArray(summaryMsg.content)).toBe(true)
-		expect((summaryMsg.content as any)[0].text).toContain("[Context Compacted Summary]")
-		expect((summaryMsg.content as any)[0].text).toContain("### 1. Main Objective & Context")
+		const firstMsg = result.newHistory[0]
+		expect(firstMsg.role).toBe("user")
+		expect(firstMsg.isSummary).toBe(true)
+		expect(Array.isArray(firstMsg.content)).toBe(true)
 
-		// Remaining messages are preserved
-		expect(result.newHistory.slice(2)).toEqual(messages.slice(4))
+		const blocks = firstMsg.content as Anthropic.Messages.ContentBlockParam[]
+		expect(blocks).toHaveLength(3) // m0 + summary + m4
+		expect((blocks[0] as any).text).toContain("Initial objective: implement feature X")
+		expect((blocks[1] as any).text).toContain("[Context Compacted Summary]")
+		expect((blocks[1] as any).text).toContain("### 1. Main Objective & Context")
+		expect((blocks[2] as any).text).toContain("Now do step 3")
+
+		// Remaining messages strictly alternate roles
+		expect(result.newHistory[1].role).toBe("assistant")
+		expect(result.newHistory[1]).toEqual(messages[5])
+		expect(result.newHistory[2].role).toBe("user")
+		expect(result.newHistory[2]).toEqual(messages[6])
+		expect(result.newHistory[3].role).toBe("assistant")
+		expect(result.newHistory[3]).toEqual(messages[7])
 
 		// Cost and tokens
 		expect(result.cost).toBe(0.005)
@@ -220,7 +229,7 @@ describe("ContextCompactor", () => {
 		expect(serialized).toContain("Focus especially on changes to the auth module.")
 	})
 
-	it("handles 4 messages by preserving 2 recent messages and compacting intermediate", async () => {
+	it("handles 4 messages by preserving 2 recent messages and compacting intermediate with sanitized alternation", async () => {
 		const messages: ApiMessage[] = [
 			{ role: "user", content: "Initial goal", ts: 1 },
 			{ role: "assistant", content: [{ type: "text", text: "Intermediate step" }], ts: 2 },
@@ -235,9 +244,176 @@ describe("ContextCompactor", () => {
 			taskId,
 		})
 
-		expect(result.newHistory[0]).toEqual(messages[0])
-		expect(result.newHistory[1].isSummary).toBe(true)
-		expect(result.newHistory.slice(2)).toEqual([messages[2], messages[3]])
+		// m0 (user), summary (user), and m2 (user) are merged into one user message
+		expect(result.newHistory).toHaveLength(2)
+		expect(result.newHistory[0].role).toBe("user")
+		expect(result.newHistory[0].isSummary).toBe(true)
+		const blocks = result.newHistory[0].content as Anthropic.Messages.ContentBlockParam[]
+		expect(blocks).toHaveLength(3)
+		expect((blocks[0] as any).text).toBe("Initial goal")
+		expect((blocks[1] as any).text).toContain("[Context Compacted Summary]")
+		expect((blocks[2] as any).text).toBe("Recent prompt")
+
+		expect(result.newHistory[1].role).toBe("assistant")
+		expect(result.newHistory[1]).toEqual(messages[3])
+	})
+
+	describe("sanitizeRoleAlternation", () => {
+		it("returns empty array for empty history", () => {
+			expect(sanitizeRoleAlternation([])).toEqual([])
+		})
+
+		it("merges consecutive user messages into a single multi-block message", () => {
+			const history: ApiMessage[] = [
+				{ role: "user", content: "First user message", ts: 1 },
+				{
+					role: "user",
+					content: [{ type: "text", text: "[Summary]" }],
+					ts: 2,
+					isSummary: true,
+				},
+				{ role: "user", content: "Third user message", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Assistant reply" }], ts: 4 },
+			]
+
+			const result = sanitizeRoleAlternation(history)
+			expect(result).toHaveLength(2)
+			expect(result[0].role).toBe("user")
+			expect(result[0].isSummary).toBe(true)
+			expect(result[0].content).toEqual([
+				{ type: "text", text: "First user message" },
+				{ type: "text", text: "[Summary]" },
+				{ type: "text", text: "Third user message" },
+			])
+			expect(result[1].role).toBe("assistant")
+		})
+
+		it("leaves already alternating history unchanged", () => {
+			const history: ApiMessage[] = [
+				{ role: "user", content: "User 1" },
+				{ role: "assistant", content: "Assistant 1" },
+				{ role: "user", content: "User 2" },
+				{ role: "assistant", content: "Assistant 2" },
+			]
+
+			const result = sanitizeRoleAlternation(history)
+			expect(result).toHaveLength(4)
+			expect(result[0].role).toBe("user")
+			expect(result[1].role).toBe("assistant")
+			expect(result[2].role).toBe("user")
+			expect(result[3].role).toBe("assistant")
+		})
+	})
+
+	describe("abortSignal support", () => {
+		it("throws immediately if abortSignal is already aborted", async () => {
+			const controller = new AbortController()
+			controller.abort()
+
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial goal", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 1" }], ts: 2 },
+				{ role: "user", content: "Step 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 3" }], ts: 4 },
+			]
+
+			await expect(
+				compactHistory({
+					messages,
+					apiHandler: mockApiHandler,
+					systemPrompt,
+					taskId,
+					abortSignal: controller.signal,
+				}),
+			).rejects.toThrow("Context condensation was aborted.")
+		})
+
+		it("aborts stream when abortSignal fires mid-stream", async () => {
+			const controller = new AbortController()
+
+			mockApiHandler.createMessage = () => {
+				return {
+					async *[Symbol.asyncIterator]() {
+						yield { type: "text", text: "Partial summary" }
+						controller.abort()
+						yield { type: "text", text: " More summary" }
+					},
+				} as any
+			}
+
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial goal", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 1" }], ts: 2 },
+				{ role: "user", content: "Step 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 3" }], ts: 4 },
+			]
+
+			await expect(
+				compactHistory({
+					messages,
+					apiHandler: mockApiHandler,
+					systemPrompt,
+					taskId,
+					abortSignal: controller.signal,
+				}),
+			).rejects.toThrow("Context condensation was aborted.")
+		})
+	})
+
+	describe("finish_reason verification", () => {
+		it("throws error when model finish_reason is max_tokens", async () => {
+			mockApiHandler.createMessage = () => {
+				return {
+					async *[Symbol.asyncIterator]() {
+						yield { type: "text", text: "Truncated summary" }
+						yield { type: "usage", finish_reason: "max_tokens" }
+					},
+				} as any
+			}
+
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial goal", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 1" }], ts: 2 },
+				{ role: "user", content: "Step 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 3" }], ts: 4 },
+			]
+
+			await expect(
+				compactHistory({
+					messages,
+					apiHandler: mockApiHandler,
+					systemPrompt,
+					taskId,
+				}),
+			).rejects.toThrow(/Context condensation incomplete: model output was truncated \(finish_reason: max_tokens\)/i)
+		})
+
+		it("throws error when model finish_reason is length", async () => {
+			mockApiHandler.createMessage = () => {
+				return {
+					async *[Symbol.asyncIterator]() {
+						yield { type: "text", text: "Truncated summary" }
+						yield { type: "usage", finishReason: "length" }
+					},
+				} as any
+			}
+
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial goal", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 1" }], ts: 2 },
+				{ role: "user", content: "Step 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Step 3" }], ts: 4 },
+			]
+
+			await expect(
+				compactHistory({
+					messages,
+					apiHandler: mockApiHandler,
+					systemPrompt,
+					taskId,
+				}),
+			).rejects.toThrow(/Context condensation incomplete: model output was truncated \(finish_reason: length\)/i)
+		})
 	})
 
 	it("throws an error when the API call fails", async () => {

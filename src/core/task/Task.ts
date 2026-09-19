@@ -343,6 +343,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolResultBlockParam)[] = []
 	userMessageContentReady = false
 	private isCompacting = false
+	private compactionAbortController?: AbortController
+
+	public abortCompaction(): void {
+		this.compactionAbortController?.abort()
+	}
 
 	/**
 	 * Flag indicating whether the assistant message for the current streaming session
@@ -1652,61 +1657,71 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		const filesReadByRoo = await this.getFilesReadByRooSafely("condenseContext")
 
-		const {
-			messages,
-			summary,
-			cost,
-			newContextTokens = 0,
-			error,
-			errorDetails,
-			condenseId,
-		} = await summarizeConversation({
-			messages: this.apiConversationHistory,
-			apiHandler: this.api,
-			systemPrompt,
-			taskId: this.taskId,
-			isAutomaticTrigger: false,
-			customCondensingPrompt,
-			metadata,
-			environmentDetails,
-			filesReadByRoo,
-			cwd: this.cwd,
-			rooIgnoreController: this.rooIgnoreController,
-		})
-		if (error) {
-			await this.say(
-				"condense_context_error",
+		this.compactionAbortController = new AbortController()
+
+		try {
+			const {
+				messages,
+				summary,
+				cost,
+				newContextTokens = 0,
 				error,
+				errorDetails,
+				condenseId,
+			} = await summarizeConversation({
+				messages: this.apiConversationHistory,
+				apiHandler: this.api,
+				systemPrompt,
+				taskId: this.taskId,
+				isAutomaticTrigger: false,
+				customCondensingPrompt,
+				metadata,
+				environmentDetails,
+				filesReadByRoo,
+				cwd: this.cwd,
+				rooIgnoreController: this.rooIgnoreController,
+				abortSignal: this.compactionAbortController.signal,
+			})
+			if (error) {
+				await this.say(
+					"condense_context_error",
+					error,
+					undefined /* images */,
+					false /* partial */,
+					undefined /* checkpoint */,
+					undefined /* progressStatus */,
+					{ isNonInteractive: true } /* options */,
+				)
+				return
+			}
+			if (this.compactionAbortController?.signal.aborted || this.abort) {
+				return
+			}
+			await this.overwriteApiConversationHistory(messages)
+
+			const contextCondense: ContextCondense = {
+				summary,
+				cost,
+				newContextTokens,
+				prevContextTokens,
+				condenseId: condenseId!,
+			}
+			await this.say(
+				"condense_context",
+				undefined /* text */,
 				undefined /* images */,
 				false /* partial */,
 				undefined /* checkpoint */,
 				undefined /* progressStatus */,
 				{ isNonInteractive: true } /* options */,
+				contextCondense,
 			)
-			return
-		}
-		await this.overwriteApiConversationHistory(messages)
 
-		const contextCondense: ContextCondense = {
-			summary,
-			cost,
-			newContextTokens,
-			prevContextTokens,
-			condenseId: condenseId!,
+			// Process any queued messages after condensing completes
+			this.processQueuedMessages()
+		} finally {
+			this.compactionAbortController = undefined
 		}
-		await this.say(
-			"condense_context",
-			undefined /* text */,
-			undefined /* images */,
-			false /* partial */,
-			undefined /* checkpoint */,
-			undefined /* progressStatus */,
-			{ isNonInteractive: true } /* options */,
-			contextCondense,
-		)
-
-		// Process any queued messages after condensing completes
-		this.processQueuedMessages()
 	}
 
 	public async compactConversation(
@@ -1726,6 +1741,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		this.isCompacting = true
+		this.compactionAbortController = new AbortController()
 
 		try {
 			await this.flushPendingToolResultsToHistory()
@@ -1746,7 +1762,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				customInstructions,
 				cwd: this.cwd,
 				rooIgnoreController: this.rooIgnoreController,
+				abortSignal: this.compactionAbortController.signal,
 			})
+
+			// If condensation was aborted, do not overwrite history on disk
+			if (this.compactionAbortController?.signal.aborted || this.abort) {
+				throw new Error("Context condensation was aborted.")
+			}
 
 			await this.overwriteApiConversationHistory(newHistory)
 
@@ -1795,8 +1817,27 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.processQueuedMessages()
 
 			return { previousTokens, newTokens, savedTokensPercentage }
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			if (
+				errorMessage.includes("truncated") ||
+				errorMessage.includes("finish_reason") ||
+				errorMessage.includes("incomplete")
+			) {
+				await this.say(
+					"condense_context_error",
+					errorMessage,
+					undefined,
+					false,
+					undefined,
+					undefined,
+					{ isNonInteractive: true },
+				)
+			}
+			throw error
 		} finally {
 			this.isCompacting = false
+			this.compactionAbortController = undefined
 		}
 	}
 
@@ -2312,6 +2353,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		this.abort = true
 
+		// Immediately abort any in-progress context compaction
+		this.compactionAbortController?.abort()
+
 		// Reset consecutive error counters on abort (manual intervention)
 		this.consecutiveNoToolUseCount = 0
 		this.consecutiveNoAssistantMessagesCount = 0
@@ -2338,6 +2382,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	public dispose(): void {
 		console.log(`[Task#dispose] disposing task ${this.taskId}.${this.instanceId}`)
+
+		// Cancel any in-progress compaction
+		try {
+			this.compactionAbortController?.abort()
+		} catch (error) {
+			console.error("Error cancelling compaction:", error)
+		}
 
 		// Cancel any in-progress HTTP request
 		try {

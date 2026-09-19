@@ -216,11 +216,13 @@ describe("Task compactConversation", () => {
 		})
 
 		const mockNewHistory = [
-			{ role: "user", content: "Initial user task", ts: 1 },
 			{
 				role: "user",
-				content: [{ type: "text", text: "[Context Compacted Summary]\n\nSummary of work" }],
-				ts: 2,
+				content: [
+					{ type: "text", text: "Initial user task" },
+					{ type: "text", text: "[Context Compacted Summary]\n\nSummary of work" },
+				],
+				ts: 1,
 				isSummary: true,
 			},
 			{ role: "assistant", content: [{ type: "text", text: "Recent reply" }], ts: 3 },
@@ -246,6 +248,7 @@ describe("Task compactConversation", () => {
 			expect.objectContaining({
 				taskId: task.taskId,
 				customInstructions: "Extra focus on components",
+				abortSignal: expect.any(AbortSignal),
 			}),
 		)
 		expect(overwriteSpy).toHaveBeenCalledWith(mockNewHistory)
@@ -315,6 +318,69 @@ describe("Task compactConversation", () => {
 		vi.spyOn(ContextCompactorModule, "compactHistory").mockRejectedValue(new Error("API exploded"))
 
 		await expect(task.compactConversation()).rejects.toThrow("API exploded")
+		expect((task as any).isCompacting).toBe(false)
+	})
+
+	it("does not overwrite history and cleans up if compaction is aborted", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "Initial user task",
+			startTask: false,
+		})
+
+		vi.spyOn(task as any, "getSystemPrompt").mockResolvedValue("mock system prompt")
+		vi.spyOn(task, "flushPendingToolResultsToHistory").mockResolvedValue(true)
+		const overwriteSpy = vi.spyOn(task, "overwriteApiConversationHistory").mockResolvedValue(undefined)
+
+		vi.spyOn(ContextCompactorModule, "compactHistory").mockImplementation(async (opts) => {
+			task.abortCompaction()
+			if (opts.abortSignal?.aborted) {
+				throw new Error("Context condensation was aborted.")
+			}
+			return {
+				newHistory: [],
+				summary: "Aborted summary",
+				previousTokens: 500,
+				newTokens: 100,
+				cost: 0,
+			}
+		})
+
+		await expect(task.compactConversation()).rejects.toThrow(/aborted/i)
+		expect(overwriteSpy).not.toHaveBeenCalled()
+		expect((task as any).isCompacting).toBe(false)
+		expect((task as any).compactionAbortController).toBeUndefined()
+	})
+
+	it("does not overwrite history and notifies UI via say when output is truncated", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "Initial user task",
+			startTask: false,
+		})
+
+		vi.spyOn(task as any, "getSystemPrompt").mockResolvedValue("mock system prompt")
+		vi.spyOn(task, "flushPendingToolResultsToHistory").mockResolvedValue(true)
+		const overwriteSpy = vi.spyOn(task, "overwriteApiConversationHistory").mockResolvedValue(undefined)
+		const saySpy = vi.spyOn(task, "say").mockResolvedValue(undefined as any)
+
+		vi.spyOn(ContextCompactorModule, "compactHistory").mockRejectedValue(
+			new Error("Context condensation incomplete: model output was truncated (finish_reason: max_tokens)."),
+		)
+
+		await expect(task.compactConversation()).rejects.toThrow(/truncated/i)
+		expect(overwriteSpy).not.toHaveBeenCalled()
+		expect(saySpy).toHaveBeenCalledWith(
+			"condense_context_error",
+			expect.stringContaining("truncated"),
+			undefined,
+			false,
+			undefined,
+			undefined,
+			{ isNonInteractive: true },
+		)
 		expect((task as any).isCompacting).toBe(false)
 	})
 })

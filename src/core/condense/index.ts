@@ -231,6 +231,7 @@ export type SummarizeConversationOptions = {
 	filesReadByRoo?: string[]
 	cwd?: string
 	rooIgnoreController?: RooIgnoreController
+	abortSignal?: AbortSignal
 }
 
 /**
@@ -264,9 +265,18 @@ export async function summarizeConversation(options: SummarizeConversationOption
 		filesReadByRoo,
 		cwd,
 		rooIgnoreController,
+		abortSignal,
 	} = options
 
 	const response: SummarizeResponse = { messages, cost: 0, summary: "" }
+
+	if (abortSignal?.aborted) {
+		return {
+			...response,
+			error: "Context condensation was aborted.",
+			errorDetails: "Context condensation was aborted by user or task disposal.",
+		}
+	}
 
 	// Get messages to summarize (all messages since the last summary, if any)
 	const messagesToSummarize = getMessagesSinceLastSummary(messages)
@@ -325,18 +335,67 @@ export async function summarizeConversation(options: SummarizeConversationOption
 	let outputTokens = 0
 
 	try {
-		const stream = apiHandler.createMessage(promptToUse, requestMessages, metadata)
+		if (abortSignal?.aborted) {
+			throw new Error("Context condensation was aborted.")
+		}
 
-		for await (const chunk of stream) {
-			if (chunk.type === "text") {
-				summary += chunk.text
-			} else if (chunk.type === "usage") {
-				// Record final usage chunk only
-				cost = chunk.totalCost ?? 0
-				outputTokens = chunk.outputTokens ?? 0
+		const stream = apiHandler.createMessage(promptToUse, requestMessages, metadata)
+		const iterator = stream[Symbol.asyncIterator]()
+
+		const abortPromise = new Promise<never>((_, reject) => {
+			if (abortSignal?.aborted) {
+				reject(new Error("Context condensation was aborted."))
+				return
+			}
+			abortSignal?.addEventListener(
+				"abort",
+				() => {
+					reject(new Error("Context condensation was aborted."))
+				},
+				{ once: true },
+			)
+		})
+
+		try {
+			while (true) {
+				if (abortSignal?.aborted) {
+					throw new Error("Context condensation was aborted.")
+				}
+
+				const { value: chunk, done } = await Promise.race([
+					iterator.next(),
+					abortPromise,
+				])
+
+				if (done) {
+					break
+				}
+
+				if (chunk.type === "text") {
+					summary += chunk.text
+				} else if (chunk.type === "usage") {
+					// Record final usage chunk only
+					cost = chunk.totalCost ?? 0
+					outputTokens = chunk.outputTokens ?? 0
+				}
+			}
+		} finally {
+			try {
+				await (iterator as any).return?.()
+			} catch {
+				// ignore iterator return error
 			}
 		}
 	} catch (error) {
+		if (abortSignal?.aborted || (error instanceof Error && error.message.includes("aborted"))) {
+			return {
+				...response,
+				cost,
+				error: "Context condensation was aborted.",
+				errorDetails: "Context condensation was aborted by user or task disposal.",
+			}
+		}
+
 		console.error("Error during condensing API call:", error)
 		const errorMessage = error instanceof Error ? error.message : String(error)
 
