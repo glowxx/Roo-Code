@@ -117,4 +117,4 @@ echo You can run this installer on any Windows 10/11 x64 machine.
 echo Future updates can simply be installed on top without losing settings.
 echo ====================================================
 echo.
-pause
+if "%CI%"=="" if "%NON_INTERACTIVE%"=="" pause

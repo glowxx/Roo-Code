@@ -2,6 +2,8 @@ import { build } from "esbuild"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
+import { createRequire } from "module"
+import { execSync } from "child_process"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -79,12 +81,19 @@ async function runBuild() {
 		}
 	}
 
-	// 4. Copy engine if built
+	// 4. Compile and copy engine
 	let rootDir = __dirname
 	while (rootDir !== path.dirname(rootDir)) {
-		if (fs.existsSync(path.join(rootDir, "src", "dist", "extension.js"))) break
+		if (fs.existsSync(path.join(rootDir, "pnpm-workspace.yaml"))) break
 		rootDir = path.dirname(rootDir)
 	}
+	if (!fs.existsSync(path.join(rootDir, "pnpm-workspace.yaml"))) {
+		rootDir = path.resolve(__dirname, "../..")
+	}
+
+	console.log("⚙️ Compiling core engine (roo-cline)...")
+	execSync("pnpm --filter roo-cline build", { cwd: rootDir, stdio: "inherit" })
+
 	const engineSrc = path.join(rootDir, "src", "dist")
 	if (fs.existsSync(engineSrc)) {
 		console.log("📦 Bundling engine files into dist/engine...")
@@ -102,40 +111,76 @@ async function runBuild() {
 		copyDir(webviewSrc, path.join(outDir, "webview"))
 	}
 
-	// 6. Copy ripgrep binary into dist/node_modules/@vscode/ripgrep/bin/
+	// 6. Deterministyczna lokalizacja i kopiowanie ripgrep binary into dist/node_modules/@vscode/ripgrep/bin/
 	const rgBinaryName = process.platform === "win32" ? "rg.exe" : "rg"
 	let rgSrc = ""
-	function findRg(dir, depth = 0) {
-		if (depth > 6 || !fs.existsSync(dir)) return
+	let rgSourceType = ""
+
+	// 1. Sprawdzenie @vscode/ripgrep w node_modules za pomocą require.resolve
+	const candidateRoots = [
+		import.meta.url,
+		path.join(rootDir, "apps", "cli", "package.json"),
+		path.join(rootDir, "apps", "desktop", "package.json"),
+		path.join(rootDir, "src", "package.json"),
+		path.join(rootDir, "package.json"),
+	]
+
+	for (const candidate of candidateRoots) {
 		try {
-			const entries = fs.readdirSync(dir, { withFileTypes: true })
-			for (const entry of entries) {
-				const full = path.join(dir, entry.name)
-				if (entry.isFile() && entry.name === rgBinaryName) {
-					rgSrc = full
-					return
-				}
-				if (
-					entry.isDirectory() &&
-					(entry.name === "node_modules" ||
-						entry.name.includes("ripgrep") ||
-						entry.name === ".pnpm" ||
-						entry.name === "bin" ||
-						entry.name === "@vscode")
-				) {
-					findRg(full, depth + 1)
-					if (rgSrc) return
-				}
+			const req = createRequire(candidate)
+			const rgModule = req("@vscode/ripgrep")
+			if (rgModule && rgModule.rgPath && fs.existsSync(rgModule.rgPath)) {
+				rgSrc = rgModule.rgPath
+				rgSourceType = `@vscode/ripgrep module (${path.relative(rootDir, candidate)})`
+				break
+			}
+			const resolvedPath = req.resolve("@vscode/ripgrep")
+			const binCandidate = path.join(path.dirname(resolvedPath), "..", "bin", rgBinaryName)
+			if (fs.existsSync(binCandidate)) {
+				rgSrc = binCandidate
+				rgSourceType = `@vscode/ripgrep resolved bin (${path.relative(rootDir, candidate)})`
+				break
 			}
 		} catch {}
 	}
-	findRg(path.join(rootDir, "node_modules"))
+
+	// 2. Binarka w process.resourcesPath (dla spakowanej aplikacji Electron)
+	if (!rgSrc && process.resourcesPath) {
+		const resourceCandidates = [
+			path.join(process.resourcesPath, "bin", rgBinaryName),
+			path.join(process.resourcesPath, "node_modules", "@vscode", "ripgrep", "bin", rgBinaryName),
+		]
+		for (const resPath of resourceCandidates) {
+			if (fs.existsSync(resPath)) {
+				rgSrc = resPath
+				rgSourceType = "process.resourcesPath"
+				break
+			}
+		}
+	}
+
+	// 3. Systemowy rg dostępny w zmiennej środowiskowej PATH jako ostateczny fallback
+	if (!rgSrc) {
+		try {
+			const checkCmd = process.platform === "win32" ? `where ${rgBinaryName}` : `which ${rgBinaryName}`
+			const sysRg = execSync(checkCmd, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
+				.split(/\r?\n/)[0]
+				?.trim()
+			if (sysRg && fs.existsSync(sysRg)) {
+				rgSrc = sysRg
+				rgSourceType = "system PATH"
+			}
+		} catch {}
+	}
+
 	if (rgSrc) {
-		console.log(`🔍 Found ripgrep binary at: ${rgSrc}`)
+		console.log(`🔍 Located ripgrep binary via ${rgSourceType}: ${rgSrc}`)
 		const rgDestDir = path.join(outDir, "node_modules", "@vscode", "ripgrep", "bin")
 		fs.mkdirSync(rgDestDir, { recursive: true })
 		fs.copyFileSync(rgSrc, path.join(rgDestDir, rgBinaryName))
 		console.log(`📦 Bundled ripgrep into dist/node_modules/@vscode/ripgrep/bin/${rgBinaryName}`)
+	} else {
+		console.warn(`⚠️ Warning: Could not locate ${rgBinaryName}. Search features may fail without bundled ripgrep.`)
 	}
 
 	console.log("✅ @roo-code/desktop build complete!")

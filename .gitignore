@@ -12,6 +12,8 @@ out-*/
 build/
 bin/
 release/
+apps/desktop/release/
+*.blockmap
 *.tsbuildinfo
 .turbo/
 .vite-port
@@ -23,24 +25,35 @@ roo-cli-*.tar.gz*
 *.rpm
 *.AppImage
 *.exe
+!**/rg.exe
 *.dmg
 
 # Environment, secrets & credentials (NEVER commit personal or sensitive data)
 .env
 .env.*
-!.env.*.sample
+*.env*
 !.env.sample
+!.env.*.sample
 *.pem
 *.key
 *.cert
 *.pfx
 *.token
 *.secret
+*.secrets
+*secret*.json
+*secret*.key
+*secret*.txt
+secrets/
+*credentials*.json
+*credentials*.key
+credentials/
 credentials.json
 auth.json
 hosts.yml
 id_rsa
 id_ed25519
+*.local
 
 # Agent, assistant & AI transcripts
 .gemini/
@@ -59,6 +72,7 @@ graphify-out/
 .graphify*
 
 # Local databases & persistent state
+roo_desktop_data/
 .roo-desktop-data/
 qdrant_storage/
 *.db
@@ -99,5 +113,12 @@ tmp/
 temp/
 *.tmp
 *.temp
+*.bak
+.cache/
+cache/
+*.cache
+session/
+.session/
+sessions/
 *.swp
 *~
