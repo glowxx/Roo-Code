@@ -1,155 +1,182 @@
-# Roo Code
+# Roo Code Desktop
 
 <p align="center">
-  <strong>Autonomous AI Developer Platform — Standalone Desktop GUI & Interactive CLI</strong>
+  <strong>Autonomous AI Developer Platform — Standalone Windows Desktop GUI & Interactive CLI</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/Platform-Windows%20|%20macOS%20|%20Linux-brightgreen.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Node.js-20+-68a063.svg" alt="Node.js">
-  <img src="https://img.shields.io/badge/AI_Models-xKiro%20|%20Claude%203.7%20|%20DeepSeek%20V3/R1%20|%20GPT--4o%20|%20Gemini%202.5-purple.svg" alt="AI Models">
+  <img src="https://img.shields.io/badge/Platform-Windows%20(Standalone)-0078D6.svg?logo=windows&logoColor=white" alt="Windows Standalone">
+  <img src="https://img.shields.io/badge/Node.js-20+-68a063.svg?logo=node.js&logoColor=white" alt="Node.js">
+  <img src="https://img.shields.io/badge/Architecture-Electron%20%2B%20VS%20Code%20Shim-61DAFB.svg" alt="Architecture">
+  <img src="https://img.shields.io/badge/AI_Models-xKiro%20|%20DeepSeek%20R1%2FV3%20|%20Claude%203.7%20|%20GPT--4o%20|%20Gemini%202.5-purple.svg" alt="AI Models">
 </p>
 
 ---
 
-**Roo Code** gives you an autonomous AI software engineer directly on your machine. Working directly with your local workspace, Roo Code reads file structures, executes complex coding tasks, runs terminal commands, inspects compiler and linter diagnostics, and iterates autonomously until tasks are complete.
+## 🌟 O projekcie / Overview
 
-Built as a high-performance standalone monorepo with both a native **Desktop GUI (Electron & Web)** and an interactive **Command-Line Interface (CLI)**.
+**Roo Code Desktop** to w pełni autonomiczna platforma inżynierii oprogramowania oparta na sztucznej inteligencji, działająca jako **samodzielna aplikacja dla systemu Windows**. Dzięki wykorzystaniu zaawansowanej warstwy emulacyjnej **VS Code Shim** oraz środowiska **Electron**, Roo Code Desktop nie wymaga zainstalowanego ani uruchomionego edytora Visual Studio Code.
 
----
+Aplikacja operuje bezpośrednio na Twoim lokalnym systemie plików: analizuje strukturę repozytorium, implementuje i modyfikuje kod, uruchamia komendy w dedykowanym terminalu, analizuje diagnostykę kompilatorów i linterów oraz iteracyjnie dąży do rozwiązania złożonych zadań programistycznych.
 
-## ⚡ Key Highlights & Features
-
-- 🤖 **Autonomous Coding Loop**: Reads and modifies files, executes terminal commands, inspects outputs and linter errors, and self-corrects autonomously.
-- ⚡ **1-Click AI Model Switcher**: Effortlessly switch models directly from the chat toolbar and top header:
-  - **xKiro API**: High-speed, affordable access to **DeepSeek V3**, **DeepSeek R1 (Thinking)**, **Claude 3.7 Sonnet**, **GPT-4o**, **Gemini 2.5 Pro**, and **Qwen 2.5 Coder**.
-  - **Direct Providers**: Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, AWS Bedrock, GCP Vertex AI.
-  - **Local Privacy**: Full support for local models via **Ollama** and **LM Studio**.
-- 🖥️ **Standalone Desktop GUI Application**:
-  - **Agent Chat**: Conversational coding workspace with real-time token streaming, image attachments, reasoning blocks, and task queueing.
-  - **1-Click Quick Launcher (`run.bat`)**: Instant Windows launcher menu for Native Desktop, Web Desktop, Development, and Installer builds.
-  - **Real-Time Diffs Inspector**: Line-by-line visual diffs showing exact additions and deletions before and during agent actions.
-  - **Terminal & Tool Logs**: Live output stream of all shell commands, MCP tool calls, and background processes executed by the agent.
-  - **Universal Files Explorer**: Full workspace navigation with debounced search and support for all extensions — including rich syntax highlighting and interactive previews for images (`PNG`, `JPEG`, `WEBP`, `SVG`, `GIF`, `ICO`).
-- 🎨 **Anti-Glare Theme Support**: Eye-friendly dark theme and soft anti-glare light theme (`#f1f3f6`), eliminating eye strain without harsh pure-white backgrounds.
-- 🧩 **Streamlined Modes & Custom Personas**: Clean default **"Główny"** mode with the ability to create customized agent personas featuring 40+ Lucide icons and tailored toolsets.
-- 🔌 **Model Context Protocol (MCP)**: Native integration with external MCP servers for database access, web browsing, and external developer tools.
-- 🛡️ **Local & Private**: Roo Code operates directly on your local machine. API requests are routed straight to your selected provider or local engine without telemetry or code logging.
+Dostępna w dwóch wariantach uruchomieniowych:
+- **Desktop GUI (Electron & Web)**: Bogaty graficzny interfejs użytkownika z podglądem różnic (diffs), eksploratorem plików, terminalem i inspektorem zadań.
+- **Interactive CLI**: Błyskawiczny agent konsolowy do pracy bezpośrednio w terminalu.
 
 ---
 
-## 🚀 Quick Start
+## ⚡ Kluczowe możliwości / Key Features
 
-### Prerequisites
+- 🤖 **Autonomiczna pętla wykonawcza (Agent Loop)**:
+  - Samodzielna inspekcja, edycja i tworzenie plików w projekcie.
+  - Wykonywanie poleceń powłoki w dedykowanym terminalu z natywnym streamingiem wyjścia.
+  - Automatyczna analiza błędów lintera/kompilatora i samonaprawa kodu.
 
-- **Node.js**: `v20.0.0` or newer
-- **pnpm**: `v10.0.0` or newer
+- 🚀 **Natywny provider xKiro z dynamicznym pobieraniem modeli**:
+  - Wbudowany szybki i ekonomiczny gateway do najpotężniejszych modeli AI: **DeepSeek V3**, **DeepSeek R1 (Thinking)**, **Claude 3.7 Sonnet**, **GPT-4o**, **Gemini 2.5 Pro** oraz **Qwen 2.5 Coder**.
+  - Dynamiczne pobieranie aktualnej listy dostępnych modeli z endpointu `/models`.
+  - Inteligentny algorytm ekstrakcji wersji oraz automatycznego rankingu tierów modeli.
 
-### Installation
+- 🗜️ **Komenda kondensacji kontekstu `/compact`**:
+  - Dedykowana komenda slash umożliwiająca inteligentną kompresję historii konwersacji w aktywnym zadaniu.
+  - Drastyczna redukcja zużycia tokenów przy pełnym zachowaniu kluczowych decyzji architektonicznych, zmienionych plików oraz stanu wykonanych narzędzi.
 
-```bash
-# Clone the repository
+- 🛡️ **Pełna izolacja przestrzeni roboczych (Workspace Isolation)**:
+  - Niezależny kontekst dla każdego otwartego projektu.
+  - Izolowane magazyny stanu, bazy wektorowe (Qdrant/SQLite) oraz odrębne sesje terminala.
+  - Bezpieczne przechowywanie kluczy API i poświadczeń w dedykowanym `SecretStorage`.
+
+- 📁 **Dedykowany Eksplorator Plików i Terminal**:
+  - Wbudowane drzewo plików z debounced search i natychmiastowym filtrowaniem.
+  - Zintegrowane podglądy kodu ze składnią oraz interaktywny podgląd obrazów (`PNG`, `JPEG`, `WEBP`, `SVG`, `GIF`, `ICO`).
+  - Terminal z obsługą wieloprocesowości i izolacją środowiska wykonawczego.
+
+- 🎨 **Nowoczesny interfejs z efektem Frosted Glass**:
+  - Półprzezroczyste, rozmyte nagłówki i paski narzędziowe (`backdrop-filter: blur(12px)`).
+  - Wbudowany motyw ciemny oraz chroniący wzrok motyw jasny anti-glare (`#f1f3f6`).
+  - Pełne wsparcie dla lokalizacji wielojęzycznej (Polski / Angielski).
+
+---
+
+## 📋 Wymagania systemowe / Prerequisites
+
+- **System operacyjny**: Windows 10 / Windows 11 (64-bit)
+- **Node.js**: `v20.0.0` lub nowszy
+- **pnpm**: `v10.0.0` lub nowszy
+
+---
+
+## 🛠️ Instalacja i konfiguracja środowiska
+
+```powershell
+# 1. Sklonuj repozytorium
 git clone https://github.com/RooCodeInc/Roo-Code.git
 cd Roo-Code
 
-# Install dependencies across all monorepo packages
+# 2. Zainstaluj zależności we wszystkich pakietach monorepo
 pnpm install
 
-# Build all packages (types, core, desktop, webview, and CLI)
+# 3. Zbuduj pakiety bazowe (types, core, vscode-shim, webview)
 pnpm build
 ```
 
 ---
 
-## 💻 Running the Application
+## 🚀 Uruchamianie aplikacji / Running the App
 
-### Option A: Windows 1-Click Launcher (Recommended for Windows)
+### Opcja 1: Windows 1-Click Launcher (Zalecane)
 
-Simply double-click `run.bat` or run:
+Uruchom interaktywne menu startowe za pomocą pliku wsadowego:
 
 ```cmd
 run.bat
 ```
 
-The interactive launcher provides 5 convenient options:
-1. **[1] Native Electron Desktop Application** *(Recommended)*
-2. **[2] Web Desktop** *(Runs local server on port 4500 and opens in your browser)*
-3. **[3] Development Mode** *(Live reloads, hot module replacement, and verbose logging)*
-4. **[4] Build Windows Installer (`.exe`)**
+Menu launchera udostępnia następujące opcje:
+1. **[1] Native Electron Desktop Application** *(Natywne okno aplikacji desktopowej)*
+2. **[2] Web Desktop** *(Uruchamia lokalny serwer na porcie `http://localhost:4500` i otwiera przeglądarkę)*
+3. **[3] Development Mode** *(Tryb deweloperski z Hot Module Replacement i pełnymi logami)*
+4. **[4] Build Windows Installer (`.exe`)** *(Kompilacja instalatora NSIS)*
 5. **[5] Exit**
 
 ---
 
-### Option B: Cross-Platform NPM Commands
+### Opcja 2: Polecenia deweloperskie (NPM / PNPM)
 
-#### 1. Native Desktop GUI (Electron)
 ```bash
+# Uruchomienie natywnej aplikacji Electron Desktop
 pnpm desktop
-```
 
-#### 2. Web Desktop GUI (Browser-accessible)
-```bash
+# Uruchomienie wersji Web Desktop (dostępnej przez przeglądarkę)
 pnpm desktop:web
-```
 
-#### 3. Command-Line Interface (CLI)
-```bash
-# Interactive terminal session
+# Uruchomienie trybu deweloperskiego z live reloadem
+pnpm run dev
+
+# Interaktywny agent CLI w konsoli
 pnpm cli
-
-# Or run non-interactive prompt directly
-roo "Refactor API routes to handle errors gracefully"
-
-# Stream output only
-roo --print "Audit package.json dependencies"
 ```
 
 ---
 
-## 🤖 Supported AI Providers & Models
+## 📦 Budowanie instalatora Windows (NSIS Installer)
 
-| Provider | Recommended Models | Description |
-| :--- | :--- | :--- |
-| **xKiro** | `DeepSeek V3`, `DeepSeek R1`, `Claude 3.7 Sonnet`, `GPT-4o`, `Gemini 2.5 Pro` | Cost-effective, high-throughput gateway with free starter token bonus. |
-| **Anthropic** | `Claude 3.7 Sonnet`, `Claude 3.5 Sonnet`, `Claude 3.5 Haiku` | Industry-leading coding and reasoning models. |
-| **OpenAI** | `GPT-4o`, `GPT-4o Mini`, `o3-mini` | Flagship OpenAI reasoning and coding architectures. |
-| **Google Gemini**| `Gemini 2.5 Pro`, `Gemini 2.5 Flash`, `Gemini 2.0 Flash` | High-speed, large context window (1M+ tokens). |
-| **DeepSeek** | `DeepSeek-V3`, `DeepSeek-R1` | State-of-the-art open weights coding and reasoning. |
-| **OpenRouter** | 200+ models from multiple providers | Unified multi-provider aggregation layer. |
-| **Ollama / LM Studio** | `Llama 3.1`, `Qwen 2.5 Coder`, `DeepSeek R1 8B` | 100% offline, local machine inference. |
+Roo Code Desktop posiada dedykowany skrypt automatyzujący tworzenie instalatora `.exe` w formacie NSIS:
+
+```cmd
+build_win_installer.bat
+```
+
+Skrypt przeprowadza pełną weryfikację środowiska, buduje wszystkie pakiety składowe (`packages/types`, `packages/vscode-shim`, `src`, `webview-ui`), a następnie wywołuje `electron-builder`.
+
+Gotowy plik instalatora zostanie wygenerowany w katalogu:
+```
+apps/desktop/release/Roo-Code-Setup-*.exe
+```
 
 ---
 
-## 🏗️ Monorepo Structure
+## 🏗️ Architektura Monorepo
+
+Struktura projektu została zaprojektowana w sposób modułowy, umożliwiając całkowite uniezależnienie silnika agenta od VS Code:
 
 ```
 Roo-Code/
 ├── apps/
-│   ├── desktop/         # Standalone Desktop Application (Electron & Web server)
-│   ├── cli/             # Interactive & Non-interactive Terminal Agent
-│   └── docs/            # Documentation portal
+│   ├── desktop/             # Samodzielna aplikacja Electron & serwer Web (Agent Host, Preload, Renderer)
+│   ├── cli/                 # Interaktywny i skryptowy agent konsolowy CLI
+│   └── docs/                # Dokumentacja projektu
 ├── packages/
-│   ├── core/            # Autonomous agent engine, tools, prompts & tasks
-│   ├── vscode-shim/     # Standalone runtime layer decoupling from VS Code
-│   ├── types/           # Shared TypeScript contracts & provider definitions
-│   ├── ipc/             # Inter-process communication bridge
-│   ├── build/           # Shared build scripts & bundling utilities
-│   ├── config-eslint/   # Shared ESLint configuration
-│   └── config-typescript/# Shared TypeScript configuration
-├── src/                 # Roo Code autonomous engine & provider implementations
-├── webview-ui/          # Modern React 18 + Vite + Tailwind CSS interface
-└── run.bat              # Windows 1-click launcher
+│   ├── vscode-shim/         # Warstwa emulacji VS Code API (Workspace, SecretStorage, Window, Terminal)
+│   ├── types/               # Współdzielone kontrakty TypeScript, schematy modeli i ustawień (xKiro, OpenAI itp.)
+│   ├── core/                # Autonomiczny silnik agenta, narzędzia, prompty i zarządzanie zadaniami
+│   ├── ipc/                 # Kanały komunikacji międzyprocesowej
+│   ├── build/               # Współdzielone konfiguracje i skrypty budowania
+│   ├── config-eslint/       # Wspólne reguły lintera ESLint
+│   └── config-typescript/   # Wspólne konfiguracje TypeScript
+├── src/                     # Główna logika Roo Code (Task execution, ContextCompactor, .rooignore, providers)
+├── webview-ui/              # Nowoczesny interfejs użytkownika w React 18 + Vite + Tailwind CSS
+├── run.bat                  # Interaktywny 1-Click launcher dla Windows
+└── build_win_installer.bat  # Zautomatyzowany skrypt budowania instalatora NSIS
 ```
 
+### Kluczowe komponenty architektoniczne:
+- **`packages/vscode-shim`**: Zastępuje natywne środowisko VS Code, udostępniając implementacje interfejsów `vscode.workspace`, `vscode.window`, `SecretStorage` i `Terminal`. Dzięki temu rdzeń agenta działa w 100% bez instalacji VS Code.
+- **`apps/desktop`**: Odpowiada za cykl życia okna aplikacji, lokalny serwer HTTP/WebSocket dla warstwy webview oraz izolację procesów agenta.
+- **`src/core/context`**: Odpowiada za mechanizm kompresji i kondensacji kontekstu (`/compact`).
+- **`src/core/ignore`**: Wieloplatformowy kontroler reguł ignorowania (`.rooignore`) zoptymalizowany pod specyfikę ścieżek Windows.
+
 ---
 
-## 🛡️ Security & Privacy
+## 🛡️ Bezpieczeństwo i Prywatność / Security & Privacy
 
-Roo Code executes locally on your hardware. Your API keys are stored securely on your machine, and communications occur strictly between your computer and your configured model provider endpoints. No intermediate servers track, store, or intercept your workspace code.
+- **Lokalne wykonywanie**: Wszystkie operacje na plikach oraz wywołania narzędzi odbywają się w 100% lokalnie na Twojej maszynie.
+- **Bezpieczny SecretStorage**: Klucze API i wrażliwe poświadczenia są zabezpieczone w lokalnym magazynie i nie trafiają do logów diagnostycznych.
+- **Brak telemetrii kodu**: Twój kod źródłowy jest przesyłany wyłącznie do bezpośrednio wybranego dostawcy modeli AI (np. xKiro, Anthropic, OpenAI) lub przetwarzany lokalnie (Ollama / LM Studio).
 
 ---
 
-## 📜 License
+## 📜 Licencja / License
 
-[Apache 2.0](LICENSE) © Roo Code Contributors
+Projekt dystrybuowany na licencji [Apache 2.0](LICENSE) © Roo Code Contributors.
