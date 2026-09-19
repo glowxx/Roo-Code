@@ -3,7 +3,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
-import { execSync, exec } from "child_process"
+import { execSync, spawn } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
 import type { DesktopClientMessage, DesktopServerMessage, WorkspaceInfo } from "../shared/types.js"
 
@@ -75,7 +75,7 @@ export function validatePathWithinRoot(
 
 		const absoluteTarget = path.isAbsolute(cleanTarget)
 			? normalizeFsPath(cleanTarget)
-			: normalizeFsPath(path.resolve(realRoot, cleanTarget))
+			: normalizeFsPath(path.resolve(resolvedRoot, cleanTarget))
 
 		let realTarget = absoluteTarget
 		if (fs.existsSync(absoluteTarget)) {
@@ -92,24 +92,44 @@ export function validatePathWithinRoot(
 			}
 			if (fs.existsSync(checkDir)) {
 				const realAncestor = normalizeFsPath(fs.realpathSync(checkDir))
-				const normRoot = process.platform === "win32" ? realRoot.toLowerCase() : realRoot
-				const normAncestor = process.platform === "win32" ? realAncestor.toLowerCase() : realAncestor
-				const relToRoot = path.relative(normRoot, normAncestor)
-				if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+				// Reconstruct target path using realAncestor and path.relative
+				const relFromAncestor = path.relative(checkDir, absoluteTarget)
+				realTarget = normalizeFsPath(path.resolve(realAncestor, relFromAncestor))
+
+				// Check that ancestor doesn't escape allowed root via symlink
+				const checkAncestorInside = (root: string) => {
+					const normRoot = process.platform === "win32" ? root.toLowerCase() : root
+					const normAncestor = process.platform === "win32" ? realAncestor.toLowerCase() : realAncestor
+					if (normAncestor === normRoot) return true
+					const rel = path.relative(normRoot, normAncestor)
+					return !rel.startsWith("..") && !path.isAbsolute(rel)
+				}
+
+				if (!checkAncestorInside(realRoot) && !checkAncestorInside(resolvedRoot)) {
 					return { safe: false, error: "Path resolves outside allowed directory via symlink ancestor" }
 				}
 			}
 		}
 
-		const normalizedRoot = process.platform === "win32" ? realRoot.toLowerCase() : realRoot
-		const normalizedTarget = process.platform === "win32" ? realTarget.toLowerCase() : realTarget
+		const checkInside = (root: string, target: string) => {
+			const normRoot = process.platform === "win32" ? root.toLowerCase() : root
+			const normTarget = process.platform === "win32" ? target.toLowerCase() : target
 
-		if (options.allowExactRoot && normalizedTarget === normalizedRoot) {
-			return { safe: true, resolvedPath: realTarget }
+			if (options.allowExactRoot && normTarget === normRoot) {
+				return true
+			}
+
+			const relative = path.relative(normRoot, normTarget)
+			return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative)
 		}
 
-		const relative = path.relative(normalizedRoot, normalizedTarget)
-		const isInside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative)
+		// Verify containment against both realRoot and resolvedRoot
+		// to properly support subst virtual drives and physical drive mappings
+		const isInside =
+			checkInside(realRoot, realTarget) ||
+			checkInside(resolvedRoot, realTarget) ||
+			checkInside(realRoot, absoluteTarget) ||
+			checkInside(resolvedRoot, absoluteTarget)
 
 		if (!isInside) {
 			return { safe: false, error: "Access outside allowed directory forbidden" }
@@ -1031,7 +1051,7 @@ window.addEventListener("message", function(e) {
 		ws.send(JSON.stringify({ type: "agentStatus", status: agentHost.getStatus() }))
 		ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
 
-		ws.on("message", (raw) => {
+		ws.on("message", async (raw) => {
 			try {
 				const clientMsg = JSON.parse(raw.toString()) as DesktopClientMessage
 				if (clientMsg.type === "webviewMessage") {
@@ -1062,7 +1082,7 @@ window.addEventListener("message", function(e) {
 					if (clientMsg.path && fs.existsSync(clientMsg.path)) {
 						try {
 							const normalized = path.normalize(path.resolve(clientMsg.path))
-							agentHost.setWorkspace(normalized)
+							await agentHost.setWorkspace(normalized)
 							const curPath = path.normalize(path.resolve(agentHost.getWorkspace()))
 							const newWs: WorkspaceInfo = {
 								path: curPath,
@@ -1206,11 +1226,31 @@ window.addEventListener("message", function(e) {
 					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
 						const abs = validation.resolvedPath
 						try {
-							if (process.platform === "win32") {
+							if (process.versions?.electron) {
+								try {
+									const electron = await import("electron")
+									const shell = electron.shell || (electron as any).default?.shell
+									if (shell) {
+										if (clientMsg.type === "showItem") {
+											shell.showItemInFolder(abs)
+										} else {
+											await shell.openPath(abs)
+										}
+									}
+								} catch {
+									if (process.platform === "win32") {
+										if (clientMsg.type === "showItem") {
+											spawn("explorer.exe", ["/select,", abs], { shell: false })
+										} else {
+											spawn("explorer.exe", [abs], { shell: false })
+										}
+									}
+								}
+							} else if (process.platform === "win32") {
 								if (clientMsg.type === "showItem") {
-									exec(`explorer.exe /select,"${abs}"`, () => {})
+									spawn("explorer.exe", ["/select,", abs], { shell: false })
 								} else {
-									exec(`start "" "${abs}"`, () => {})
+									spawn("explorer.exe", [abs], { shell: false })
 								}
 							}
 						} catch {}

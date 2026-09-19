@@ -32,6 +32,8 @@ export class DesktopAgentHost extends EventEmitter {
 	private terminalLogs: TerminalLogEntry[] = []
 	private diffFiles: Map<string, DiffFileEntry> = new Map()
 	private provider: any = null
+	private currentWorkspaceEpoch = 0
+	private pendingWorkspaceChangeAbortController: AbortController | null = null
 
 	constructor(options: AgentHostOptions) {
 		super()
@@ -44,11 +46,20 @@ export class DesktopAgentHost extends EventEmitter {
 		return this.currentWorkspace
 	}
 
-	public setWorkspace(newWorkspace: string): void {
+	public async setWorkspace(newWorkspace: string): Promise<void> {
 		const normalized = path.normalize(path.resolve(newWorkspace))
 		if (!fs.existsSync(normalized)) {
 			throw new Error(`Directory does not exist: ${normalized}`)
 		}
+
+		this.currentWorkspaceEpoch++
+		const epoch = this.currentWorkspaceEpoch
+
+		if (this.pendingWorkspaceChangeAbortController) {
+			this.pendingWorkspaceChangeAbortController.abort()
+		}
+		this.pendingWorkspaceChangeAbortController = new AbortController()
+
 		this.currentWorkspace = normalized
 		this.diffFiles.clear()
 		this.terminalLogs = []
@@ -66,12 +77,12 @@ export class DesktopAgentHost extends EventEmitter {
 					},
 				]
 				ws.name = path.basename(this.currentWorkspace)
-				this.provider?.handleWorkspaceChanged?.(this.currentWorkspace)
 			}
-		} else {
-			this.provider?.handleWorkspaceChanged?.(this.currentWorkspace)
 		}
-		this.emit("workspaceChanged", this.currentWorkspace)
+		await this.provider?.handleWorkspaceChanged?.(this.currentWorkspace, this.currentWorkspaceEpoch)
+		if (this.currentWorkspaceEpoch === epoch) {
+			this.emit("workspaceChanged", this.currentWorkspace)
+		}
 	}
 
 	public getStatus(): AgentStatusType {

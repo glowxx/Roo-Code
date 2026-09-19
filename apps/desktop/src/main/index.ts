@@ -143,7 +143,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 					if (selectedPath) {
 						console.log(`Switching workspace to: ${selectedPath}`)
 						const normalized = path.normalize(path.resolve(selectedPath))
-						agentHost.setWorkspace(normalized)
+						await agentHost.setWorkspace(normalized)
 						const newWs: WorkspaceInfo = {
 							path: normalized,
 							name: path.basename(normalized),
@@ -202,7 +202,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 									if (selectedPath) {
 										console.log(`Switching workspace to: ${selectedPath}`)
 										const normalized = path.normalize(path.resolve(selectedPath))
-										agentHost.setWorkspace(normalized)
+										await agentHost.setWorkspace(normalized)
 										const newWs: WorkspaceInfo = {
 											path: normalized,
 											name: path.basename(normalized),

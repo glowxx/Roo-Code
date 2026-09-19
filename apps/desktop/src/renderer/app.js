@@ -731,11 +731,20 @@
 		}
 	}
 
+	let loadFilesAbortController = null
+
 	async function loadWorkspaceFiles() {
+		if (loadFilesAbortController) {
+			loadFilesAbortController.abort()
+		}
+		loadFilesAbortController = new AbortController()
+		const signal = loadFilesAbortController.signal
+
 		try {
-			const res = await fetch("/api/files")
+			const res = await fetch("/api/files", { signal })
 			if (res.ok) {
 				const data = await res.json()
+				if (signal.aborted) return
 				if (data && Array.isArray(data.files)) {
 					if (!currentWorkspace) {
 						currentWorkspace = { files: [] }
@@ -748,13 +757,18 @@
 				}
 			}
 		} catch (err) {
+			if (err.name === "AbortError" || signal.aborted) {
+				return
+			}
 			console.warn("Failed to load files from /api/files:", err)
 		}
 
 		try {
-			const wsRes = await fetch("/api/workspace")
+			if (signal.aborted) return
+			const wsRes = await fetch("/api/workspace", { signal })
 			if (wsRes.ok) {
 				const wsData = await wsRes.json()
+				if (signal.aborted) return
 				if (wsData) {
 					currentWorkspace = wsData
 					renderWorkspaceInfo(wsData)
@@ -762,6 +776,9 @@
 				}
 			}
 		} catch (e) {
+			if (e.name === "AbortError" || signal.aborted) {
+				return
+			}
 			console.error("Failed to load workspace from /api/workspace:", e)
 		}
 	}

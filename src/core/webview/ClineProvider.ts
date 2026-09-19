@@ -132,6 +132,7 @@ export class ClineProvider
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: Map<Task, Array<() => void>> = new Map()
 	private currentWorkspacePath: string | undefined
+	private currentWorkspaceEpoch = 0
 	private _disposed = false
 
 	private recentTasksCache?: string[]
@@ -1827,7 +1828,14 @@ export class ClineProvider
 		await this.postStateToWebview()
 	}
 
-	public async handleWorkspaceChanged(newPath?: string): Promise<void> {
+	public async handleWorkspaceChanged(newPath?: string, epoch?: number): Promise<void> {
+		if (epoch !== undefined) {
+			this.currentWorkspaceEpoch = epoch
+		} else {
+			this.currentWorkspaceEpoch++
+		}
+		const capturedEpoch = this.currentWorkspaceEpoch
+
 		this.currentWorkspacePath = newPath || getWorkspacePath()
 		// 1. Anuluj i wyczyść aktywne zadania
 		while (this.clineStack.length > 0) {
@@ -1838,8 +1846,16 @@ export class ClineProvider
 				} catch (e) {
 					this.log(`Error aborting task on workspace change: ${e}`)
 				}
+				if (this.currentWorkspaceEpoch !== capturedEpoch) {
+					return
+				}
 			}
 		}
+
+		if (this.currentWorkspaceEpoch !== capturedEpoch) {
+			return
+		}
+
 		// 2. Wyczyść listenery zadań
 		this.taskEventListeners.clear()
 		// 3. Wyślij komunikat do Webview o resecie czatu
@@ -2732,6 +2748,7 @@ export class ClineProvider
 		// Immediately cancel the underlying HTTP request if one is in progress
 		// This ensures the stream fails quickly rather than waiting for network timeout
 		task.cancelCurrentRequest()
+		task.abortCompaction()
 
 		// Begin abort (non-blocking)
 		task.abortTask()
