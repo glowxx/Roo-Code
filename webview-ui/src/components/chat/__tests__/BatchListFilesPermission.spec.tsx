@@ -76,7 +76,7 @@ describe("BatchListFilesPermission", () => {
 		expect(container).toBeInTheDocument()
 
 		// All 3 dirs should be inside this container
-		expect(container?.querySelectorAll(".flex.items-center.gap-2")).toHaveLength(mockDirs.length)
+		expect(container?.querySelectorAll(":scope > .flex.items-center.gap-2")).toHaveLength(mockDirs.length)
 	})
 
 	it("renders a single directory", () => {
@@ -98,6 +98,6 @@ describe("BatchListFilesPermission", () => {
 		// Single directory should still be rendered inside the container
 		const bordered = screen.getByText("apps/cli").closest(".border.border-border.rounded-md")
 		expect(bordered).toBeInTheDocument()
-		expect(bordered?.querySelectorAll(".flex.items-center.gap-2")).toHaveLength(1)
+		expect(bordered?.querySelectorAll(":scope > .flex.items-center.gap-2")).toHaveLength(1)
 	})
 })

@@ -152,30 +152,30 @@
 
 @layer base {
 	:root {
-		--background: var(--vscode-editor-background);
-		--foreground: var(--vscode-editor-foreground);
-		--card: var(--vscode-editor-background);
-		--card-foreground: var(--vscode-editor-foreground);
-		--popover: var(--vscode-menu-background, var(--vscode-editor-background));
-		--popover-foreground: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
-		--primary: var(--vscode-button-background);
-		--primary-foreground: var(--vscode-button-foreground);
-		--secondary: var(--vscode-button-secondaryBackground);
-		--secondary-foreground: var(--vscode-button-secondaryForeground);
-		--muted: var(--vscode-disabledForeground);
-		--muted-foreground: var(--vscode-descriptionForeground);
-		--accent: var(--vscode-list-hoverBackground);
-		--accent-foreground: var(--vscode-list-hoverForeground);
-		--destructive: var(--vscode-errorForeground);
-		--destructive-foreground: var(--vscode-editor-background);
-		--border: var(--vscode-input-border, transparent); /* --border gets theme value or transparent fallback */
-		--input: var(--vscode-input-background);
-		--ring: var(--vscode-input-border);
-		--chart-1: var(--vscode-charts-red);
-		--chart-2: var(--vscode-charts-blue);
-		--chart-3: var(--vscode-charts-yellow);
-		--chart-4: var(--vscode-charts-orange);
-		--chart-5: var(--vscode-charts-green);
+		--background: var(--vscode-editor-background, #090a0f);
+		--foreground: var(--vscode-editor-foreground, #f2f4f7);
+		--card: var(--vscode-sideBarSectionHeader-background, #12141c);
+		--card-foreground: var(--vscode-editor-foreground, #f2f4f7);
+		--popover: var(--vscode-menu-background, #12141c);
+		--popover-foreground: var(--vscode-menu-foreground, #f2f4f7);
+		--primary: var(--vscode-button-background, #2563eb);
+		--primary-foreground: var(--vscode-button-foreground, #ffffff);
+		--secondary: var(--vscode-button-secondaryBackground, #181b26);
+		--secondary-foreground: var(--vscode-button-secondaryForeground, #f2f4f7);
+		--muted: var(--vscode-disabledForeground, rgba(255, 255, 255, 0.4));
+		--muted-foreground: var(--vscode-descriptionForeground, #98a2b3);
+		--accent: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+		--accent-foreground: var(--vscode-list-hoverForeground, #ffffff);
+		--destructive: var(--vscode-errorForeground, #f04438);
+		--destructive-foreground: var(--vscode-editor-background, #090a0f);
+		--border: var(--vscode-input-border, rgba(255, 255, 255, 0.06)); /* --border gets theme value or subtle border fallback */
+		--input: var(--vscode-input-background, #12141c);
+		--ring: var(--vscode-focusBorder, #3b82f6);
+		--chart-1: var(--vscode-charts-red, #f04438);
+		--chart-2: var(--vscode-charts-blue, #3b82f6);
+		--chart-3: var(--vscode-charts-yellow, #f79009);
+		--chart-4: var(--vscode-charts-orange, #fb6514);
+		--chart-5: var(--vscode-charts-green, #12b76a);
 		--radius: 0.5rem;
 	}
 
@@ -260,81 +260,71 @@ body {
 	line-height: 1.25;
 }
 
-body.scrollable,
-.scrollable,
-body.code-block-scrollable,
-.code-block-scrollable {
-	border-color: transparent;
-	transition: border-color 0.7s linear;
-}
-
-body:hover.scrollable,
-body:hover .scrollable,
-body:focus-within.scrollable,
-body:focus-within .scrollable,
-body:hover.code-block-scrollable,
-body:hover .code-block-scrollable,
-body:focus-within.code-block-scrollable,
-body:focus-within .code-block-scrollable {
-	border-color: var(--vscode-scrollbarSlider-background);
-	transition: none;
-}
-
-.scrollable::-webkit-scrollbar-corner {
-	background-color: transparent !important;
-}
-
-.scrollable::-webkit-scrollbar-thumb {
-	background-color: transparent;
-	border-color: inherit;
-	border-right-style: inset;
-	border-right-width: calc(100vw + 100vh);
-	border-radius: unset !important;
-}
-
-.scrollable::-webkit-scrollbar-thumb:hover {
-	border-color: var(--vscode-scrollbarSlider-hoverBackground);
-}
-
-.scrollable::-webkit-scrollbar-thumb:active {
-	border-color: var(--vscode-scrollbarSlider-activeBackground);
-}
-
 /**
- * Fix VSCode ignoring webkit scrollbar modifiers
- * https://github.com/microsoft/vscode/issues/213045
+ * Modern Custom Scrollbars (4-6px Linear/Raycast tier)
  */
-@supports selector(::-webkit-scrollbar) {
-	html {
-		scrollbar-color: unset;
-	}
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.12)) transparent;
 }
 
-/**
- * The above scrollbar styling uses some transparent background color magic to accomplish its animation. However this doesn't play nicely with SyntaxHighlighter, so we need to set a background color for the code blocks' horizontal scrollbar. This actually has the unintended consequence of always showing the scrollbar which I prefer since it makes it more obvious that there is more content to scroll to.
- */
+::-webkit-scrollbar {
+	width: 5px;
+	height: 5px;
+}
 
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.12));
+	border-radius: 9999px;
+	transition: background-color 0.15s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.25));
+}
+
+::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(255, 255, 255, 0.35));
+}
+
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+
+.scrollable::-webkit-scrollbar,
+.code-block-scrollable::-webkit-scrollbar {
+	width: 5px;
+	height: 5px;
+}
+
+.scrollable::-webkit-scrollbar-track,
 .code-block-scrollable::-webkit-scrollbar-track {
 	background: transparent;
 }
 
+.scrollable::-webkit-scrollbar-thumb,
 .code-block-scrollable::-webkit-scrollbar-thumb {
-	background-color: var(--vscode-scrollbarSlider-background);
-	border-radius: 5px;
-	border: 2px solid transparent;
-	background-clip: content-box;
+	background-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.12));
+	border-radius: 9999px;
 }
 
+.scrollable::-webkit-scrollbar-thumb:hover,
 .code-block-scrollable::-webkit-scrollbar-thumb:hover {
-	background-color: var(--vscode-scrollbarSlider-hoverBackground);
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.25));
 }
 
+.scrollable::-webkit-scrollbar-thumb:active,
 .code-block-scrollable::-webkit-scrollbar-thumb:active {
-	background-color: var(--vscode-scrollbarSlider-activeBackground);
+	background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(255, 255, 255, 0.35));
 }
 
+.scrollable::-webkit-scrollbar-corner,
 .code-block-scrollable::-webkit-scrollbar-corner {
-	background-color: transparent;
+	background-color: transparent !important;
 }
 
 /**
@@ -590,3 +580,149 @@ input[cmdk-input]:focus {
 	padding: 8px;
 	margin: -8px;
 }
+
+/* ==========================================================================
+   Rich Theme System (5 Distinct Themes)
+   ========================================================================== */
+
+/* 1. Linear Dark (Default Graphite) */
+[data-theme="linear-dark"] {
+	--vscode-editor-background: #090a0f;
+	--vscode-editor-foreground: #e4e7ec;
+	--vscode-foreground: #f2f4f7;
+	--vscode-descriptionForeground: #98a2b3;
+	--vscode-disabledForeground: #667085;
+	--vscode-input-background: #12141c;
+	--vscode-input-foreground: #f8fafc;
+	--vscode-input-border: rgba(255, 255, 255, 0.08);
+	--vscode-focusBorder: #3b82f6;
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #181b26;
+	--vscode-button-secondaryForeground: #f2f4f7;
+	--vscode-dropdown-background: #12141c;
+	--vscode-dropdown-foreground: #f8fafc;
+	--vscode-dropdown-border: rgba(255, 255, 255, 0.08);
+	--vscode-sideBar-background: #090a0f;
+	--vscode-sideBar-foreground: #e4e7ec;
+	--vscode-panel-border: rgba(255, 255, 255, 0.06);
+	--vscode-editorGroup-border: rgba(255, 255, 255, 0.06);
+	--vscode-badge-background: #2563eb;
+	--vscode-textLink-foreground: #60a5fa;
+	--vscode-textCodeBlock-background: #06070a;
+}
+
+/* 2. OLED Black (Pure Black, Maximum Contrast) */
+[data-theme="oled-black"] {
+	--vscode-editor-background: #000000;
+	--vscode-editor-foreground: #ffffff;
+	--vscode-foreground: #ffffff;
+	--vscode-descriptionForeground: #a1a1aa;
+	--vscode-disabledForeground: #71717a;
+	--vscode-input-background: #0a0a0a;
+	--vscode-input-foreground: #ffffff;
+	--vscode-input-border: rgba(255, 255, 255, 0.14);
+	--vscode-focusBorder: #3b82f6;
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #121212;
+	--vscode-button-secondaryForeground: #ffffff;
+	--vscode-dropdown-background: #0a0a0a;
+	--vscode-dropdown-foreground: #ffffff;
+	--vscode-dropdown-border: rgba(255, 255, 255, 0.14);
+	--vscode-sideBar-background: #000000;
+	--vscode-sideBar-foreground: #ffffff;
+	--vscode-panel-border: rgba(255, 255, 255, 0.12);
+	--vscode-editorGroup-border: rgba(255, 255, 255, 0.12);
+	--vscode-badge-background: #2563eb;
+	--vscode-textLink-foreground: #60a5fa;
+	--vscode-textCodeBlock-background: #050505;
+}
+
+/* 3. Midnight Navy (GitHub Dark Dimmed Tone) */
+[data-theme="midnight-navy"] {
+	--vscode-editor-background: #0d1117;
+	--vscode-editor-foreground: #e6edf3;
+	--vscode-foreground: #e6edf3;
+	--vscode-descriptionForeground: #8b949e;
+	--vscode-disabledForeground: #6e7681;
+	--vscode-input-background: #161b22;
+	--vscode-input-foreground: #e6edf3;
+	--vscode-input-border: rgba(240, 246, 252, 0.12);
+	--vscode-focusBorder: #58a6ff;
+	--vscode-button-background: #1f6feb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #388bfd;
+	--vscode-button-secondaryBackground: #21262d;
+	--vscode-button-secondaryForeground: #e6edf3;
+	--vscode-dropdown-background: #161b22;
+	--vscode-dropdown-foreground: #e6edf3;
+	--vscode-dropdown-border: rgba(240, 246, 252, 0.12);
+	--vscode-sideBar-background: #0d1117;
+	--vscode-sideBar-foreground: #e6edf3;
+	--vscode-panel-border: rgba(240, 246, 252, 0.1);
+	--vscode-editorGroup-border: rgba(240, 246, 252, 0.1);
+	--vscode-badge-background: #1f6feb;
+	--vscode-textLink-foreground: #58a6ff;
+	--vscode-textCodeBlock-background: #090d12;
+}
+
+/* 4. Cyberpunk (Cool Graphite with Neon Cyan) */
+[data-theme="cyberpunk"] {
+	--vscode-editor-background: #090d16;
+	--vscode-editor-foreground: #f1f5f9;
+	--vscode-foreground: #f1f5f9;
+	--vscode-descriptionForeground: #94a3b8;
+	--vscode-disabledForeground: #64748b;
+	--vscode-input-background: #0f172a;
+	--vscode-input-foreground: #f1f5f9;
+	--vscode-input-border: rgba(0, 240, 255, 0.2);
+	--vscode-focusBorder: #00f0ff;
+	--vscode-button-background: #00b4d8;
+	--vscode-button-foreground: #090d16;
+	--vscode-button-hoverBackground: #00f0ff;
+	--vscode-button-secondaryBackground: #1e293b;
+	--vscode-button-secondaryForeground: #00f0ff;
+	--vscode-dropdown-background: #0f172a;
+	--vscode-dropdown-foreground: #f1f5f9;
+	--vscode-dropdown-border: rgba(0, 240, 255, 0.2);
+	--vscode-sideBar-background: #090d16;
+	--vscode-sideBar-foreground: #f1f5f9;
+	--vscode-panel-border: rgba(0, 240, 255, 0.15);
+	--vscode-editorGroup-border: rgba(0, 240, 255, 0.15);
+	--vscode-badge-background: #00f0ff;
+	--vscode-badge-foreground: #090d16;
+	--vscode-textLink-foreground: #00f0ff;
+	--vscode-textCodeBlock-background: #06090e;
+}
+
+/* 5. Clean Light (Warm Paper Slate) */
+[data-theme="clean-light"] {
+	--vscode-editor-background: #f8fafc;
+	--vscode-editor-foreground: #0f172a;
+	--vscode-foreground: #0f172a;
+	--vscode-descriptionForeground: #475569;
+	--vscode-disabledForeground: #94a3b8;
+	--vscode-input-background: #ffffff;
+	--vscode-input-foreground: #0f172a;
+	--vscode-input-border: rgba(0, 0, 0, 0.12);
+	--vscode-focusBorder: #2563eb;
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #e2e8f0;
+	--vscode-button-secondaryForeground: #1e293b;
+	--vscode-dropdown-background: #ffffff;
+	--vscode-dropdown-foreground: #0f172a;
+	--vscode-dropdown-border: rgba(0, 0, 0, 0.12);
+	--vscode-sideBar-background: #f8fafc;
+	--vscode-sideBar-foreground: #0f172a;
+	--vscode-panel-border: rgba(0, 0, 0, 0.08);
+	--vscode-editorGroup-border: rgba(0, 0, 0, 0.08);
+	--vscode-badge-background: #2563eb;
+	--vscode-textLink-foreground: #2563eb;
+	--vscode-textCodeBlock-background: #f1f5f9;
+}
+

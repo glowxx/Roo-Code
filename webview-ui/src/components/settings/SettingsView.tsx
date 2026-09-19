@@ -10,25 +10,19 @@ import React, {
 	useState,
 } from "react"
 import {
-	CheckCheck,
-	GitBranch,
-	Bell,
+	Cpu,
+	MessageSquareCode,
 	Database,
-	SquareTerminal,
-	FlaskConical,
+	ShieldCheck,
+	Terminal,
+	Sliders,
+	Search,
+	X,
+	RotateCcw,
+	Check,
 	AlertTriangle,
-	Globe,
-	Info,
-	MessageSquare,
-	LucideIcon,
-	SquareSlash,
-	Glasses,
-	Plug,
-	Server,
-	Users2,
 	ArrowLeft,
-	GitCommitVertical,
-	GraduationCap,
+	LucideIcon,
 } from "lucide-react"
 
 import {
@@ -37,6 +31,7 @@ import {
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
 	ImageGenerationProvider,
 } from "@roo-code/types"
+import deepEqual from "fast-deep-equal"
 
 import { vscode } from "@src/utils/vscode"
 import { cn } from "@src/lib/utils"
@@ -52,6 +47,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogFooter,
 	Button,
+	Input,
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
@@ -80,15 +76,15 @@ import { UISettings } from "./UISettings"
 import ModesView from "../modes/ModesView"
 import McpView from "../mcp/McpView"
 import { WorktreesView } from "../worktrees/WorktreesView"
-import { SettingsSearch } from "./SettingsSearch"
-import { useSearchIndexRegistry, SearchIndexProvider } from "./useSettingsSearch"
+import { useSearchIndexRegistry, SearchIndexProvider, useSettingsSearch, SearchResult } from "./useSettingsSearch"
 
-export const settingsTabsContainer = "flex flex-1 overflow-hidden [&.narrow_.tab-label]:hidden"
+export const settingsTabsContainer = "flex flex-1 overflow-hidden"
 export const settingsTabList =
-	"w-48 data-[compact=true]:w-12 flex-shrink-0 flex flex-col overflow-y-auto overflow-x-hidden border-r border-vscode-sideBar-background"
+	"w-60 data-[compact=true]:w-14 flex-shrink-0 flex flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-[#12141c]/40 p-2 gap-1"
 export const settingsTabTrigger =
-	"whitespace-nowrap overflow-hidden min-w-0 h-12 px-4 py-3 box-border flex items-center border-l-2 border-transparent text-vscode-foreground opacity-70 hover:bg-vscode-list-hoverBackground data-[compact=true]:w-12 data-[compact=true]:p-4"
-export const settingsTabTriggerActive = "opacity-100 border-vscode-focusBorder bg-vscode-list-activeSelectionBackground"
+	"w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 text-sm font-medium transition-colors text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-white/[0.04] cursor-pointer"
+export const settingsTabTriggerActive =
+	"bg-accent/50 text-vscode-foreground font-semibold shadow-xs border border-white/[0.06]"
 
 export interface SettingsViewRef {
 	checkUnsaveChanges: (then: () => void) => void
@@ -115,9 +111,158 @@ export const sectionNames = [
 
 export type SectionName = (typeof sectionNames)[number]
 
+export const categoryIds = [
+	"providers",
+	"modes_prompts",
+	"context",
+	"permissions",
+	"tools",
+	"appearance",
+] as const
+
+export type CategoryId = (typeof categoryIds)[number]
+
+export const SECTION_TO_CATEGORY: Record<string, CategoryId> = {
+	providers: "providers",
+	modes: "modes_prompts",
+	prompts: "modes_prompts",
+	slashCommands: "modes_prompts",
+	skills: "modes_prompts",
+	modes_prompts: "modes_prompts",
+	contextManagement: "context",
+	checkpoints: "context",
+	context: "context",
+	autoApprove: "permissions",
+	permissions: "permissions",
+	terminal: "tools",
+	mcp: "tools",
+	worktrees: "tools",
+	tools: "tools",
+	ui: "appearance",
+	notifications: "appearance",
+	language: "appearance",
+	experimental: "appearance",
+	about: "appearance",
+	appearance: "appearance",
+}
+
+export const resolveCategory = (sectionOrCategory?: string): CategoryId => {
+	if (!sectionOrCategory) return "providers"
+	if (categoryIds.includes(sectionOrCategory as CategoryId)) {
+		return sectionOrCategory as CategoryId
+	}
+	if (sectionOrCategory in SECTION_TO_CATEGORY) {
+		return SECTION_TO_CATEGORY[sectionOrCategory]
+	}
+	return "providers"
+}
+
 type SettingsViewProps = {
 	onDone: () => void
 	targetSection?: string
+}
+
+interface CategoryDefinition {
+	id: CategoryId
+	icon: LucideIcon
+	legacySections: SectionName[]
+}
+
+const CATEGORIES: CategoryDefinition[] = [
+	{
+		id: "providers",
+		icon: Cpu,
+		legacySections: ["providers"],
+	},
+	{
+		id: "modes_prompts",
+		icon: MessageSquareCode,
+		legacySections: ["modes", "prompts", "slashCommands", "skills"],
+	},
+	{
+		id: "context",
+		icon: Database,
+		legacySections: ["contextManagement", "checkpoints"],
+	},
+	{
+		id: "permissions",
+		icon: ShieldCheck,
+		legacySections: ["autoApprove"],
+	},
+	{
+		id: "tools",
+		icon: Terminal,
+		legacySections: ["terminal", "mcp", "worktrees"],
+	},
+	{
+		id: "appearance",
+		icon: Sliders,
+		legacySections: ["ui", "notifications", "language", "experimental", "about"],
+	},
+]
+
+export const extractComparableSettings = (state?: any) => {
+	if (!state) return {}
+	return {
+		apiConfiguration: state.apiConfiguration ?? {},
+		alwaysAllowReadOnly: state.alwaysAllowReadOnly,
+		alwaysAllowReadOnlyOutsideWorkspace: state.alwaysAllowReadOnlyOutsideWorkspace,
+		allowedCommands: state.allowedCommands ?? [],
+		deniedCommands: state.deniedCommands ?? [],
+		allowedMaxRequests: state.allowedMaxRequests,
+		allowedMaxCost: state.allowedMaxCost,
+		language: state.language,
+		alwaysAllowExecute: state.alwaysAllowExecute,
+		alwaysAllowMcp: state.alwaysAllowMcp,
+		alwaysAllowModeSwitch: state.alwaysAllowModeSwitch,
+		alwaysAllowSubtasks: state.alwaysAllowSubtasks,
+		alwaysAllowWrite: state.alwaysAllowWrite,
+		alwaysAllowWriteOutsideWorkspace: state.alwaysAllowWriteOutsideWorkspace,
+		alwaysAllowWriteProtected: state.alwaysAllowWriteProtected,
+		autoCondenseContext: state.autoCondenseContext,
+		autoCondenseContextPercent: state.autoCondenseContextPercent,
+		enableCheckpoints: state.enableCheckpoints,
+		checkpointTimeout: state.checkpointTimeout,
+		experiments: state.experiments ?? {},
+		maxOpenTabsContext: state.maxOpenTabsContext,
+		maxWorkspaceFiles: state.maxWorkspaceFiles,
+		mcpEnabled: state.mcpEnabled,
+		soundEnabled: state.soundEnabled,
+		soundVolume: state.soundVolume,
+		ttsEnabled: state.ttsEnabled,
+		ttsSpeed: state.ttsSpeed,
+		terminalShellIntegrationTimeout: state.terminalShellIntegrationTimeout,
+		terminalShellIntegrationDisabled: state.terminalShellIntegrationDisabled,
+		terminalCommandDelay: state.terminalCommandDelay,
+		terminalPowershellCounter: state.terminalPowershellCounter,
+		terminalZshClearEolMark: state.terminalZshClearEolMark,
+		terminalZshOhMy: state.terminalZshOhMy,
+		terminalZshP10k: state.terminalZshP10k,
+		terminalZdotdir: state.terminalZdotdir,
+		terminalOutputPreviewSize: state.terminalOutputPreviewSize,
+		writeDelayMs: state.writeDelayMs,
+		showRooIgnoredFiles: state.showRooIgnoredFiles,
+		enableSubfolderRules: state.enableSubfolderRules,
+		maxImageFileSize: state.maxImageFileSize,
+		maxTotalImageSize: state.maxTotalImageSize,
+		customSupportPrompts: state.customSupportPrompts ?? {},
+		profileThresholds: state.profileThresholds ?? {},
+		alwaysAllowFollowupQuestions: state.alwaysAllowFollowupQuestions,
+		followupAutoApproveTimeoutMs: state.followupAutoApproveTimeoutMs,
+		includeDiagnosticMessages: state.includeDiagnosticMessages,
+		maxDiagnosticMessages: state.maxDiagnosticMessages,
+		includeTaskHistoryInEnhance: state.includeTaskHistoryInEnhance,
+		imageGenerationProvider: state.imageGenerationProvider,
+		openRouterImageApiKey: state.openRouterImageApiKey,
+		openRouterImageGenerationSelectedModel: state.openRouterImageGenerationSelectedModel,
+		reasoningBlockCollapsed: state.reasoningBlockCollapsed,
+		theme: state.theme,
+		enterBehavior: state.enterBehavior,
+		includeCurrentTime: state.includeCurrentTime,
+		includeCurrentCost: state.includeCurrentCost,
+		maxGitStatusFiles: state.maxGitStatusFiles,
+		debug: state.debug,
+	}
 }
 
 const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, targetSection }, ref) => {
@@ -127,23 +272,24 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 	const { currentApiConfigName, listApiConfigMeta, uriScheme, settingsImportedAt } = extensionState
 
 	const [isDiscardDialogShow, setDiscardDialogShow] = useState(false)
-	const [isChangeDetected, setChangeDetected] = useState(false)
 	const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined)
-	const [activeTab, setActiveTab] = useState<SectionName>(
-		targetSection && sectionNames.includes(targetSection as SectionName)
-			? (targetSection as SectionName)
-			: "providers",
-	)
 
-	const scrollPositions = useRef<Record<SectionName, number>>(
-		Object.fromEntries(sectionNames.map((s) => [s, 0])) as Record<SectionName, number>,
+	const [cleanOriginalState, setCleanOriginalState] = useState(() => extensionState)
+	const [cachedState, setCachedState] = useState(() => extensionState)
+
+	const isChangeDetected = useMemo(() => {
+		return !deepEqual(extractComparableSettings(cleanOriginalState), extractComparableSettings(cachedState))
+	}, [cleanOriginalState, cachedState])
+
+	const [activeCategory, setActiveCategory] = useState<CategoryId>(() => resolveCategory(targetSection))
+
+	const scrollPositions = useRef<Record<CategoryId, number>>(
+		Object.fromEntries(categoryIds.map((c) => [c, 0])) as Record<CategoryId, number>,
 	)
 	const contentRef = useRef<HTMLDivElement | null>(null)
 
 	const prevApiConfigName = useRef(currentApiConfigName)
 	const confirmDialogHandler = useRef<() => void>()
-
-	const [cachedState, setCachedState] = useState(() => extensionState)
 
 	const {
 		alwaysAllowReadOnly,
@@ -174,7 +320,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		soundVolume,
 		terminalOutputPreviewSize,
 		terminalShellIntegrationTimeout,
-		terminalShellIntegrationDisabled, // Added from upstream
+		terminalShellIntegrationDisabled,
 		terminalCommandDelay,
 		terminalPowershellCounter,
 		terminalZshClearEolMark,
@@ -197,6 +343,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		openRouterImageApiKey,
 		openRouterImageGenerationSelectedModel,
 		reasoningBlockCollapsed,
+		theme,
 		enterBehavior,
 		includeCurrentTime,
 		includeCurrentCost,
@@ -206,22 +353,20 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
 
 	useEffect(() => {
-		// Update only when currentApiConfigName is changed.
-		// Expected to be triggered by loadApiConfiguration/upsertApiConfiguration.
 		if (prevApiConfigName.current === currentApiConfigName) {
 			return
 		}
 
 		setCachedState((prevCachedState) => ({ ...prevCachedState, ...extensionState }))
+		setCleanOriginalState((prevCleanState) => ({ ...prevCleanState, ...extensionState }))
 		prevApiConfigName.current = currentApiConfigName
-		setChangeDetected(false)
 	}, [currentApiConfigName, extensionState])
 
 	// Bust the cache when settings are imported.
 	useEffect(() => {
 		if (settingsImportedAt) {
 			setCachedState((prevCachedState) => ({ ...prevCachedState, ...extensionState }))
-			setChangeDetected(false)
+			setCleanOriginalState((prevCleanState) => ({ ...prevCleanState, ...extensionState }))
 		}
 	}, [settingsImportedAt, extensionState])
 
@@ -231,7 +376,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 				return prevState
 			}
 
-			setChangeDetected(true)
 			return { ...prevState, [field]: value }
 		})
 	}, [])
@@ -243,36 +387,18 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					return prevState
 				}
 
-				const previousValue = prevState.apiConfiguration?.[field]
-
-				// Helper to check if two values are semantically equal
-				const areValuesEqual = (a: any, b: any): boolean => {
-					if (a === b) return true
-					if (a == null && b == null) return true
-					if (typeof a !== typeof b) return false
-					if (typeof a === "object" && typeof b === "object") {
-						return JSON.stringify(a) === JSON.stringify(b)
-					}
-					return false
-				}
-
-				// Only skip change detection for automatic initialization (not user actions)
-				// This prevents the dirty state when the component initializes and auto-syncs values
-				const isInitialSync =
-					!isUserAction &&
-					(previousValue === undefined || previousValue === "" || previousValue === null) &&
-					value !== undefined &&
-					value !== "" &&
-					value !== null
-
-				// Also skip if it's an automatic sync with semantically equal values
-				const isAutomaticNoOpSync = !isUserAction && areValuesEqual(previousValue, value)
-
-				if (!isInitialSync && !isAutomaticNoOpSync) {
-					setChangeDetected(true)
-				}
 				return { ...prevState, apiConfiguration: { ...prevState.apiConfiguration, [field]: value } }
 			})
+
+			if (!isUserAction) {
+				setCleanOriginalState((prevState) => {
+					if (prevState.apiConfiguration?.[field] === value) {
+						return prevState
+					}
+
+					return { ...prevState, apiConfiguration: { ...prevState.apiConfiguration, [field]: value } }
+				})
+			}
 		},
 		[],
 	)
@@ -283,7 +409,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 				return prevState
 			}
 
-			setChangeDetected(true)
 			return { ...prevState, experiments: { ...prevState.experiments, [id]: enabled } }
 		})
 	}, [])
@@ -294,15 +419,14 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 				return prevState
 			}
 
-			setChangeDetected(true)
 			return { ...prevState, debug }
 		})
 	}, [])
 
 	const setImageGenerationProvider = useCallback((provider: ImageGenerationProvider) => {
 		setCachedState((prevState) => {
-			if (prevState.imageGenerationProvider !== provider) {
-				setChangeDetected(true)
+			if (prevState.imageGenerationProvider === provider) {
+				return prevState
 			}
 
 			return { ...prevState, imageGenerationProvider: provider }
@@ -311,8 +435,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 	const setOpenRouterImageApiKey = useCallback((apiKey: string) => {
 		setCachedState((prevState) => {
-			if (prevState.openRouterImageApiKey !== apiKey) {
-				setChangeDetected(true)
+			if (prevState.openRouterImageApiKey === apiKey) {
+				return prevState
 			}
 
 			return { ...prevState, openRouterImageApiKey: apiKey }
@@ -321,8 +445,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 	const setImageGenerationSelectedModel = useCallback((model: string) => {
 		setCachedState((prevState) => {
-			if (prevState.openRouterImageGenerationSelectedModel !== model) {
-				setChangeDetected(true)
+			if (prevState.openRouterImageGenerationSelectedModel === model) {
+				return prevState
 			}
 
 			return { ...prevState, openRouterImageGenerationSelectedModel: model }
@@ -338,7 +462,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 				return prevState
 			}
 
-			setChangeDetected(true)
 			return { ...prevState, customSupportPrompts: prompts }
 		})
 	}, [])
@@ -361,9 +484,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					alwaysAllowModeSwitch,
 					allowedCommands: allowedCommands ?? [],
 					deniedCommands: deniedCommands ?? [],
-					// Note that we use `null` instead of `undefined` since `JSON.stringify`
-					// will omit `undefined` when serializing the object and passing it to the
-					// extension host. We may need to do the same for other nullable fields.
 					allowedMaxRequests: allowedMaxRequests ?? null,
 					allowedMaxCost: allowedMaxCost ?? null,
 					autoCondenseContext,
@@ -399,6 +519,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					followupAutoApproveTimeoutMs,
 					includeTaskHistoryInEnhance: includeTaskHistoryInEnhance ?? true,
 					reasoningBlockCollapsed: reasoningBlockCollapsed ?? true,
+					theme: theme ?? "linear-dark",
 					enterBehavior: enterBehavior ?? "send",
 					includeCurrentTime: includeCurrentTime ?? true,
 					includeCurrentCost: includeCurrentCost ?? true,
@@ -412,12 +533,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 				},
 			})
 
-			// These have more complex logic so they aren't (yet) handled
-			// by the `updateSettings` message.
 			vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
 			vscode.postMessage({ type: "debugSetting", bool: cachedState.debug })
 
-			setChangeDetected(false)
+			setCleanOriginalState(cachedState)
 		}
 	}
 
@@ -438,50 +557,44 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 	const onConfirmDialogResult = useCallback(
 		(confirm: boolean) => {
 			if (confirm) {
-				// Discard changes: Reset state and flag
-				setCachedState(extensionState) // Revert to original state
-				setChangeDetected(false) // Reset change flag
-				confirmDialogHandler.current?.() // Execute the pending action (e.g., tab switch)
+				setCachedState(cleanOriginalState)
+				confirmDialogHandler.current?.()
 			}
-			// If confirm is false (Cancel), do nothing, dialog closes automatically
 		},
-		[extensionState], // Depend on extensionState to get the latest original state
+		[cleanOriginalState],
 	)
 
-	// Handle tab changes with unsaved changes check
-	const handleTabChange = useCallback(
-		(newTab: SectionName) => {
+	const handleCategoryChange = useCallback(
+		(newCategory: CategoryId) => {
 			if (contentRef.current) {
-				scrollPositions.current[activeTab] = contentRef.current.scrollTop
+				scrollPositions.current[activeCategory] = contentRef.current.scrollTop
 			}
-			setActiveTab(newTab)
+			setActiveCategory(newCategory)
 		},
-		[activeTab],
+		[activeCategory],
 	)
 
 	useLayoutEffect(() => {
 		if (contentRef.current) {
-			contentRef.current.scrollTop = scrollPositions.current[activeTab] ?? 0
+			contentRef.current.scrollTop = scrollPositions.current[activeCategory] ?? 0
 		}
-	}, [activeTab])
+	}, [activeCategory])
 
-	// Store direct DOM element refs for each tab
-	const tabRefs = useRef<Record<SectionName, HTMLButtonElement | null>>(
-		Object.fromEntries(sectionNames.map((name) => [name, null])) as Record<SectionName, HTMLButtonElement | null>,
+	// Store direct DOM element refs for each category
+	const tabRefs = useRef<Record<CategoryId, HTMLButtonElement | null>>(
+		Object.fromEntries(categoryIds.map((name) => [name, null])) as Record<CategoryId, HTMLButtonElement | null>,
 	)
 
 	// Track whether we're in compact mode
 	const [isCompactMode, setIsCompactMode] = useState(false)
 	const containerRef = useRef<HTMLDivElement>(null)
 
-	// Setup resize observer to detect when we should switch to compact mode
 	useEffect(() => {
 		if (!containerRef.current) return
 
 		const observer = new ResizeObserver((entries) => {
 			for (const entry of entries) {
-				// If container width is less than 500px, switch to compact mode
-				setIsCompactMode(entry.contentRect.width < 500)
+				setIsCompactMode(entry.contentRect.width < 540)
 			}
 		})
 
@@ -492,53 +605,49 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		}
 	}, [])
 
-	const sections: { id: SectionName; icon: LucideIcon }[] = useMemo(
-		() => [
-			{ id: "providers", icon: Plug },
-			{ id: "modes", icon: Users2 },
-			{ id: "skills", icon: GraduationCap },
-			{ id: "slashCommands", icon: SquareSlash },
-			{ id: "autoApprove", icon: CheckCheck },
-			{ id: "mcp", icon: Server },
-			{ id: "checkpoints", icon: GitCommitVertical },
-			{ id: "notifications", icon: Bell },
-			{ id: "contextManagement", icon: Database },
-			{ id: "terminal", icon: SquareTerminal },
-			{ id: "prompts", icon: MessageSquare },
-			{ id: "worktrees", icon: GitBranch },
-			{ id: "ui", icon: Glasses },
-			{ id: "experimental", icon: FlaskConical },
-			{ id: "language", icon: Globe },
-			{ id: "about", icon: Info },
-		],
-		[], // No dependencies needed now
-	)
-
-	// Update target section logic to set active tab
+	// Update active category when targetSection changes
 	useEffect(() => {
-		if (targetSection && sectionNames.includes(targetSection as SectionName)) {
-			setActiveTab(targetSection as SectionName)
+		if (targetSection) {
+			const targetCat = resolveCategory(targetSection)
+			setActiveCategory(targetCat)
+
+			// If it's a specific sub-section, scroll to it
+			let timeoutId: NodeJS.Timeout | undefined
+			const animId = requestAnimationFrame(() => {
+				timeoutId = setTimeout(() => {
+					if (typeof document !== "undefined") {
+						const element = document.getElementById(`section-${targetSection}`)
+						if (element) {
+							element.scrollIntoView({ behavior: "smooth", block: "start" })
+						}
+					}
+				}, 150)
+			})
+
+			return () => {
+				cancelAnimationFrame(animId)
+				if (timeoutId) {
+					clearTimeout(timeoutId)
+				}
+			}
 		}
 	}, [targetSection])
 
-	// Function to scroll the active tab into view for vertical layout
+	// Function to scroll active tab into view
 	const scrollToActiveTab = useCallback(() => {
-		const activeTabElement = tabRefs.current[activeTab]
-
+		const activeTabElement = tabRefs.current[activeCategory]
 		if (activeTabElement) {
 			activeTabElement.scrollIntoView({
 				behavior: "auto",
 				block: "nearest",
 			})
 		}
-	}, [activeTab])
+	}, [activeCategory])
 
-	// Effect to scroll when the active tab changes
 	useEffect(() => {
 		scrollToActiveTab()
-	}, [activeTab, scrollToActiveTab])
+	}, [activeCategory, scrollToActiveTab])
 
-	// Effect to scroll when the webview becomes visible
 	useLayoutEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data
@@ -548,93 +657,565 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		}
 
 		window.addEventListener("message", handleMessage)
-
 		return () => {
 			window.removeEventListener("message", handleMessage)
 		}
 	}, [scrollToActiveTab])
 
-	// Search index registry - settings register themselves on mount
+	// Search index registry
 	const getSectionLabel = useCallback((section: SectionName) => t(`settings:sections.${section}`), [t])
 	const { contextValue: searchContextValue, index: searchIndex } = useSearchIndexRegistry(getSectionLabel)
 
-	// Track which tabs have been indexed (visited at least once)
-	const [indexingTabIndex, setIndexingTabIndex] = useState(0)
-	const initialTab = useRef<SectionName>(activeTab)
-	const isIndexing = indexingTabIndex < sectionNames.length
-	const isIndexingComplete = !isIndexing
+	// Indexing cycle through categories on mount
+	const [indexingIndex, setIndexingIndex] = useState(0)
+	const initialCategory = useRef<CategoryId>(activeCategory)
+	const isIndexing = indexingIndex < categoryIds.length
 	const tabTitlesRegistered = useRef(false)
 
-	// Index all tabs by cycling through them on mount
 	useLayoutEffect(() => {
-		if (indexingTabIndex >= sectionNames.length) {
-			// All tabs indexed, now register tab titles as searchable items
+		if (indexingIndex >= categoryIds.length) {
 			if (!tabTitlesRegistered.current && searchContextValue) {
-				sections.forEach(({ id }) => {
-					const tabTitle = t(`settings:sections.${id}`)
-					// Register each tab title as a searchable item
-					// Using a special naming convention for tab titles: "tab-{sectionName}"
+				// Register both categories and sections for search
+				CATEGORIES.forEach(({ id, legacySections }) => {
+					const categoryTitle = t(`settings:categories.${id}`)
 					searchContextValue.registerSetting({
-						settingId: `tab-${id}`,
-						section: id,
-						label: tabTitle,
+						settingId: `category-${id}`,
+						section: legacySections[0] || "providers",
+						label: categoryTitle,
+					})
+					legacySections.forEach((sec) => {
+						const secTitle = t(`settings:sections.${sec}`)
+						searchContextValue.registerSetting({
+							settingId: `tab-${sec}`,
+							section: sec,
+							label: secTitle,
+						})
 					})
 				})
 				tabTitlesRegistered.current = true
-				// Return to initial tab
-				setActiveTab(initialTab.current)
+				setActiveCategory(initialCategory.current)
 			}
 			return
 		}
 
-		// Move to the next tab on next render
-		setIndexingTabIndex((prev) => prev + 1)
-	}, [indexingTabIndex, searchContextValue, sections, t])
+		setIndexingIndex((prev) => prev + 1)
+	}, [indexingIndex, searchContextValue, t])
 
-	// Determine which tab content to render (for indexing or active display)
-	const renderTab = isIndexing ? sectionNames[indexingTabIndex] : activeTab
+	const renderCategory = isIndexing ? categoryIds[indexingIndex] : activeCategory
 
-	// Handle search navigation - switch to the correct tab and scroll to the element
+	// Settings search hook
+	const { searchQuery, setSearchQuery, results, clearSearch } = useSettingsSearch({ index: searchIndex })
+
 	const handleSearchNavigate = useCallback(
 		(section: SectionName, settingId: string) => {
-			// Switch to the correct tab
-			handleTabChange(section)
+			const cat = resolveCategory(section)
+			handleCategoryChange(cat)
+			clearSearch()
 
-			// Wait for the tab to render, then find element by settingId and scroll to it
 			requestAnimationFrame(() => {
 				setTimeout(() => {
-					const element = document.querySelector(`[data-setting-id="${settingId}"]`)
+					const element =
+						document.querySelector(`[data-setting-id="${settingId}"]`) ||
+						document.getElementById(`section-${section}`)
 					if (element) {
 						element.scrollIntoView({ behavior: "smooth", block: "center" })
-
-						// Add highlight animation
 						element.classList.add("settings-highlight")
 						setTimeout(() => {
 							element.classList.remove("settings-highlight")
 						}, 1500)
 					}
-				}, 100) // Small delay to ensure tab content is rendered
+				}, 100)
 			})
 		},
-		[handleTabChange],
+		[handleCategoryChange, clearSearch],
 	)
 
 	return (
-		<Tab>
-			<TabHeader className="flex justify-between items-center gap-2">
-				<div className="flex items-center gap-2 grow">
+		<Tab className="h-full flex flex-col bg-vscode-editor-background text-vscode-foreground select-none overflow-hidden">
+			{/* Top Header */}
+			<TabHeader className="flex justify-between items-center px-4 py-2.5 border-b border-white/[0.06] bg-[#12141c]/50 backdrop-blur-sm shrink-0">
+				<div className="flex items-center gap-2">
 					<StandardTooltip content={t("settings:header.doneButtonTooltip")}>
-						<Button variant="ghost" className="px-1.5 -ml-2" onClick={() => checkUnsaveChanges(onDone)}>
-							<ArrowLeft />
-							<span className="sr-only">{t("settings:common.done")}</span>
+						<Button
+							variant="ghost"
+							className="px-2 py-1 h-8 text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-white/[0.06] rounded-md transition-colors"
+							onClick={() => checkUnsaveChanges(onDone)}>
+							<ArrowLeft className="w-4 h-4 mr-1.5" />
+							<span className="text-xs font-medium">{t("settings:common.done")}</span>
 						</Button>
 					</StandardTooltip>
-					<h3 className="text-vscode-foreground m-0 flex-shrink-0">{t("settings:header.title")}</h3>
+					<div className="h-4 w-[1px] bg-white/[0.08] mx-1" />
+					<h3 className="text-sm font-semibold text-vscode-foreground m-0 tracking-tight">
+						{t("settings:header.title")}
+					</h3>
 				</div>
-				<div className="flex items-center gap-2 shrink-0">
-					{isIndexingComplete && (
-						<SettingsSearch index={searchIndex} onNavigate={handleSearchNavigate} sections={sections} />
+			</TabHeader>
+
+			{/* Master-Detail Two-Column Body */}
+			<div ref={containerRef} className={cn(settingsTabsContainer, isCompactMode && "narrow")}>
+				{/* Left Column: Categorical Sidebar */}
+				<div className={cn(settingsTabList)} data-compact={isCompactMode}>
+					{/* Search Input at the top of the sidebar */}
+					<div className="px-1 py-1 mb-1">
+						<div className="relative flex items-center">
+							<Search className="absolute left-2.5 w-3.5 h-3.5 text-vscode-descriptionForeground pointer-events-none" />
+							<Input
+								value={searchQuery}
+								onChange={(e) => setSearchQuery(e.target.value)}
+								placeholder={isCompactMode ? "" : t("settings:search.placeholder")}
+								className="h-8 pl-8 pr-7 text-xs bg-[#12141c] border-white/[0.06] rounded-md focus:border-vscode-focusBorder placeholder:text-vscode-descriptionForeground/60 w-full"
+							/>
+							{searchQuery && (
+								<button
+									onClick={clearSearch}
+									className="absolute right-2 text-vscode-descriptionForeground hover:text-vscode-foreground p-0.5 rounded transition-colors">
+									<X className="w-3 h-3" />
+								</button>
+							)}
+						</div>
+					</div>
+
+					{/* Vertical Category Tabs */}
+					<TabList
+						value={activeCategory}
+						onValueChange={(value) => handleCategoryChange(resolveCategory(value))}
+						className="flex flex-col gap-1 w-full"
+						data-compact={isCompactMode}
+						data-testid="settings-tab-list">
+						{CATEGORIES.map(({ id, icon: Icon, legacySections }) => {
+							const isSelected = id === activeCategory
+							const onSelect = () => handleCategoryChange(id)
+							const categoryLabel = t(`settings:categories.${id}`)
+
+							const triggerComponent = (
+								<TabTrigger
+									ref={(element) => (tabRefs.current[id] = element)}
+									value={id}
+									isSelected={isSelected}
+									className={cn(
+										settingsTabTrigger,
+										isSelected && settingsTabTriggerActive,
+										isCompactMode && "justify-center px-2",
+									)}
+									data-testid={`tab-${id}`}
+									data-legacy-sections={legacySections.join(",")}
+									data-compact={isCompactMode}>
+									<Icon className="w-4 h-4 shrink-0" />
+									{!isCompactMode && <span className="truncate">{categoryLabel}</span>}
+								</TabTrigger>
+							)
+
+							if (isCompactMode) {
+								return (
+									<TooltipProvider key={id} delayDuration={200}>
+										<Tooltip>
+											<TooltipTrigger asChild onClick={onSelect}>
+												{React.cloneElement(triggerComponent)}
+											</TooltipTrigger>
+											<TooltipContent side="right" className="text-xs">
+												<p className="m-0 font-medium">{categoryLabel}</p>
+											</TooltipContent>
+										</Tooltip>
+									</TooltipProvider>
+								)
+							}
+
+							return React.cloneElement(triggerComponent, { key: id })
+						})}
+					</TabList>
+				</div>
+
+				{/* Right Column: Content Workspace */}
+				<div className="flex-1 flex flex-col overflow-hidden bg-vscode-editor-background">
+					{/* Category Top Banner */}
+					<div className="px-6 py-4 border-b border-white/[0.06] bg-vscode-editor-background/90 backdrop-blur-sm shrink-0">
+						{searchQuery ? (
+							<div>
+								<h2 className="text-base font-bold text-vscode-foreground m-0">
+									{t("settings:search.placeholder")}: "{searchQuery}"
+								</h2>
+								<p className="text-xs text-vscode-descriptionForeground mt-1 mb-0">
+									{results.length > 0
+										? `${results.length} results found`
+										: t("settings:search.noResults")}
+								</p>
+							</div>
+						) : (
+							<div>
+								<h2 className="text-base font-bold text-vscode-foreground m-0 tracking-tight">
+									{t(`settings:categories.${activeCategory}`)}
+								</h2>
+								<p className="text-xs text-vscode-descriptionForeground mt-1 mb-0 max-w-2xl">
+									{t(`settings:categoryDescriptions.${activeCategory}`)}
+								</p>
+							</div>
+						)}
+					</div>
+
+					{/* Content Container */}
+					<TabContent
+						ref={contentRef}
+						className={cn("p-6 flex-1 overflow-y-auto scrollable", isIndexing && "opacity-0")}
+						data-testid="settings-content">
+						<SearchIndexProvider value={searchContextValue}>
+							{searchQuery ? (
+								/* Dynamic Search Results View */
+								<div className="space-y-3">
+									{results.length === 0 ? (
+										<div className="text-center py-12 text-vscode-descriptionForeground text-sm">
+											{t("settings:search.noResults")}
+										</div>
+									) : (
+										results.map((result: SearchResult) => (
+											<button
+												key={`${result.section}-${result.settingId}`}
+												onClick={() => handleSearchNavigate(result.section, result.settingId)}
+												className="w-full text-left p-4 rounded-xl border border-white/[0.06] bg-[#12141c] hover:bg-white/[0.04] transition-colors flex items-center justify-between group">
+												<div className="flex flex-col gap-1">
+													<span className="text-sm font-medium text-vscode-foreground group-hover:text-white transition-colors">
+														{result.label}
+													</span>
+													<span className="text-xs text-vscode-descriptionForeground">
+														{result.sectionLabel}
+													</span>
+												</div>
+												<span className="text-xs px-2.5 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] text-vscode-descriptionForeground group-hover:text-vscode-foreground">
+													{t(`settings:categories.${resolveCategory(result.section)}`)}
+												</span>
+											</button>
+										))
+									)}
+								</div>
+							) : (
+								/* Category Content */
+								<div>
+									{/* Category 1: Providers & Models */}
+									{renderCategory === "providers" && (
+										<div className="space-y-6">
+											<div className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<ApiConfigManager
+													currentApiConfigName={currentApiConfigName}
+													listApiConfigMeta={listApiConfigMeta}
+													onSelectConfig={(configName: string) =>
+														checkUnsaveChanges(() =>
+															vscode.postMessage({
+																type: "loadApiConfiguration",
+																text: configName,
+															}),
+														)
+													}
+													onDeleteConfig={(configName: string) =>
+														vscode.postMessage({
+															type: "deleteApiConfiguration",
+															text: configName,
+														})
+													}
+													onRenameConfig={(oldName: string, newName: string) => {
+														vscode.postMessage({
+															type: "renameApiConfiguration",
+															values: { oldName, newName },
+															apiConfiguration,
+														})
+														prevApiConfigName.current = newName
+													}}
+													onUpsertConfig={(configName: string) =>
+														vscode.postMessage({
+															type: "upsertApiConfiguration",
+															text: configName,
+															apiConfiguration,
+														})
+													}
+												/>
+											</div>
+											<div className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<ApiOptions
+													uriScheme={uriScheme}
+													apiConfiguration={apiConfiguration}
+													setApiConfigurationField={setApiConfigurationField}
+													errorMessage={errorMessage}
+													setErrorMessage={setErrorMessage}
+												/>
+											</div>
+										</div>
+									)}
+
+									{/* Category 2: Modes & Prompts */}
+									{renderCategory === "modes_prompts" && (
+										<div className="space-y-6">
+											<div
+												id="section-modes"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.modes")}
+												</SectionHeader>
+												<ModesView />
+											</div>
+											<div
+												id="section-prompts"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.prompts")}
+												</SectionHeader>
+												<PromptsSettings
+													customSupportPrompts={customSupportPrompts || {}}
+													setCustomSupportPrompts={setCustomSupportPromptsField}
+													includeTaskHistoryInEnhance={includeTaskHistoryInEnhance}
+													setIncludeTaskHistoryInEnhance={(value) =>
+														setCachedStateField("includeTaskHistoryInEnhance", value)
+													}
+												/>
+											</div>
+											<div
+												id="section-slashCommands"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.slashCommands")}
+												</SectionHeader>
+												<SlashCommandsSettings />
+											</div>
+											<div
+												id="section-skills"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.skills")}
+												</SectionHeader>
+												<SkillsSettings />
+											</div>
+										</div>
+									)}
+
+									{/* Category 3: Context Management */}
+									{renderCategory === "context" && (
+										<div className="space-y-6">
+											<div
+												id="section-contextManagement"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.contextManagement")}
+												</SectionHeader>
+												<ContextManagementSettings
+													autoCondenseContext={autoCondenseContext}
+													autoCondenseContextPercent={autoCondenseContextPercent}
+													listApiConfigMeta={listApiConfigMeta ?? []}
+													maxOpenTabsContext={maxOpenTabsContext}
+													maxWorkspaceFiles={maxWorkspaceFiles ?? 200}
+													showRooIgnoredFiles={showRooIgnoredFiles}
+													enableSubfolderRules={enableSubfolderRules}
+													maxImageFileSize={maxImageFileSize}
+													maxTotalImageSize={maxTotalImageSize}
+													profileThresholds={profileThresholds}
+													includeDiagnosticMessages={includeDiagnosticMessages}
+													maxDiagnosticMessages={maxDiagnosticMessages}
+													writeDelayMs={writeDelayMs}
+													includeCurrentTime={includeCurrentTime}
+													includeCurrentCost={includeCurrentCost}
+													maxGitStatusFiles={maxGitStatusFiles}
+													customSupportPrompts={customSupportPrompts || {}}
+													setCustomSupportPrompts={setCustomSupportPromptsField}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-checkpoints"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.checkpoints")}
+												</SectionHeader>
+												<CheckpointSettings
+													enableCheckpoints={enableCheckpoints}
+													checkpointTimeout={checkpointTimeout}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+										</div>
+									)}
+
+									{/* Category 4: Permissions & Auto-Approve */}
+									{renderCategory === "permissions" && (
+										<div className="space-y-6">
+											<div
+												id="section-autoApprove"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.autoApprove")}
+												</SectionHeader>
+												<AutoApproveSettings
+													alwaysAllowReadOnly={alwaysAllowReadOnly}
+													alwaysAllowReadOnlyOutsideWorkspace={
+														alwaysAllowReadOnlyOutsideWorkspace
+													}
+													alwaysAllowWrite={alwaysAllowWrite}
+													alwaysAllowWriteOutsideWorkspace={alwaysAllowWriteOutsideWorkspace}
+													alwaysAllowWriteProtected={alwaysAllowWriteProtected}
+													alwaysAllowMcp={alwaysAllowMcp}
+													alwaysAllowModeSwitch={alwaysAllowModeSwitch}
+													alwaysAllowSubtasks={alwaysAllowSubtasks}
+													alwaysAllowExecute={alwaysAllowExecute}
+													alwaysAllowFollowupQuestions={alwaysAllowFollowupQuestions}
+													followupAutoApproveTimeoutMs={followupAutoApproveTimeoutMs}
+													allowedCommands={allowedCommands}
+													allowedMaxRequests={allowedMaxRequests ?? undefined}
+													allowedMaxCost={allowedMaxCost ?? undefined}
+													deniedCommands={deniedCommands}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+										</div>
+									)}
+
+									{/* Category 5: Tools & Terminal */}
+									{renderCategory === "tools" && (
+										<div className="space-y-6">
+											<div
+												id="section-terminal"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.terminal")}
+												</SectionHeader>
+												<TerminalSettings
+													terminalOutputPreviewSize={terminalOutputPreviewSize}
+													terminalShellIntegrationTimeout={terminalShellIntegrationTimeout}
+													terminalShellIntegrationDisabled={terminalShellIntegrationDisabled}
+													terminalCommandDelay={terminalCommandDelay}
+													terminalPowershellCounter={terminalPowershellCounter}
+													terminalZshClearEolMark={terminalZshClearEolMark}
+													terminalZshOhMy={terminalZshOhMy}
+													terminalZshP10k={terminalZshP10k}
+													terminalZdotdir={terminalZdotdir}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-mcp"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.mcp")}
+												</SectionHeader>
+												<McpView />
+											</div>
+											<div
+												id="section-worktrees"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.worktrees")}
+												</SectionHeader>
+												<WorktreesView />
+											</div>
+										</div>
+									)}
+
+									{/* Category 6: Appearance & Environment */}
+									{renderCategory === "appearance" && (
+										<div className="space-y-6">
+											<div
+												id="section-ui"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.ui")}
+												</SectionHeader>
+												<UISettings
+													reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
+													enterBehavior={enterBehavior ?? "send"}
+													theme={theme ?? "linear-dark"}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-notifications"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.notifications")}
+												</SectionHeader>
+												<NotificationSettings
+													ttsEnabled={ttsEnabled}
+													ttsSpeed={ttsSpeed}
+													soundEnabled={soundEnabled}
+													soundVolume={soundVolume}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-language"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.language")}
+												</SectionHeader>
+												<LanguageSettings
+													language={language || "en"}
+													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-experimental"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.experimental")}
+												</SectionHeader>
+												<ExperimentalSettings
+													setExperimentEnabled={setExperimentEnabled}
+													experiments={experiments}
+													apiConfiguration={apiConfiguration}
+													setApiConfigurationField={setApiConfigurationField}
+													imageGenerationProvider={imageGenerationProvider}
+													openRouterImageApiKey={openRouterImageApiKey as string | undefined}
+													openRouterImageGenerationSelectedModel={
+														openRouterImageGenerationSelectedModel as string | undefined
+													}
+													setImageGenerationProvider={setImageGenerationProvider}
+													setOpenRouterImageApiKey={setOpenRouterImageApiKey}
+													setImageGenerationSelectedModel={setImageGenerationSelectedModel}
+												/>
+											</div>
+											<div
+												id="section-about"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<SectionHeader>
+													{t("settings:sections.about")}
+												</SectionHeader>
+												<About debug={cachedState.debug} setDebug={setDebug} />
+											</div>
+										</div>
+									)}
+								</div>
+							)}
+						</SearchIndexProvider>
+					</TabContent>
+				</div>
+			</div>
+
+			{/* Sticky Footer Action Bar */}
+			<div className="h-14 px-6 border-t border-white/[0.06] bg-[#12141c] flex items-center justify-between z-20 shrink-0">
+				{/* Left: Dirty state indicator */}
+				<div className="flex items-center gap-2">
+					{isChangeDetected ? (
+						<div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
+							<span className="relative flex h-2 w-2">
+								<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+								<span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+							</span>
+							<span className="text-xs font-medium text-amber-400">
+								{t("settings:footer.unsavedChanges")}
+							</span>
+						</div>
+					) : (
+						<div className="flex items-center gap-2 px-2 py-1 text-vscode-descriptionForeground">
+							<Check className="w-3.5 h-3.5 text-emerald-400" />
+							<span className="text-xs">{t("settings:footer.allChangesSaved")}</span>
+						</div>
 					)}
+				</div>
+
+				{/* Right: Actions (Discard & Save) */}
+				<div className="flex items-center gap-3">
+					<Button
+						variant="secondary"
+						onClick={() => onConfirmDialogResult(true)}
+						disabled={!isChangeDetected}
+						className="text-xs h-8 px-3 gap-1.5 border border-white/[0.06] hover:bg-white/[0.06] disabled:opacity-40">
+						<RotateCcw className="w-3 h-3" />
+						{t("settings:footer.discard")}
+					</Button>
+
 					<StandardTooltip
 						content={
 							!isSettingValid
@@ -645,272 +1226,20 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 						}>
 						<Button
 							variant={isSettingValid ? "primary" : "secondary"}
-							className={!isSettingValid ? "!border-vscode-errorForeground" : ""}
+							className={cn(
+								"text-xs h-8 px-4 font-medium shadow-xs",
+								!isSettingValid && "!border-vscode-errorForeground",
+							)}
 							onClick={handleSubmit}
 							disabled={!isChangeDetected || !isSettingValid}
 							data-testid="save-button">
-							{t("settings:common.save")}
+							{t("settings:footer.save")}
 						</Button>
 					</StandardTooltip>
 				</div>
-			</TabHeader>
-
-			{/* Vertical tabs layout */}
-			<div ref={containerRef} className={cn(settingsTabsContainer, isCompactMode && "narrow")}>
-				{/* Tab sidebar */}
-				<TabList
-					value={activeTab}
-					onValueChange={(value) => handleTabChange(value as SectionName)}
-					className={cn(settingsTabList)}
-					data-compact={isCompactMode}
-					data-testid="settings-tab-list">
-					{sections.map(({ id, icon: Icon }) => {
-						const isSelected = id === activeTab
-						const onSelect = () => handleTabChange(id)
-
-						// Base TabTrigger component definition
-						// We pass isSelected manually for styling, but onSelect is handled conditionally
-						const triggerComponent = (
-							<TabTrigger
-								ref={(element) => (tabRefs.current[id] = element)}
-								value={id}
-								isSelected={isSelected} // Pass manually for styling state
-								className={cn(
-									isSelected // Use manual isSelected for styling
-										? `${settingsTabTrigger} ${settingsTabTriggerActive}`
-										: settingsTabTrigger,
-									"cursor-pointer focus:ring-0", // Remove the focus ring styling
-								)}
-								data-testid={`tab-${id}`}
-								data-compact={isCompactMode}>
-								<div className={cn("flex items-center gap-2", isCompactMode && "justify-center")}>
-									<Icon className="w-4 h-4" />
-									<span className="tab-label">{t(`settings:sections.${id}`)}</span>
-								</div>
-							</TabTrigger>
-						)
-
-						if (isCompactMode) {
-							// Wrap in Tooltip and manually add onClick to the trigger
-							return (
-								<TooltipProvider key={id} delayDuration={300}>
-									<Tooltip>
-										<TooltipTrigger asChild onClick={onSelect}>
-											{/* Clone to avoid ref issues if triggerComponent itself had a key */}
-											{React.cloneElement(triggerComponent)}
-										</TooltipTrigger>
-										<TooltipContent side="right" className="text-base">
-											<p className="m-0">{t(`settings:sections.${id}`)}</p>
-										</TooltipContent>
-									</Tooltip>
-								</TooltipProvider>
-							)
-						} else {
-							// Render trigger directly; TabList will inject onSelect via cloning
-							// Ensure the element passed to TabList has the key
-							return React.cloneElement(triggerComponent, { key: id })
-						}
-					})}
-				</TabList>
-
-				{/* Content area - renders only the active tab (or indexing tab during initial indexing) */}
-				<TabContent
-					ref={contentRef}
-					className={cn("p-0 flex-1 overflow-auto", isIndexing && "opacity-0")}
-					data-testid="settings-content">
-					<SearchIndexProvider value={searchContextValue}>
-						{/* Providers Section */}
-						{renderTab === "providers" && (
-							<div>
-								<SectionHeader>{t("settings:sections.providers")}</SectionHeader>
-
-								<Section>
-									<ApiConfigManager
-										currentApiConfigName={currentApiConfigName}
-										listApiConfigMeta={listApiConfigMeta}
-										onSelectConfig={(configName: string) =>
-											checkUnsaveChanges(() =>
-												vscode.postMessage({ type: "loadApiConfiguration", text: configName }),
-											)
-										}
-										onDeleteConfig={(configName: string) =>
-											vscode.postMessage({ type: "deleteApiConfiguration", text: configName })
-										}
-										onRenameConfig={(oldName: string, newName: string) => {
-											vscode.postMessage({
-												type: "renameApiConfiguration",
-												values: { oldName, newName },
-												apiConfiguration,
-											})
-											prevApiConfigName.current = newName
-										}}
-										onUpsertConfig={(configName: string) =>
-											vscode.postMessage({
-												type: "upsertApiConfiguration",
-												text: configName,
-												apiConfiguration,
-											})
-										}
-									/>
-									<ApiOptions
-										uriScheme={uriScheme}
-										apiConfiguration={apiConfiguration}
-										setApiConfigurationField={setApiConfigurationField}
-										errorMessage={errorMessage}
-										setErrorMessage={setErrorMessage}
-									/>
-								</Section>
-							</div>
-						)}
-
-						{/* Auto-Approve Section */}
-						{renderTab === "autoApprove" && (
-							<AutoApproveSettings
-								alwaysAllowReadOnly={alwaysAllowReadOnly}
-								alwaysAllowReadOnlyOutsideWorkspace={alwaysAllowReadOnlyOutsideWorkspace}
-								alwaysAllowWrite={alwaysAllowWrite}
-								alwaysAllowWriteOutsideWorkspace={alwaysAllowWriteOutsideWorkspace}
-								alwaysAllowWriteProtected={alwaysAllowWriteProtected}
-								alwaysAllowMcp={alwaysAllowMcp}
-								alwaysAllowModeSwitch={alwaysAllowModeSwitch}
-								alwaysAllowSubtasks={alwaysAllowSubtasks}
-								alwaysAllowExecute={alwaysAllowExecute}
-								alwaysAllowFollowupQuestions={alwaysAllowFollowupQuestions}
-								followupAutoApproveTimeoutMs={followupAutoApproveTimeoutMs}
-								allowedCommands={allowedCommands}
-								allowedMaxRequests={allowedMaxRequests ?? undefined}
-								allowedMaxCost={allowedMaxCost ?? undefined}
-								deniedCommands={deniedCommands}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Slash Commands Section */}
-						{renderTab === "slashCommands" && <SlashCommandsSettings />}
-
-						{/* Skills Section */}
-						{renderTab === "skills" && <SkillsSettings />}
-
-						{/* Checkpoints Section */}
-						{renderTab === "checkpoints" && (
-							<CheckpointSettings
-								enableCheckpoints={enableCheckpoints}
-								checkpointTimeout={checkpointTimeout}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Notifications Section */}
-						{renderTab === "notifications" && (
-							<NotificationSettings
-								ttsEnabled={ttsEnabled}
-								ttsSpeed={ttsSpeed}
-								soundEnabled={soundEnabled}
-								soundVolume={soundVolume}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Context Management Section */}
-						{renderTab === "contextManagement" && (
-							<ContextManagementSettings
-								autoCondenseContext={autoCondenseContext}
-								autoCondenseContextPercent={autoCondenseContextPercent}
-								listApiConfigMeta={listApiConfigMeta ?? []}
-								maxOpenTabsContext={maxOpenTabsContext}
-								maxWorkspaceFiles={maxWorkspaceFiles ?? 200}
-								showRooIgnoredFiles={showRooIgnoredFiles}
-								enableSubfolderRules={enableSubfolderRules}
-								maxImageFileSize={maxImageFileSize}
-								maxTotalImageSize={maxTotalImageSize}
-								profileThresholds={profileThresholds}
-								includeDiagnosticMessages={includeDiagnosticMessages}
-								maxDiagnosticMessages={maxDiagnosticMessages}
-								writeDelayMs={writeDelayMs}
-								includeCurrentTime={includeCurrentTime}
-								includeCurrentCost={includeCurrentCost}
-								maxGitStatusFiles={maxGitStatusFiles}
-								customSupportPrompts={customSupportPrompts || {}}
-								setCustomSupportPrompts={setCustomSupportPromptsField}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Terminal Section */}
-						{renderTab === "terminal" && (
-							<TerminalSettings
-								terminalOutputPreviewSize={terminalOutputPreviewSize}
-								terminalShellIntegrationTimeout={terminalShellIntegrationTimeout}
-								terminalShellIntegrationDisabled={terminalShellIntegrationDisabled}
-								terminalCommandDelay={terminalCommandDelay}
-								terminalPowershellCounter={terminalPowershellCounter}
-								terminalZshClearEolMark={terminalZshClearEolMark}
-								terminalZshOhMy={terminalZshOhMy}
-								terminalZshP10k={terminalZshP10k}
-								terminalZdotdir={terminalZdotdir}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Modes Section */}
-						{renderTab === "modes" && <ModesView />}
-
-						{/* MCP Section */}
-						{renderTab === "mcp" && <McpView />}
-
-						{/* Worktrees Section */}
-						{renderTab === "worktrees" && <WorktreesView />}
-
-						{/* Prompts Section */}
-						{renderTab === "prompts" && (
-							<PromptsSettings
-								customSupportPrompts={customSupportPrompts || {}}
-								setCustomSupportPrompts={setCustomSupportPromptsField}
-								includeTaskHistoryInEnhance={includeTaskHistoryInEnhance}
-								setIncludeTaskHistoryInEnhance={(value) =>
-									setCachedStateField("includeTaskHistoryInEnhance", value)
-								}
-							/>
-						)}
-
-						{/* UI Section */}
-						{renderTab === "ui" && (
-							<UISettings
-								reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
-								enterBehavior={enterBehavior ?? "send"}
-								setCachedStateField={setCachedStateField}
-							/>
-						)}
-
-						{/* Experimental Section */}
-						{renderTab === "experimental" && (
-							<ExperimentalSettings
-								setExperimentEnabled={setExperimentEnabled}
-								experiments={experiments}
-								apiConfiguration={apiConfiguration}
-								setApiConfigurationField={setApiConfigurationField}
-								imageGenerationProvider={imageGenerationProvider}
-								openRouterImageApiKey={openRouterImageApiKey as string | undefined}
-								openRouterImageGenerationSelectedModel={
-									openRouterImageGenerationSelectedModel as string | undefined
-								}
-								setImageGenerationProvider={setImageGenerationProvider}
-								setOpenRouterImageApiKey={setOpenRouterImageApiKey}
-								setImageGenerationSelectedModel={setImageGenerationSelectedModel}
-							/>
-						)}
-
-						{/* Language Section */}
-						{renderTab === "language" && (
-							<LanguageSettings language={language || "en"} setCachedStateField={setCachedStateField} />
-						)}
-
-						{/* About Section */}
-						{renderTab === "about" && <About debug={cachedState.debug} setDebug={setDebug} />}
-					</SearchIndexProvider>
-				</TabContent>
 			</div>
 
+			{/* Discard Confirmation Dialog */}
 			<AlertDialog open={isDiscardDialogShow} onOpenChange={setDiscardDialogShow}>
 				<AlertDialogContent>
 					<AlertDialogHeader>

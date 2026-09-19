@@ -33,6 +33,8 @@ console.log("Dynamically loaded translations:", Object.keys(translations))
 i18next.use(initReactI18next).init({
 	lng: "en", // Default language (will be overridden)
 	fallbackLng: "en",
+	resources: translations,
+	defaultNS: "common",
 	debug: false,
 	interpolation: {
 		escapeValue: false, // React already escapes by default
@@ -50,5 +52,8 @@ export function loadTranslations() {
 		}
 	})
 }
+
+// Call loadTranslations immediately to ensure all resources are available synchronously from first render
+loadTranslations()
 
 export default i18next

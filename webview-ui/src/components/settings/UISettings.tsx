@@ -1,22 +1,26 @@
 import { HTMLAttributes, useMemo } from "react"
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
+import { type ThemeType } from "@roo-code/types"
 
 import { SetCachedStateField } from "./types"
 import { SectionHeader } from "./SectionHeader"
 import { Section } from "./Section"
 import { SearchableSetting } from "./SearchableSetting"
+import { ThemeSettings } from "./ThemeSettings"
 import { ExtensionStateContextType } from "@/context/ExtensionStateContext"
 
 interface UISettingsProps extends HTMLAttributes<HTMLDivElement> {
 	reasoningBlockCollapsed: boolean
 	enterBehavior: "send" | "newline"
+	theme?: ThemeType
 	setCachedStateField: SetCachedStateField<keyof ExtensionStateContextType>
 }
 
 export const UISettings = ({
 	reasoningBlockCollapsed,
 	enterBehavior,
+	theme = "linear-dark",
 	setCachedStateField,
 	...props
 }: UISettingsProps) => {
@@ -27,6 +31,17 @@ export const UISettings = ({
 		const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0
 		return isMac ? "⌘" : "Ctrl"
 	}, [])
+
+	const handleThemeChange = (newTheme: ThemeType) => {
+		// Update cached state (adheres to AGENTS.md rule)
+		setCachedStateField("theme", newTheme)
+		// Live preview: immediately update data-theme and notify parent without waiting for Save
+		document.documentElement.setAttribute("data-theme", newTheme)
+		const isLight = newTheme === "clean-light"
+		document.body.classList.toggle("vscode-light", isLight)
+		document.body.classList.toggle("vscode-dark", !isLight)
+		window.parent?.postMessage({ type: "themeChange", theme: newTheme }, "*")
+	}
 
 	const handleReasoningBlockCollapsedChange = (value: boolean) => {
 		setCachedStateField("reasoningBlockCollapsed", value)
@@ -43,6 +58,17 @@ export const UISettings = ({
 
 			<Section>
 				<div className="space-y-6">
+					{/* Theme & Visual Palette Setting */}
+					<SearchableSetting
+						settingId="ui-theme"
+						section="ui"
+						label="Theme & Visual Palette">
+						<ThemeSettings
+							selectedTheme={theme}
+							onThemeChange={handleThemeChange}
+						/>
+					</SearchableSetting>
+
 					{/* Collapse Thinking Messages Setting */}
 					<SearchableSetting
 						settingId="ui-collapse-thinking"

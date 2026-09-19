@@ -47,7 +47,12 @@ const mockExtensionState: {
 		apiModelId: "claude-3-opus-20240229",
 	} as ProviderSettings,
 	currentTaskItem: { id: "test-task-id" },
-	clineMessages: [],
+	clineMessages: [
+		{ type: "say", ts: 1, text: "msg1" },
+		{ type: "say", ts: 2, text: "msg2" },
+		{ type: "say", ts: 3, text: "msg3" },
+		{ type: "say", ts: 4, text: "msg4" },
+	],
 }
 
 // Mock the ExtensionStateContext
@@ -177,6 +182,58 @@ describe("TaskHeader", () => {
 		expect(condenseButton).toBeDisabled()
 		fireEvent.click(condenseButton!)
 		expect(handleCondenseContext).not.toHaveBeenCalled()
+	})
+
+	it("should render compact button in collapsed state", () => {
+		mockModelInfo = { contextWindow: 4000, maxTokens: 1000 }
+		renderTaskHeader()
+
+		const buttons = screen.getAllByRole("button")
+		const compactButton = buttons.find((button) => button.querySelector("svg.lucide-fold-vertical"))
+		expect(compactButton).toBeDefined()
+		expect(compactButton?.querySelector("svg")).toBeInTheDocument()
+	})
+
+	it("should disable compact button when task has fewer than 4 messages", () => {
+		mockModelInfo = { contextWindow: 4000, maxTokens: 1000 }
+		const prev = mockExtensionState.clineMessages
+		mockExtensionState.clineMessages = [{ type: "say", ts: 1, text: "only one" }]
+
+		renderTaskHeader()
+		const buttons = screen.getAllByRole("button")
+		const compactButton = buttons.find((button) => button.querySelector("svg.lucide-fold-vertical"))
+		expect(compactButton).toBeDefined()
+		expect(compactButton).toBeDisabled()
+
+		mockExtensionState.clineMessages = prev
+	})
+
+	it("should dispatch compactTask message to vscode on click", () => {
+		mockPostMessage.mockClear()
+		mockModelInfo = { contextWindow: 4000, maxTokens: 1000 }
+		renderTaskHeader()
+
+		const buttons = screen.getAllByRole("button")
+		const compactButton = buttons.find((button) => button.querySelector("svg.lucide-fold-vertical"))
+		expect(compactButton).toBeDefined()
+		fireEvent.click(compactButton!)
+
+		expect(mockPostMessage).toHaveBeenCalledWith({
+			type: "compactTask",
+			taskId: "test-task-id",
+		})
+	})
+
+	it("should show spinning animation when isCondensing is true", () => {
+		mockModelInfo = { contextWindow: 4000, maxTokens: 1000 }
+		renderTaskHeader({ isCondensing: true })
+
+		const buttons = screen.getAllByRole("button")
+		const compactButton = buttons.find((button) => button.querySelector("svg.lucide-fold-vertical"))
+		expect(compactButton).toBeDefined()
+		expect(compactButton).toBeDisabled()
+		const svg = compactButton?.querySelector("svg.lucide-fold-vertical")
+		expect(svg).toHaveClass("animate-spin")
 	})
 
 	describe("Back to parent task button", () => {

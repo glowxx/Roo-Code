@@ -102,7 +102,10 @@ describe("CreateSkillDialog", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 		mockExtensionState = {
-			customModes: [{ slug: "custom-mode", name: "Custom Mode" }],
+			customModes: [
+				{ slug: "architect", name: "Architect" },
+				{ slug: "custom-mode", name: "Custom Mode" },
+			],
 		}
 	})
 

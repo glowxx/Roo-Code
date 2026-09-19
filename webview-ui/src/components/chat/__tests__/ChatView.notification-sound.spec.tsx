@@ -1,7 +1,7 @@
 // npx vitest run src/components/chat/__tests__/ChatView.notification-sound.spec.tsx
 
 import React from "react"
-import { render, waitFor } from "@/utils/test-utils"
+import { render, waitFor, screen, fireEvent } from "@/utils/test-utils"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { ExtensionStateContextProvider } from "@src/context/ExtensionStateContext"
@@ -611,5 +611,56 @@ describe("ChatView - Sound Debounce", () => {
 		})
 
 		dateNowSpy.mockRestore()
+	})
+
+	it("plays notification sound on taskCompacted message", async () => {
+		mockPlayFunction.mockClear()
+
+		renderChatView()
+
+		mockPostMessage({
+			soundEnabled: true,
+			clineMessages: [{ type: "say", say: "task", ts: Date.now(), text: "Test task" }],
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-view")).toBeInTheDocument()
+		})
+
+		window.postMessage({ type: "taskCompacted" }, "*")
+
+		await waitFor(() => {
+			expect(mockPlayFunction).toHaveBeenCalled()
+		})
+	})
+
+	it("plays error sound and displays warning row on taskCompacted error", async () => {
+		mockPlayFunction.mockClear()
+
+		renderChatView()
+
+		mockPostMessage({
+			soundEnabled: true,
+			clineMessages: [{ type: "say", say: "task", ts: Date.now(), text: "Test task" }],
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-view")).toBeInTheDocument()
+		})
+
+		window.postMessage({ type: "taskCompacted", error: "Context condensation timed out after 60 seconds." }, "*")
+
+		await waitFor(() => {
+			expect(mockPlayFunction).toHaveBeenCalled()
+			expect(screen.getByText("Context condensation timed out after 60 seconds.")).toBeInTheDocument()
+		})
+
+		// Test dismiss
+		const dismissButton = screen.getByText(/dismiss/i)
+		fireEvent.click(dismissButton)
+
+		await waitFor(() => {
+			expect(screen.queryByText("Context condensation timed out after 60 seconds.")).not.toBeInTheDocument()
+		})
 	})
 })

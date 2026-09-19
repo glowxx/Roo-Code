@@ -110,5 +110,16 @@
 	"costs": {
 		"own": "Own",
 		"subtasks": "Subtasks"
+	},
+	"footer": {
+		"unsavedChanges": "Unsaved changes",
+		"allChangesSaved": "All changes saved",
+		"discard": "Discard",
+		"save": "Save Settings",
+		"settings": {
+			"export": "Export Settings",
+			"import": "Import Settings",
+			"reset": "Reset Settings"
+		}
 	}
 }

@@ -151,6 +151,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		{ type: "WAIT_TIMEOUT" | "INIT_TIMEOUT"; timeout: number } | undefined
 	>(undefined)
 	const [isCondensing, setIsCondensing] = useState<boolean>(false)
+	const [compactionError, setCompactionError] = useState<string | null>(null)
 	const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
 	const everVisibleMessagesTsRef = useRef<LRUCache<number, boolean>>(
 		new LRUCache({
@@ -244,6 +245,10 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		},
 		[soundEnabled, playNotification, playCelebration, playProgressLoop],
 	)
+
+	const playErrorSound = useCallback(() => {
+		playSound("notification")
+	}, [playSound])
 
 	function playTts(text: string) {
 		vscode.postMessage({ type: "playTts", text })
@@ -581,6 +586,17 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		(text: string, images: string[]) => {
 			text = text.trim()
 
+			if (text === "/compact") {
+				if (currentTaskItem?.id) {
+					setIsCondensing(true)
+					setSendingDisabled(true)
+					vscode.postMessage({ type: "compactTask", taskId: currentTaskItem.id })
+				}
+				setInputValue("")
+				setSelectedImages([])
+				return
+			}
+
 			if (text || images.length > 0) {
 				// Intercept when the active provider is retired — show a
 				// WarningRow instead of sending anything to the backend.
@@ -850,6 +866,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "focusInput":
 							textAreaRef.current?.focus()
 							break
+						case "clearTask":
+							handleChatReset()
+							break
 					}
 					break
 				case "selectedImages":
@@ -878,6 +897,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "secondaryButtonClick":
 							handleSecondaryButtonClick(message.text ?? "", message.images ?? [])
 							break
+					}
+					break
+				case "compactTaskProgress":
+					setIsCondensing(true)
+					setCompactionError(null)
+					break
+				case "taskCompacted":
+					setIsCondensing(false)
+					setSendingDisabled(false)
+					if (message.error) {
+						playErrorSound()
+						setCompactionError(message.error)
+					} else {
+						setCompactionError(null)
+						playSound("notification")
 					}
 					break
 				case "condenseTaskContextStarted":
@@ -933,6 +967,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			handleSecondaryButtonClick,
 			setCheckpointWarning,
 			playSound,
+			playErrorSound,
 		],
 	)
 
@@ -1542,6 +1577,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 		setIsCondensing(true)
 		setSendingDisabled(true)
+		vscode.postMessage({ type: "compactTask", taskId })
 		vscode.postMessage({ type: "condenseTaskContextRequest", text: taskId })
 	}
 
@@ -1595,6 +1631,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						}
 						contextTokens={apiMetrics.contextTokens}
 						buttonsDisabled={sendingDisabled}
+						isCondensing={isCondensing}
 						handleCondenseContext={handleCondenseContext}
 						todos={latestTodos}
 					/>
@@ -1758,6 +1795,16 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						)}
 						actionText={t("chat:retiredProvider.openSettings")}
 						onAction={() => vscode.postMessage({ type: "switchTab", tab: "settings" })}
+					/>
+				</div>
+			)}
+			{compactionError && (
+				<div className="px-[15px] py-1">
+					<WarningRow
+						title={t("chat:compactionError.title", { defaultValue: "Context Compaction Failed" })}
+						message={compactionError}
+						actionText={t("chat:compactionError.dismiss", { defaultValue: "Dismiss" })}
+						onAction={() => setCompactionError(null)}
 					/>
 				</div>
 			)}

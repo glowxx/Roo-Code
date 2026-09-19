@@ -10,7 +10,8 @@
 		"cache": "Cache",
 		"apiCost": "API Cost",
 		"size": "Size",
-		"condenseContext": "Intelligently condense context",
+		"condenseContext": "Compress conversation history and reclaim context tokens",
+		"compactContext": "Compress conversation history and reclaim context tokens",
 		"contextWindow": "Context Length",
 		"closeAndStart": "Close task and start a new one",
 		"export": "Export task history",
@@ -23,6 +24,10 @@
 	},
 	"unpin": "Unpin",
 	"pin": "Pin",
+	"compactionError": {
+		"title": "Context Compaction Failed",
+		"dismiss": "Dismiss"
+	},
 	"fileChangesInConversation": {
 		"header": "{{count}} file(s) changed in this conversation"
 	},

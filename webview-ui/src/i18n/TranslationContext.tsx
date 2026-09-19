@@ -3,6 +3,32 @@ import { useTranslation } from "react-i18next"
 import i18next, { loadTranslations } from "./setup"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 
+// Helper to resolve translation with fallback to settings namespace
+const resolveTranslation = (i18nInstance: typeof i18next, key: string, options?: Record<string, any>): string => {
+	if (i18nInstance.exists(key, options)) {
+		return i18nInstance.t(key, options)
+	}
+
+	// Smart fallback: if key starts with "footer." or lacks a namespace prefix,
+	// and exists in the "settings:" namespace, translate from settings
+	if (key.startsWith("footer.") || !key.includes(":")) {
+		const settingsKey = key.startsWith("settings:") ? key : `settings:${key}`
+		if (i18nInstance.exists(settingsKey, options)) {
+			return i18nInstance.t(settingsKey, options)
+		}
+	}
+
+	// Fallback from settings:footer.* to common footer.* if needed
+	if (key.startsWith("settings:footer.")) {
+		const commonKey = key.replace(/^settings:/, "")
+		if (i18nInstance.exists(commonKey, options)) {
+			return i18nInstance.t(commonKey, options)
+		}
+	}
+
+	return i18nInstance.t(key, options)
+}
+
 // Create context for translations
 export const TranslationContext = createContext<{
 	t: (key: string, options?: Record<string, any>) => string
@@ -35,7 +61,7 @@ export const TranslationProvider: React.FC<{ children: ReactNode }> = ({ childre
 	// Memoize the translation function to prevent unnecessary re-renders
 	const translate = useCallback(
 		(key: string, options?: Record<string, any>) => {
-			return i18n.t(key, options)
+			return resolveTranslation(i18n, key, options)
 		},
 		[i18n],
 	)

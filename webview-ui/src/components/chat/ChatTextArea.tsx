@@ -3,7 +3,7 @@ import { useEvent } from "react-use"
 import DynamicTextArea from "react-textarea-autosize"
 import { VolumeX, Image, WandSparkles, SendHorizontal, X, ListEnd, Square } from "lucide-react"
 
-import type { ExtensionMessage } from "@roo-code/types"
+import type { ExtensionMessage, Command } from "@roo-code/types"
 
 import { mentionRegex, mentionRegexGlobal, commandRegexGlobal, unescapeSpaces } from "@roo/context-mentions"
 import { WebviewMessage } from "@roo/WebviewMessage"
@@ -27,7 +27,6 @@ import { StandardTooltip } from "@src/components/ui"
 import Thumbnails from "../common/Thumbnails"
 import { ModeSelector } from "./ModeSelector"
 import { ModelSelector } from "./ModelSelector"
-import { ApiConfigSelector } from "./ApiConfigSelector"
 import { AutoApproveDropdown } from "./AutoApproveDropdown"
 import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
 import ContextMenu from "./ContextMenu"
@@ -108,6 +107,18 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				displayName: currentApiConfigName || "", // Use the name directly for display.
 			}
 		}, [listApiConfigMeta, currentApiConfigName])
+
+		const effectiveCommands = useMemo<Command[]>(() => {
+			const base = commands ? [...commands] : []
+			if (!base.some((cmd) => cmd.name === "compact")) {
+				base.push({
+					name: "compact",
+					description: "Compress conversation history and reclaim context tokens",
+					source: "built-in",
+				} as Command)
+			}
+			return base
+		}, [commands])
 
 		const [gitCommits, setGitCommits] = useState<any[]>([])
 		const [showDropdown, setShowDropdown] = useState(false)
@@ -428,7 +439,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								queryItems,
 								fileSearchResults,
 								allModes,
-								commands,
+								effectiveCommands,
 							)
 							const optionsLength = options.length
 
@@ -466,7 +477,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							queryItems,
 							fileSearchResults,
 							allModes,
-							commands,
+							effectiveCommands,
 						)[selectedMenuIndex]
 						if (
 							selectedOption &&
@@ -567,7 +578,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				fileSearchResults,
 				handleHistoryNavigation,
 				resetHistoryNavigation,
-				commands,
+				effectiveCommands,
 				enterBehavior,
 			],
 		)
@@ -754,7 +765,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 			// Helper function to check if a command is valid
 			const isValidCommand = (commandName: string): boolean => {
-				return commands?.some((cmd) => cmd.name === commandName) || false
+				return effectiveCommands?.some((cmd) => cmd.name === commandName) || false
 			}
 
 			// Process the text to highlight mentions and valid commands
@@ -786,7 +797,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 			highlightLayerRef.current.scrollTop = textAreaRef.current.scrollTop
 			highlightLayerRef.current.scrollLeft = textAreaRef.current.scrollLeft
-		}, [commands])
+		}, [effectiveCommands])
 
 		useLayoutEffect(() => {
 			updateHighlights()
@@ -1004,7 +1015,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									modes={allModes}
 									loading={searchLoading}
 									dynamicSearchResults={fileSearchResults}
-									commands={commands}
+									commands={effectiveCommands}
 								/>
 							</div>
 						)}
@@ -1295,49 +1306,44 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					/>
 				)}
 
-				<div className="flex items-center gap-2">
-					<div className="flex items-center gap-2 min-w-0 overflow-clip flex-1">
+				<div className="flex items-center justify-between gap-1.5 w-full min-w-0 overflow-hidden">
+					<div className="flex items-center gap-1.5 min-w-0 overflow-hidden flex-1">
 						<ModeSelector
 							value={mode}
 							title={t("chat:selectMode")}
 							onChange={handleModeChange}
-							triggerClassName="text-ellipsis overflow-hidden flex-shrink-0"
+							triggerClassName="text-ellipsis overflow-hidden shrink-0"
 							modeShortcutText={modeShortcutText}
 							customModes={customModes}
 							customModePrompts={customModePrompts}
 						/>
 						<ModelSelector
 							disabled={selectApiConfigDisabled}
-							triggerClassName="min-w-[28px] text-ellipsis overflow-hidden flex-shrink"
-						/>
-						<ApiConfigSelector
-							value={currentConfigId}
+							triggerTestId="dropdown-trigger"
+							triggerClassName="min-w-0 max-w-[240px] text-ellipsis overflow-hidden flex-1"
+							currentConfigId={currentConfigId}
 							displayName={displayName}
-							disabled={selectApiConfigDisabled}
-							title={t("chat:selectApiConfig")}
-							onChange={handleApiConfigChange}
-							triggerClassName="min-w-[28px] text-ellipsis overflow-hidden flex-shrink"
 							listApiConfigMeta={listApiConfigMeta || []}
 							pinnedApiConfigs={pinnedApiConfigs}
 							togglePinnedApiConfig={togglePinnedApiConfig}
 							lockApiConfigAcrossModes={!!lockApiConfigAcrossModes}
 							onToggleLockApiConfig={handleToggleLockApiConfig}
+							onApiConfigChange={handleApiConfigChange}
 						/>
-						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden flex-shrink" />
+						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden shrink-0" />
 					</div>
-					<div className={cn("flex flex-shrink-0 items-center gap-0.5 h-5 leading-none", "pr-2")}>
+					<div className="flex flex-shrink-0 items-center gap-1 h-8 leading-none pr-1">
 						{isTtsPlaying && (
 							<StandardTooltip content={t("chat:stopTts")}>
 								<button
 									aria-label={t("chat:stopTts")}
 									onClick={() => vscode.postMessage({ type: "stopTts" })}
 									className={cn(
-										"relative inline-flex items-center justify-center",
-										"bg-transparent border-none p-1.5",
-										"rounded-md min-w-[28px] min-h-[28px]",
-										"text-vscode-foreground opacity-85",
+										"h-8 w-8 relative inline-flex items-center justify-center",
+										"bg-transparent border border-border/40",
+										"rounded-md text-vscode-foreground opacity-85",
 										"transition-all duration-150",
-										"hover:opacity-100 hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+										"hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground/60 hover:border-border/70",
 										"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
 										"active:bg-[rgba(255,255,255,0.1)]",
 										"cursor-pointer",

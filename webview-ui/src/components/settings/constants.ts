@@ -41,7 +41,7 @@ export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, Mod
 }
 
 export const PROVIDERS = [
-	{ value: "xkiro", label: "xKiro (Polecany - Darmowe tokeny)", proxy: false },
+	{ value: "xkiro", label: "xKiro (Recommended - Free tokens)", proxy: false },
 	{ value: "openrouter", label: "OpenRouter", proxy: false },
 	{ value: "anthropic", label: "Anthropic", proxy: false },
 	{ value: "gemini", label: "Google Gemini", proxy: false },

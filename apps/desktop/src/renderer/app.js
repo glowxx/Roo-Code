@@ -15,25 +15,42 @@
 		if (saved) currentApiConfig = JSON.parse(saved)
 	} catch (e) {}
 
+	// Folder expansions state
+	const expandedFolders = new Set()
+	let hasUserToggledFolders = false
+	try {
+		const savedExpansions = sessionStorage.getItem("roo-expanded-folders")
+		if (savedExpansions) {
+			const parsed = JSON.parse(savedExpansions)
+			if (Array.isArray(parsed)) {
+				parsed.forEach((p) => expandedFolders.add(p))
+				if (expandedFolders.size > 0) hasUserToggledFolders = true
+			}
+		}
+	} catch (e) {}
+
+	function saveFolderExpansions() {
+		try {
+			sessionStorage.setItem("roo-expanded-folders", JSON.stringify(Array.from(expandedFolders)))
+		} catch (e) {}
+	}
+
 	// DOM Elements
 	const workspaceNameEl = document.getElementById("workspace-name")
 	const openFolderBtn = document.getElementById("open-folder-btn")
 	const gitPill = document.getElementById("git-pill")
 	const gitBranchEl = document.getElementById("git-branch")
-	const agentStatusBadge = document.getElementById("agent-status-badge")
-	const statusTextEl = document.getElementById("status-text")
 	const diffsCountEl = document.getElementById("diffs-count")
 	const terminalCountEl = document.getElementById("terminal-count")
 	const footerWorkspaceEl = document.getElementById("footer-workspace-path")
 	const connectionStatusEl = document.getElementById("connection-status")
 	const webviewFrame = document.getElementById("webview-frame")
-	const themeToggleBtn = document.getElementById("theme-toggle")
-
-	// Header controls
-	const quickApiBtn = document.getElementById("quick-api-btn")
-	const apiPillLabel = document.getElementById("api-pill-label")
-	const quickModelSelect = document.getElementById("quick-model-select")
-	const settingsOpenBtn = document.getElementById("settings-open-btn")
+	// Header & Window controls
+	const windowMinimizeBtn = document.getElementById("window-minimize-btn")
+	const windowMaximizeBtn = document.getElementById("window-maximize-btn")
+	const windowCloseBtn = document.getElementById("window-close-btn")
+	const engineConnectionBadge = document.getElementById("engine-connection-badge")
+	const engineConnectionText = document.getElementById("engine-connection-text")
 
 	// API Modal elements
 	const apiModalBackdrop = document.getElementById("api-modal-backdrop")
@@ -51,6 +68,9 @@
 	const modelSuggestions = document.getElementById("model-suggestions")
 	const saveApiConfigBtn = document.getElementById("save-api-config-btn")
 	const openFullSettingsFromModalBtn = document.getElementById("open-full-settings-from-modal-btn")
+	const settingsOpenBtn = document.getElementById("nav-settings-btn")
+	const quickApiBtn = document.getElementById("quick-api-btn")
+	const apiPillLabel = document.getElementById("api-pill-label")
 
 	// Diffs elements
 	const diffsFileListEl = document.getElementById("diffs-file-list")
@@ -79,6 +99,54 @@
 	let currentPreviewMsg = null
 	let isCodeWrapped = false
 	let isSvgSourceView = false
+	let currentDesktopTab = "chat"
+
+	function switchDesktopTab(targetTab, origin = "user", values = null) {
+		if (!targetTab) return
+		// Loop guard / idempotency check
+		if (currentDesktopTab === targetTab) return
+
+		currentDesktopTab = targetTab
+
+		// Update nav tabs active styling
+		tabs.forEach((t) => t.classList.toggle("active", t.getAttribute("data-tab") === targetTab))
+
+		// Update panels active styling:
+		// "chat" and "settings" both live inside the webview in #tab-chat
+		panels.forEach((p) => {
+			if (targetTab === "settings" || targetTab === "chat") {
+				p.classList.toggle("active", p.id === "tab-chat")
+			} else {
+				p.classList.toggle("active", p.id === `tab-${targetTab}`)
+			}
+		})
+
+		// If switching to files tab and files tree is empty or requires refresh, load files
+		if (targetTab === "files") {
+			const isTreeEmpty = !filesTreeEl || filesTreeEl.children.length === 0 || filesTreeEl.querySelector(".empty-state")
+			if (!currentWorkspace?.files || currentWorkspace.files.length === 0 || isTreeEmpty) {
+				loadWorkspaceFiles()
+			}
+		}
+
+		// If user clicked in desktop shell, notify webview with origin: "sync"
+		if (origin === "user") {
+			if (targetTab === "settings") {
+				forwardToWebview({
+					type: "switchTab",
+					tab: "settings",
+					origin: "sync",
+					values: values || { section: "providers" },
+				})
+			} else if (targetTab === "chat") {
+				forwardToWebview({
+					type: "switchTab",
+					tab: "chat",
+					origin: "sync",
+				})
+			}
+		}
+	}
 
 	// Setup Tabs Navigation
 	const tabs = document.querySelectorAll(".nav-tab")
@@ -87,79 +155,88 @@
 	tabs.forEach((tab) => {
 		tab.addEventListener("click", () => {
 			const targetTab = tab.getAttribute("data-tab")
-			tabs.forEach((t) => t.classList.remove("active"))
-			panels.forEach((p) => p.classList.remove("active"))
-
-			tab.classList.add("active")
-			const targetPanel = document.getElementById(`tab-${targetTab}`)
-			if (targetPanel) targetPanel.classList.add("active")
+			switchDesktopTab(targetTab, "user")
 		})
 	})
 
-	// Theme Toggle
-	let currentTheme = localStorage.getItem("roo-theme") || "dark"
-	if (currentTheme === "light") {
-		document.body.classList.remove("dark-theme")
-		document.body.classList.add("light-theme")
-		updateThemeIcons(true)
+	// Theme Synchronization (5 themes)
+	function applyDesktopTheme(theme) {
+		if (!theme) return
+		const isLight = theme === "clean-light" || theme === "light"
+		document.body.classList.toggle("light-theme", isLight)
+		document.body.classList.toggle("dark-theme", !isLight)
+		document.body.setAttribute("data-theme", theme)
+		localStorage.setItem("roo-theme", theme)
 	}
 
-	themeToggleBtn.addEventListener("click", () => {
-		const isLight = document.body.classList.contains("light-theme")
-		const nextTheme = isLight ? "dark" : "light"
-		if (isLight) {
-			document.body.classList.remove("light-theme")
-			document.body.classList.add("dark-theme")
-			localStorage.setItem("roo-theme", "dark")
-			updateThemeIcons(false)
-		} else {
-			document.body.classList.remove("dark-theme")
-			document.body.classList.add("light-theme")
-			localStorage.setItem("roo-theme", "light")
-			updateThemeIcons(true)
-		}
-		if (webviewFrame?.contentWindow) {
-			webviewFrame.contentWindow.postMessage({ type: "themeChange", theme: nextTheme }, "*")
-		}
+	const savedTheme = localStorage.getItem("roo-theme") || "linear-dark"
+	applyDesktopTheme(savedTheme)
+
+	// Window Controls (Minimize, Maximize, Close)
+	windowMinimizeBtn?.addEventListener("click", () => {
+		window.__desktopAPI?.minimize?.()
+	})
+	windowMaximizeBtn?.addEventListener("click", () => {
+		window.__desktopAPI?.maximize?.()
+	})
+	windowCloseBtn?.addEventListener("click", () => {
+		window.__desktopAPI?.close?.()
 	})
 
 	if (webviewFrame) {
 		webviewFrame.addEventListener("load", () => {
-			const theme = localStorage.getItem("roo-theme") || "dark"
+			const theme = localStorage.getItem("roo-theme") || "linear-dark"
 			webviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
 		})
 	}
 
-	function updateThemeIcons(isLight) {
-		const moon = document.querySelector(".moon-icon")
-		const sun = document.querySelector(".sun-icon")
-		if (isLight) {
-			moon.style.display = "none"
-			sun.style.display = "block"
-		} else {
-			moon.style.display = "block"
-			sun.style.display = "none"
-		}
-	}
-
 	// Folder Selection
-	openFolderBtn.addEventListener("click", () => {
+	openFolderBtn?.addEventListener("click", () => {
 		if (window.__desktopAPI?.selectFolder) {
 			window.__desktopAPI.selectFolder().then((newPath) => {
 				if (newPath) {
+					const name = newPath.split(/[/\\]/).filter(Boolean).pop() || newPath
+					if (workspaceNameEl) {
+						workspaceNameEl.textContent = name
+						workspaceNameEl.title = newPath
+					}
+					if (footerWorkspaceEl) {
+						footerWorkspaceEl.textContent = "Path: " + newPath
+					}
+					if (!currentWorkspace) {
+						currentWorkspace = {}
+					}
+					currentWorkspace.path = newPath
+					currentWorkspace.name = name
+					loadWorkspaceFiles()
 					sendToServer({ type: "getWorkspaceInfo" })
 				}
 			})
 		} else {
 			const newPath = prompt("Enter full path of folder to open:", currentWorkspace?.path || "")
 			if (newPath && newPath.trim()) {
-				sendToServer({ type: "selectFolder", path: newPath.trim() })
+				const trimmed = newPath.trim()
+				const name = trimmed.split(/[/\\]/).filter(Boolean).pop() || trimmed
+				if (workspaceNameEl) {
+					workspaceNameEl.textContent = name
+					workspaceNameEl.title = trimmed
+				}
+				if (footerWorkspaceEl) {
+					footerWorkspaceEl.textContent = "Path: " + trimmed
+				}
+				if (!currentWorkspace) {
+					currentWorkspace = {}
+				}
+				currentWorkspace.path = trimmed
+				currentWorkspace.name = name
+				sendToServer({ type: "selectFolder", path: trimmed })
+				loadWorkspaceFiles()
 			}
 		}
 	})
 
 	// Clear Terminal
-	clearTerminalBtn.addEventListener("click", () => {
+	clearTerminalBtn?.addEventListener("click", () => {
 		terminalLogs = []
 		renderTerminalLogs()
 		terminalCountEl.textContent = "0"
@@ -167,7 +244,7 @@
 
 	// Files Search Filter
 	let searchDebounceTimer = null
-	filesSearchInput.addEventListener("input", (e) => {
+	filesSearchInput?.addEventListener("input", (e) => {
 		clearTimeout(searchDebounceTimer)
 		searchDebounceTimer = setTimeout(() => {
 			const filter = e.target.value.toLowerCase()
@@ -181,6 +258,23 @@
 		if (event.source === webviewFrame?.contentWindow) {
 			const data = event.data
 			if (data) {
+				if (data.type === "themeChange" && data.theme) {
+					applyDesktopTheme(data.theme)
+				}
+				if (data.type === "switchTab" && data.tab) {
+					switchDesktopTab(data.tab, "sync")
+					return
+				}
+				if (data.type === "action" && data.action) {
+					if (data.action === "chatButtonClicked" || (data.action === "switchTab" && data.tab === "chat")) {
+						switchDesktopTab("chat", "sync")
+						return
+					}
+					if (data.action === "settingsButtonClicked" || (data.action === "switchTab" && data.tab === "settings")) {
+						switchDesktopTab("settings", "sync")
+						return
+					}
+				}
 				if (data.type === "upsertApiConfiguration" && data.apiConfiguration) {
 					currentApiConfig = { ...currentApiConfig, ...data.apiConfiguration }
 					updateApiPill(currentApiConfig)
@@ -214,8 +308,16 @@
 
 		socket.onopen = () => {
 			isConnected = true
-			connectionStatusEl.textContent = "Connected to Engine"
-			connectionStatusEl.parentElement.querySelector(".indicator-dot").style.background = "var(--success)"
+			if (connectionStatusEl) {
+				connectionStatusEl.textContent = "Connected to Engine"
+				const dot = connectionStatusEl.parentElement?.querySelector(".indicator-dot")
+				if (dot) dot.style.background = "var(--success)"
+			}
+			if (engineConnectionText) engineConnectionText.textContent = "Connected"
+			if (engineConnectionBadge) {
+				engineConnectionBadge.className = "engine-connection-badge status-connected"
+				engineConnectionBadge.title = "Core Engine: Connected"
+			}
 			sendToServer({ type: "getWorkspaceInfo" })
 		}
 
@@ -230,8 +332,16 @@
 
 		socket.onclose = () => {
 			isConnected = false
-			connectionStatusEl.textContent = "Disconnected (Reconnecting...)"
-			connectionStatusEl.parentElement.querySelector(".indicator-dot").style.background = "var(--danger)"
+			if (connectionStatusEl) {
+				connectionStatusEl.textContent = "Disconnected (Reconnecting...)"
+				const dot = connectionStatusEl.parentElement?.querySelector(".indicator-dot")
+				if (dot) dot.style.background = "var(--danger)"
+			}
+			if (engineConnectionText) engineConnectionText.textContent = "Connecting..."
+			if (engineConnectionBadge) {
+				engineConnectionBadge.className = "engine-connection-badge status-connecting"
+				engineConnectionBadge.title = "Core Engine: Reconnecting..."
+			}
 			setTimeout(connectWebSocket, 2000)
 		}
 
@@ -288,39 +398,62 @@
 				break
 
 			case "fileContent":
-				if (msg.filePath === selectedPreviewFile) {
+				if (
+					msg.filePath === selectedPreviewFile ||
+					(msg.filePath && selectedPreviewFile && msg.filePath.replace(/\\/g, "/") === selectedPreviewFile.replace(/\\/g, "/"))
+				) {
 					renderFilePreview(msg)
+				}
+				break
+
+			case "error":
+				console.error("Server error:", msg.message)
+				if (selectedPreviewFile && previewContentAreaEl && previewContentAreaEl.querySelector(".preview-placeholder")) {
+					previewContentAreaEl.innerHTML = `
+						<div class="empty-state" style="color: var(--danger, #f04438);">
+							<div class="empty-title">Failed to load file preview</div>
+							<div class="empty-subtitle">${escapeHtml(msg.message || "File could not be opened")}</div>
+						</div>
+					`
 				}
 				break
 		}
 	}
 
 	function updateAgentStatus(status) {
-		agentStatusBadge.className = `agent-status-badge status-${status}`
 		const labels = {
-			idle: "Idle",
+			idle: "Connected",
 			thinking: "Thinking...",
 			executing: "Running Command...",
 			waiting_approval: "Waiting for Approval",
 			error: "Error",
 		}
-		statusTextEl.textContent = labels[status] || status
+		if (engineConnectionText) {
+			engineConnectionText.textContent = labels[status] || status
+		}
+		if (engineConnectionBadge) {
+			engineConnectionBadge.className = `engine-connection-badge status-${status === "idle" ? "connected" : status}`
+		}
 	}
 
 	function renderWorkspaceInfo(ws) {
 		if (!ws) return
-		workspaceNameEl.textContent = ws.name || ws.path
-		workspaceNameEl.title = ws.path
-		footerWorkspaceEl.textContent = `Path: ${ws.path}`
-
-		if (ws.branch) {
-			gitPill.style.display = "flex"
-			gitBranchEl.textContent = ws.branch
-		} else {
-			gitPill.style.display = "none"
+		if (workspaceNameEl) {
+			workspaceNameEl.textContent = ws.name || ws.path
+			workspaceNameEl.title = ws.path
+		}
+		if (footerWorkspaceEl) {
+			footerWorkspaceEl.textContent = "Path: " + ws.path
 		}
 
-		renderFilesTree()
+		if (ws.branch) {
+			if (gitPill) gitPill.style.display = "flex"
+			if (gitBranchEl) gitBranchEl.textContent = ws.branch
+		} else {
+			if (gitPill) gitPill.style.display = "none"
+		}
+
+		renderFilesTree(filesSearchInput?.value?.toLowerCase() || "")
 	}
 
 	function renderDiffs() {
@@ -575,6 +708,20 @@
 					type: "binary",
 					badge: ext.toUpperCase(),
 				}
+			case "py":
+			case "pyw":
+				return {
+					icon: `<svg class="file-icon icon-code" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
+					type: "code",
+					badge: "PY",
+				}
+			case "yaml":
+			case "yml":
+				return {
+					icon: `<svg class="file-icon icon-yaml" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>`,
+					type: "yaml",
+					badge: "YAML",
+				}
 			default:
 				return {
 					icon: `<svg class="file-icon icon-doc" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
@@ -584,44 +731,271 @@
 		}
 	}
 
-	function renderFilesTree(filter = "") {
-		const files = currentWorkspace?.files || []
-		const filtered = filter ? files.filter((f) => f.toLowerCase().includes(filter)) : files
+	async function loadWorkspaceFiles() {
+		try {
+			const res = await fetch("/api/files")
+			if (res.ok) {
+				const data = await res.json()
+				if (data && Array.isArray(data.files)) {
+					if (!currentWorkspace) {
+						currentWorkspace = { files: [] }
+					}
+					currentWorkspace.files = data.files
+					renderFilesTree(data.files, filesSearchInput?.value?.trim().toLowerCase() || "")
+					if (currentWorkspace.name) {
+						return data.files
+					}
+				}
+			}
+		} catch (err) {
+			console.warn("Failed to load files from /api/files:", err)
+		}
 
-		if (filtered.length === 0) {
-			filesTreeEl.innerHTML = '<div class="empty-state">No files found</div>'
+		try {
+			const wsRes = await fetch("/api/workspace")
+			if (wsRes.ok) {
+				const wsData = await wsRes.json()
+				if (wsData) {
+					currentWorkspace = wsData
+					renderWorkspaceInfo(wsData)
+					return wsData.files
+				}
+			}
+		} catch (e) {
+			console.error("Failed to load workspace from /api/workspace:", e)
+		}
+	}
+
+	function ensureParentFoldersExpanded(filePath) {
+		if (!filePath) return
+		const parts = filePath.split(/[\\/]/).filter(Boolean)
+		let cur = ""
+		for (let i = 0; i < parts.length - 1; i++) {
+			cur = cur ? `${cur}/${parts[i]}` : parts[i]
+			expandedFolders.add(cur)
+		}
+	}
+
+	function buildTree(files) {
+		const root = {
+			name: "",
+			path: "",
+			type: "folder",
+			children: new Map(),
+		}
+
+		for (const rawPath of files) {
+			if (typeof rawPath !== "string") continue
+			const parts = rawPath.split(/[\\/]/).filter(Boolean)
+			if (parts.length === 0) continue
+
+			let current = root
+			let currentPath = ""
+
+			for (let i = 0; i < parts.length; i++) {
+				const segment = parts[i]
+				const isFile = i === parts.length - 1
+				currentPath = currentPath ? `${currentPath}/${segment}` : segment
+
+				if (isFile) {
+					current.children.set(segment, {
+						type: "file",
+						name: segment,
+						path: currentPath,
+					})
+				} else {
+					let folder = current.children.get(segment)
+					if (!folder || folder.type !== "folder") {
+						folder = {
+							type: "folder",
+							name: segment,
+							path: currentPath,
+							children: new Map(),
+						}
+						current.children.set(segment, folder)
+					}
+					current = folder
+				}
+			}
+		}
+
+		return root
+	}
+
+	function renderTreeNodes(childrenMap, depth = 0, isSearchActive = false) {
+		const nodes = Array.from(childrenMap.values())
+		nodes.sort((a, b) => {
+			if (a.type !== b.type) {
+				return a.type === "folder" ? -1 : 1
+			}
+			return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true })
+		})
+
+		let html = ""
+		for (const node of nodes) {
+			if (node.type === "folder") {
+				const isExpanded = isSearchActive || expandedFolders.has(node.path)
+				const paddingLeft = 8 + depth * 14
+				html += `
+					<div class="folder-node ${isExpanded ? "expanded" : ""}" data-folder-path="${escapeHtml(node.path)}">
+						<div class="folder-header" data-folder-path="${escapeHtml(node.path)}" style="padding-left: ${paddingLeft}px;" title="${escapeHtml(node.path)}">
+							<span class="folder-chevron">
+								<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+							</span>
+							<span class="folder-icon">
+								<svg class="icon-folder-closed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+								<svg class="icon-folder-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"></path></svg>
+							</span>
+							<span class="folder-name">${escapeHtml(node.name)}</span>
+						</div>
+						<div class="folder-children">
+							${renderTreeNodes(node.children, depth + 1, isSearchActive)}
+						</div>
+					</div>
+				`
+			} else {
+				const isSelected = selectedPreviewFile === node.path ? "selected" : ""
+				const iconInfo = getFileIconInfo(node.path)
+				const paddingLeft = 8 + depth * 14 + 19
+				html += `
+					<div class="file-node ${isSelected}" data-path="${escapeHtml(node.path)}" title="${escapeHtml(node.path)}" style="padding-left: ${paddingLeft}px;">
+						${iconInfo.icon}
+						<span class="file-name">${escapeHtml(node.name)}</span>
+					</div>
+				`
+			}
+		}
+		return html
+	}
+
+	function renderFilesTree(arg1, arg2) {
+		let files = null
+		let filter = null
+
+		if (Array.isArray(arg1)) {
+			files = arg1
+			if (typeof arg2 === "string") {
+				filter = arg2
+			}
+		} else if (typeof arg1 === "string") {
+			filter = arg1
+			if (Array.isArray(arg2)) {
+				files = arg2
+			}
+		} else if (Array.isArray(arg2)) {
+			files = arg2
+		} else if (typeof arg2 === "string") {
+			filter = arg2
+		}
+
+		if (!files) {
+			files = currentWorkspace?.files || []
+		}
+		if (typeof filter !== "string") {
+			filter = filesSearchInput?.value || ""
+		}
+
+		// Guard against TypeError: ensure files is an array and filter out null/undefined/non-string items
+		if (!Array.isArray(files)) {
+			files = []
+		}
+		const validFiles = files.filter((f) => typeof f === "string" && f.trim().length > 0)
+
+		if (currentWorkspace && Array.isArray(arg1)) {
+			currentWorkspace.files = validFiles
+		}
+
+		if (!filesTreeEl) return
+
+		const searchFilter = (filter || "").trim().toLowerCase()
+		const isSearchActive = searchFilter.length > 0
+
+		// Filter files if search is active
+		const filteredFiles = isSearchActive
+			? validFiles.filter((f) => {
+				const normalized = f.replace(/\\/g, "/")
+				return normalized.toLowerCase().includes(searchFilter)
+			})
+			: validFiles
+
+		if (filteredFiles.length === 0) {
+			if (isSearchActive) {
+				filesTreeEl.innerHTML = `
+					<div class="empty-state">
+						<svg class="empty-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+						</svg>
+						<div class="empty-title">No files matching &quot;${escapeHtml(searchFilter)}&quot;</div>
+						<div class="empty-subtitle">Try a different search query</div>
+					</div>
+				`
+			} else {
+				filesTreeEl.innerHTML = `
+					<div class="empty-state">
+						<svg class="empty-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+						</svg>
+						<div class="empty-title">No files found in this workspace</div>
+						<div class="empty-subtitle">Workspace is empty or files are ignored</div>
+					</div>
+				`
+			}
 			return
 		}
 
-		let html = ""
-		filtered.forEach((f) => {
-			const isSelected = selectedPreviewFile === f ? "selected" : ""
-			const parts = f.split("/")
-			const fileName = parts.pop() || f
-			const dirPath = parts.join("/")
-			const iconInfo = getFileIconInfo(f)
-			html += `
-				<div class="file-node ${isSelected}" data-path="${escapeHtml(f)}" title="${escapeHtml(f)}">
-					${iconInfo.icon}
-					<span class="file-name">${escapeHtml(fileName)}</span>
-					${dirPath ? `<span class="file-dir">${escapeHtml(dirPath)}</span>` : ""}
-				</div>
-			`
-		})
-		filesTreeEl.innerHTML = html
+		const treeRoot = buildTree(filteredFiles)
+
+		// Auto-expand top-level folders on first load if user hasn't toggled folders yet
+		if (expandedFolders.size === 0 && !hasUserToggledFolders && !isSearchActive) {
+			for (const child of treeRoot.children.values()) {
+				if (child.type === "folder") {
+					expandedFolders.add(child.path)
+				}
+			}
+		}
+
+		// If there is an active selected preview file, make sure its enclosing folders are expanded
+		if (selectedPreviewFile && !isSearchActive) {
+			ensureParentFoldersExpanded(selectedPreviewFile)
+		}
+
+		filesTreeEl.innerHTML = renderTreeNodes(treeRoot.children, 0, isSearchActive)
 	}
 
 	filesTreeEl?.addEventListener("click", (e) => {
-		const node = e.target.closest(".file-node")
-		if (!node) return
-		const path = node.getAttribute("data-path")
-		if (!path) return
-		selectedPreviewFile = path
-		filesTreeEl.querySelectorAll(".file-node.selected").forEach((n) => n.classList.remove("selected"))
-		node.classList.add("selected")
-		previewFilenameEl.textContent = path
-		previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
-		sendToServer({ type: "readFile", filePath: path })
+		// 1. Check folder header click
+		const folderHeader = e.target.closest(".folder-header")
+		if (folderHeader) {
+			const folderNode = folderHeader.closest(".folder-node")
+			const folderPath = folderHeader.getAttribute("data-folder-path")
+			if (folderNode && folderPath) {
+				hasUserToggledFolders = true
+				const isNowExpanded = folderNode.classList.toggle("expanded")
+				if (isNowExpanded) {
+					expandedFolders.add(folderPath)
+				} else {
+					expandedFolders.delete(folderPath)
+				}
+				saveFolderExpansions()
+			}
+			return
+		}
+
+		// 2. Check file node click
+		const fileNode = e.target.closest(".file-node")
+		if (fileNode) {
+			const rawPath = fileNode.getAttribute("data-path")
+			if (!rawPath) return
+			const filePath = rawPath.replace(/\\/g, "/")
+			selectedPreviewFile = filePath
+			filesTreeEl.querySelectorAll(".file-node.selected").forEach((n) => n.classList.remove("selected"))
+			fileNode.classList.add("selected")
+			if (previewFilenameEl) previewFilenameEl.textContent = filePath
+			if (previewContentAreaEl) {
+				previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
+			}
+			sendToServer({ type: "readFile", filePath })
+		}
 	})
 
 	function renderFilePreview(msg) {
@@ -820,15 +1194,19 @@
 			defaultBaseUrl: "https://api.xkiro.com/v1",
 			defaultModel: "deepseek/deepseek-chat",
 			showBaseUrl: true,
-			baseUrlHint: "Dla xKiro domyślny adres to: https://api.xkiro.com/v1",
-			keyHint: 'Dla xKiro zarejestruj się na <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a>, aby odebrać darmowe tokeny.',
-			keyPlaceholder: "Wklej swój klucz API xKiro...",
+			baseUrlHint: "Default xKiro endpoint: https://api.xkiro.com/v1",
+			keyHint: 'For xKiro, sign up at <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a> to get free tokens.',
+			keyPlaceholder: "Enter your xKiro API key...",
 			models: [
-				{ id: "deepseek/deepseek-chat", label: "xKiro DeepSeek-V3 (Bardzo szybki i tani)" },
-				{ id: "deepseek/deepseek-reasoner", label: "xKiro DeepSeek-R1 (Myślenie i dedukcja)" },
-				{ id: "anthropic/claude-3.7-sonnet", label: "xKiro Claude 3.7 Sonnet (Najwyższa jakość)" },
+				{ id: "deepseek/deepseek-chat", label: "xKiro DeepSeek-V3" },
+				{ id: "deepseek/deepseek-reasoner", label: "xKiro DeepSeek-R1" },
+				{ id: "anthropic/claude-3.7-sonnet", label: "xKiro Claude 3.7 Sonnet" },
+				{ id: "anthropic/claude-3.5-sonnet", label: "xKiro Claude 3.5 Sonnet" },
 				{ id: "openai/gpt-4o", label: "xKiro GPT-4o" },
+				{ id: "openai/o1", label: "xKiro o1" },
+				{ id: "openai/o3-mini", label: "xKiro o3-mini" },
 				{ id: "google/gemini-2.5-pro", label: "xKiro Gemini 2.5 Pro" },
+				{ id: "google/gemini-2.5-flash", label: "xKiro Gemini 2.5 Flash" },
 				{ id: "qwen/qwen-2.5-coder-32b", label: "xKiro Qwen 2.5 Coder 32B" },
 			],
 		},
@@ -837,8 +1215,8 @@
 			defaultBaseUrl: "https://openrouter.ai/api/v1",
 			defaultModel: "anthropic/claude-3.7-sonnet",
 			showBaseUrl: false,
-			baseUrlHint: "Domyślny adres OpenRouter: https://openrouter.ai/api/v1",
-			keyHint: 'Pobierz klucz z <a href="https://openrouter.ai/keys" target="_blank" class="link-accent">openrouter.ai/keys</a>',
+			baseUrlHint: "Default OpenRouter endpoint: https://openrouter.ai/api/v1",
+			keyHint: 'Get your key from <a href="https://openrouter.ai/keys" target="_blank" class="link-accent">openrouter.ai/keys</a>',
 			keyPlaceholder: "sk-or-v1-...",
 			models: [
 				{ id: "anthropic/claude-3.7-sonnet", label: "Claude 3.7 Sonnet" },
@@ -853,8 +1231,8 @@
 			defaultBaseUrl: "",
 			defaultModel: "claude-3-7-sonnet-20250219",
 			showBaseUrl: false,
-			baseUrlHint: "Oficjalny endpoint Anthropic",
-			keyHint: "Pobierz klucz z konsoli Anthropic (sk-ant-...)",
+			baseUrlHint: "Official Anthropic API endpoint",
+			keyHint: "Get your key from Anthropic Console (sk-ant-...)",
 			keyPlaceholder: "sk-ant-api03-...",
 			models: [
 				{ id: "claude-3-7-sonnet-20250219", label: "Claude 3.7 Sonnet" },
@@ -867,8 +1245,8 @@
 			defaultBaseUrl: "",
 			defaultModel: "gpt-4o",
 			showBaseUrl: false,
-			baseUrlHint: "Oficjalny endpoint OpenAI",
-			keyHint: "Pobierz klucz ze strony OpenAI (sk-...)",
+			baseUrlHint: "Official OpenAI API endpoint",
+			keyHint: "Get your key from OpenAI Platform (sk-...)",
 			keyPlaceholder: "sk-...",
 			models: [
 				{ id: "gpt-4o", label: "GPT-4o" },
@@ -881,8 +1259,8 @@
 			defaultBaseUrl: "",
 			defaultModel: "gemini-2.5-pro",
 			showBaseUrl: false,
-			baseUrlHint: "Google Generative AI",
-			keyHint: "Pobierz klucz z Google AI Studio (AIza...)",
+			baseUrlHint: "Google Generative AI endpoint",
+			keyHint: "Get your key from Google AI Studio (AIza...)",
 			keyPlaceholder: "AIzaSy...",
 			models: [
 				{ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
@@ -895,9 +1273,9 @@
 			defaultBaseUrl: "http://localhost:11434",
 			defaultModel: "llama3.1",
 			showBaseUrl: true,
-			baseUrlHint: "Domyślny adres instancji Ollama: http://localhost:11434",
-			keyHint: "Ollama działa lokalnie na Twoim komputerze. Klucz API nie jest wymagany.",
-			keyPlaceholder: "(Opcjonalny)",
+			baseUrlHint: "Default Ollama instance: http://localhost:11434",
+			keyHint: "Ollama runs locally on your machine. API key is not required.",
+			keyPlaceholder: "(Optional)",
 			models: [
 				{ id: "llama3.1", label: "Llama 3.1" },
 				{ id: "qwen2.5-coder:7b", label: "Qwen 2.5 Coder 7B" },
@@ -909,9 +1287,9 @@
 			defaultBaseUrl: "http://localhost:8000/v1",
 			defaultModel: "default",
 			showBaseUrl: true,
-			baseUrlHint: "Wpisz pełny endpoint kompatybilny z OpenAI (kończący się na /v1)",
-			keyHint: "Wpisz klucz API wymagany przez dany serwer.",
-			keyPlaceholder: "Klucz API...",
+			baseUrlHint: "Enter full OpenAI-compatible endpoint (ending in /v1)",
+			keyHint: "Enter API key required by the server.",
+			keyPlaceholder: "API Key...",
 			models: [],
 		},
 	}
@@ -919,7 +1297,7 @@
 	function updateApiPill(config) {
 		if (!apiPillLabel) return
 		if (!config) {
-			apiPillLabel.textContent = "API: Konfiguruj"
+			apiPillLabel.textContent = "API: Configure"
 			return
 		}
 		const provider = config.apiProvider || "xkiro"
@@ -963,53 +1341,16 @@
 		}
 
 		if (!hasKey) {
-			apiPillLabel.textContent = `API: ${pName} (Brak klucza)`
+			apiPillLabel.textContent = `API: ${pName} (No key)`
 		} else if (shortModel) {
 			apiPillLabel.textContent = `API: ${pName} (${shortModel})`
 		} else {
 			apiPillLabel.textContent = `API: ${pName}`
 		}
-
-		updateQuickModelSelect(config)
-	}
-
-	function updateQuickModelSelect(config) {
-		if (!quickModelSelect) return
-		const provider = config?.apiProvider || "xkiro"
-		const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.xkiro
-		const activeModel =
-			config?.xkiroModelId ||
-			config?.apiModelId ||
-			config?.openAiModelId ||
-			config?.openRouterModelId ||
-			config?.ollamaModelId ||
-			preset.defaultModel
-
-		let models = [...preset.models]
-		// If current active model is not in the preset list, add it at the beginning
-		if (activeModel && !models.some((m) => m.id === activeModel)) {
-			models.unshift({
-				id: activeModel,
-				label: activeModel.split("/").pop(),
-			})
-		}
-
-		quickModelSelect.innerHTML = models
-			.map((m) => `<option value="${m.id}" ${m.id === activeModel ? "selected" : ""}>${m.label}</option>`)
-			.join("")
-
-		quickModelSelect.value = activeModel
 	}
 
 	function openSettingsTab() {
-		// Switch outer container to chat tab
-		const chatTabBtn = document.querySelector('.nav-tab[data-tab="chat"]')
-		if (chatTabBtn) {
-			chatTabBtn.click()
-		}
-		// Direct webview to settings tab
-		forwardToWebview({ type: "action", action: "switchTab", tab: "settings" })
-		sendToServer({ type: "webviewMessage", message: { type: "switchTab", tab: "settings" } })
+		switchDesktopTab("settings", "user", { section: "providers" })
 	}
 
 	function openApiModal() {
@@ -1164,8 +1505,7 @@
 
 		// Also forward to webview iframe so it updates state immediately
 		forwardToWebview({
-			type: "action",
-			action: "state",
+			type: "state",
 			state: {
 				apiConfiguration: currentApiConfig,
 			},
@@ -1187,49 +1527,6 @@
 	cancelApiModalBtn?.addEventListener("click", closeApiModal)
 	saveApiConfigBtn?.addEventListener("click", saveApiConfig)
 
-	quickModelSelect?.addEventListener("change", (e) => {
-		const selectedModel = e.target.value
-		if (!selectedModel) return
-
-		const provider = currentApiConfig?.apiProvider || "xkiro"
-		let modelPatch = {
-			apiModelId: selectedModel,
-		}
-		if (provider === "xkiro") {
-			modelPatch.xkiroModelId = selectedModel
-			modelPatch.openAiModelId = selectedModel
-		} else if (provider === "openrouter") {
-			modelPatch.openRouterModelId = selectedModel
-		} else if (provider === "openai" || provider === "openai-compatible") {
-			modelPatch.openAiModelId = selectedModel
-		} else if (provider === "ollama") {
-			modelPatch.ollamaModelId = selectedModel
-		}
-
-		currentApiConfig = { ...currentApiConfig, ...modelPatch }
-		localStorage.setItem("roo-quick-api-config", JSON.stringify(currentApiConfig))
-
-		// Send to server / extension
-		sendToServer({
-			type: "webviewMessage",
-			message: {
-				type: "upsertApiConfiguration",
-				text: currentApiProfileName || "default",
-				apiConfiguration: currentApiConfig,
-			},
-		})
-
-		// Also forward to webview iframe so it updates state immediately
-		forwardToWebview({
-			type: "action",
-			action: "state",
-			state: {
-				apiConfiguration: currentApiConfig,
-			},
-		})
-
-		updateApiPill(currentApiConfig)
-	})
 
 	apiProviderSelect?.addEventListener("change", (e) => {
 		updateModalFieldsForProvider(e.target.value)
@@ -1263,4 +1560,5 @@
 
 	// Initialize
 	connectWebSocket()
+	loadWorkspaceFiles()
 })()

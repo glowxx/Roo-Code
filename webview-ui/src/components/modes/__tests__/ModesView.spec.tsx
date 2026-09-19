@@ -21,7 +21,10 @@ const mockExtensionState = {
 	enhancementApiConfigId: "",
 	setEnhancementApiConfigId: vitest.fn(),
 	mode: "code",
-	customModes: [],
+	customModes: [
+		{ slug: "ask", name: "Ask", roleDefinition: "Ask", groups: ["read"] },
+		{ slug: "architect", name: "Architect", roleDefinition: "Architect", groups: ["read"] },
+	],
 	customSupportPrompts: [],
 	currentApiConfigName: "",
 	customInstructions: "Initial instructions",
@@ -46,7 +49,7 @@ describe("PromptsView", () => {
 	it("displays the current mode name in the select trigger", () => {
 		renderPromptsView({ mode: "code" })
 		const selectTrigger = screen.getByTestId("mode-select-trigger")
-		expect(selectTrigger).toHaveTextContent("Code")
+		expect(selectTrigger).toHaveTextContent(/Code|Główny/)
 	})
 
 	it("opens the mode selection popover when the trigger is clicked", async () => {

@@ -25,6 +25,33 @@
 		"cancelButton": "Cancel",
 		"discardButton": "Discard changes"
 	},
+	"categories": {
+		"providers": "Providers & Models",
+		"modes_prompts": "Modes & Prompts",
+		"context": "Context Management",
+		"permissions": "Permissions & Auto-Approve",
+		"tools": "Tools & Terminal",
+		"appearance": "Appearance & Environment"
+	},
+	"categoryDescriptions": {
+		"providers": "Configure AI model connections, API profiles, and provider credentials.",
+		"modes_prompts": "Customize assistant modes, system instructions, slash commands, and skills.",
+		"context": "Control context window size, history condensation, token limits, and checkpoints.",
+		"permissions": "Define security rules and permissions for auto-approving actions.",
+		"tools": "Configure terminal shell integration, MCP servers, and Git worktrees.",
+		"appearance": "Customize UI preferences, notifications, language, and experimental features."
+	},
+	"footer": {
+		"unsavedChanges": "Unsaved changes",
+		"allChangesSaved": "All changes saved",
+		"discard": "Discard",
+		"save": "Save Settings",
+		"settings": {
+			"export": "Export Settings",
+			"import": "Import Settings",
+			"reset": "Reset Settings"
+		}
+	},
 	"sections": {
 		"providers": "Providers",
 		"modes": "Modes",
@@ -913,13 +940,6 @@
 		"noMatchFound": "No match found",
 		"useCustomModel": "Use custom: {{modelId}}",
 		"simplifiedExplanation": "You can adjust detailed model settings later."
-	},
-	"footer": {
-		"settings": {
-			"import": "Import",
-			"export": "Export",
-			"reset": "Reset"
-		}
 	},
 	"thinkingBudget": {
 		"maxTokens": "Max Tokens",

@@ -46,10 +46,12 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 }
 
 const App = () => {
-	const { didHydrateState, showWelcome, shouldShowAnnouncement, renderContext } = useExtensionState()
+	const { didHydrateState, showWelcome, shouldShowAnnouncement, renderContext, theme } = useExtensionState()
 
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 	const [tab, setTab] = useState<Tab>("chat")
+	const tabRef = useRef<Tab>("chat")
+	tabRef.current = tab
 
 	const [deleteMessageDialogState, setDeleteMessageDialogState] = useState<DeleteMessageDialogState>({
 		isOpen: false,
@@ -68,38 +70,83 @@ const App = () => {
 	const settingsRef = useRef<SettingsViewRef>(null)
 	const chatViewRef = useRef<ChatViewRef>(null)
 
-	const switchTab = useCallback((newTab: Tab) => {
-		setCurrentSection(undefined)
+	const [currentSection, setCurrentSection] = useState<string | undefined>(undefined)
+	const currentSectionRef = useRef<string | undefined>(undefined)
+	currentSectionRef.current = currentSection
+
+	const switchTab = useCallback((newTab: Tab, origin: "user" | "sync" = "user", section?: string) => {
+		// Idempotency check: if tab and section are already active, do nothing
+		if (tabRef.current === newTab && (section === undefined || section === currentSectionRef.current)) {
+			return
+		}
+
+		const applySwitch = () => {
+			setTab(newTab)
+			tabRef.current = newTab
+			if (section !== undefined) {
+				setCurrentSection(section)
+				currentSectionRef.current = section
+			} else {
+				setCurrentSection(undefined)
+				currentSectionRef.current = undefined
+			}
+			// Only notify parent shell when initiated by user action within webview
+			if (origin === "user") {
+				window.parent?.postMessage({ type: "switchTab", tab: newTab, origin: "webview" }, "*")
+			}
+		}
 
 		if (settingsRef.current?.checkUnsaveChanges) {
-			settingsRef.current.checkUnsaveChanges(() => setTab(newTab))
+			settingsRef.current.checkUnsaveChanges(applySwitch)
 		} else {
-			setTab(newTab)
+			applySwitch()
 		}
 	}, [])
 
-	const [currentSection, setCurrentSection] = useState<string | undefined>(undefined)
+	useEffect(() => {
+		if (theme) {
+			document.documentElement.setAttribute("data-theme", theme)
+			const isLight = (theme as string) === "clean-light" || (theme as string) === "light"
+			document.body.classList.toggle("vscode-light", isLight)
+			document.body.classList.toggle("vscode-dark", !isLight)
+		}
+	}, [theme])
 
 	const onMessage = useCallback(
 		(e: MessageEvent) => {
 			const message: ExtensionMessage = e.data
 
+			if ((message as any)?.type === "themeChange") {
+				const currentTheme = (message as any).theme
+				if (currentTheme) {
+					document.documentElement.setAttribute("data-theme", currentTheme)
+					const isLight = currentTheme === "clean-light" || currentTheme === "light"
+					document.body.classList.toggle("vscode-light", isLight)
+					document.body.classList.toggle("vscode-dark", !isLight)
+				}
+				return
+			}
+
+			if ((message as any)?.type === "switchTab" && (message as any).tab) {
+				const targetTab = (message as any).tab as Tab
+				const targetSection = (message as any).values?.section as string | undefined
+				switchTab(targetTab, "sync", targetSection)
+				return
+			}
+
 			if (message.type === "action" && message.action) {
 				// Handle switchTab action with tab parameter
 				if (message.action === "switchTab" && message.tab) {
 					const targetTab = message.tab as Tab
-					switchTab(targetTab)
-					// Extract targetSection from values if provided
 					const targetSection = message.values?.section as string | undefined
-					setCurrentSection(targetSection)
+					switchTab(targetTab, "sync", targetSection)
 				} else {
 					// Handle other actions using the mapping
 					const newTab = tabsByMessageAction[message.action]
 					const section = message.values?.section as string | undefined
 
 					if (newTab) {
-						switchTab(newTab)
-						setCurrentSection(section)
+						switchTab(newTab, "sync", section)
 					}
 				}
 			}
@@ -176,7 +223,14 @@ const App = () => {
 		<>
 			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
 			{tab === "settings" && (
-				<SettingsView ref={settingsRef} onDone={() => setTab("chat")} targetSection={currentSection} />
+				<SettingsView
+					ref={settingsRef}
+					onDone={() => {
+						setTab("chat")
+						window.parent?.postMessage({ type: "action", action: "chatButtonClicked" }, "*")
+					}}
+					targetSection={currentSection}
+				/>
 			)}
 			<ChatView
 				ref={chatViewRef}

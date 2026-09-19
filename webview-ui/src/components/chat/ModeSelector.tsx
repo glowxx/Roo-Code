@@ -219,12 +219,12 @@ export const ModeSelector = ({
 					disabled={disabled}
 					data-testid="mode-selector-trigger"
 					className={cn(
-						"inline-flex items-center relative whitespace-nowrap px-1.5 py-1 text-xs",
-						"bg-transparent border border-[rgba(255,255,255,0.08)] rounded-md text-vscode-foreground",
+						"h-8 inline-flex items-center relative whitespace-nowrap px-2 text-xs",
+						"bg-transparent border border-border/40 rounded-md text-vscode-foreground",
 						"transition-all duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder focus-visible:ring-inset",
 						disabled
 							? "opacity-50 cursor-not-allowed"
-							: "opacity-90 hover:opacity-100 hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)] cursor-pointer",
+							: "opacity-90 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground/60 hover:border-border/70 cursor-pointer",
 						triggerClassName,
 						!disabled && !hasOpenedModeSelector
 							? "bg-primary opacity-90 hover:bg-primary-hover text-vscode-button-foreground"

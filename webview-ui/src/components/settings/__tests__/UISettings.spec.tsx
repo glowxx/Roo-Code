@@ -41,4 +41,19 @@ describe("UISettings", () => {
 		rerender(<UISettings {...defaultProps} reasoningBlockCollapsed={true} />)
 		expect(checkbox.checked).toBe(true)
 	})
+
+	it("renders theme cards and calls setCachedStateField when a theme is selected", async () => {
+		const setCachedStateField = vi.fn()
+		const { getByTestId } = render(
+			<UISettings {...defaultProps} theme="linear-dark" setCachedStateField={setCachedStateField} />,
+		)
+
+		const oledCard = getByTestId("theme-card-oled-black")
+		expect(oledCard).toBeTruthy()
+
+		fireEvent.click(oledCard)
+		await waitFor(() => {
+			expect(setCachedStateField).toHaveBeenCalledWith("theme", "oled-black")
+		})
+	})
 })

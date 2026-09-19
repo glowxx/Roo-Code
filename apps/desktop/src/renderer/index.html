@@ -9,7 +9,7 @@
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="dark-theme">
+<body class="dark-theme" data-theme="linear-dark">
 	<div id="desktop-app">
 		<!-- Luxury Modern Header (Linear / Raycast tier) -->
 		<header class="app-header">
@@ -81,59 +81,43 @@
 						</svg>
 						<span>Files</span>
 					</button>
+					<button class="nav-tab" id="nav-settings-btn" data-tab="settings" title="Settings">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="3"></circle>
+							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+						</svg>
+						<span>Settings</span>
+					</button>
 				</nav>
 			</div>
 
-			<!-- Right Status & Controls -->
+			<!-- Right Status & Controls: Engine connection indicator & Window controls -->
 			<div class="header-right">
-				<div class="agent-status-badge status-idle" id="agent-status-badge">
-					<span class="status-dot"></span>
-					<span class="status-text" id="status-text">Idle</span>
+				<!-- Core Engine Connection Indicator -->
+				<div class="engine-connection-badge status-connected" id="engine-connection-badge" title="Core Engine Connection Status">
+					<span class="connection-dot"></span>
+					<span class="connection-text" id="engine-connection-text">Connected</span>
 				</div>
 
-				<!-- Quick AI Model Selector -->
-				<div class="quick-model-wrapper" id="quick-model-wrapper" title="Szybki wybór modelu AI (xKiro, DeepSeek, Claude, GPT, Gemini)">
-					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path>
-						<path d="M12 6v6l4 2"></path>
-					</svg>
-					<select class="quick-model-select" id="quick-model-select" aria-label="Wybierz Model AI">
-					</select>
+				<!-- Desktop System Window Controls (Minimize, Maximize, Close) -->
+				<div class="window-controls">
+					<button class="window-control-btn" id="window-minimize-btn" title="Minimize">
+						<svg width="10" height="10" viewBox="0 0 10 10">
+							<line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.2" />
+						</svg>
+					</button>
+					<button class="window-control-btn" id="window-maximize-btn" title="Maximize">
+						<svg width="10" height="10" viewBox="0 0 10 10">
+							<rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2" />
+						</svg>
+					</button>
+					<button class="window-control-btn window-close-btn" id="window-close-btn" title="Close">
+						<svg width="10" height="10" viewBox="0 0 10 10">
+							<line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.2" />
+							<line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.2" />
+						</svg>
+					</button>
 				</div>
-
-				<!-- AI Provider & API Key Indicator / Quick Setup -->
-				<button class="api-pill-btn" id="quick-api-btn" title="Konfiguracja API & Modeli AI (xKiro, Claude, GPT, Gemini)">
-					<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-					</svg>
-					<span class="api-pill-text" id="api-pill-label">API: Konfiguruj</span>
-				</button>
-
-				<!-- Direct Settings Button -->
-				<button class="settings-pill-btn" id="settings-open-btn" title="Otwórz Ustawienia (Settings)">
-					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<circle cx="12" cy="12" r="3"></circle>
-						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-					</svg>
-					<span>Ustawienia</span>
-				</button>
-
-				<button class="icon-btn theme-toggle-btn" id="theme-toggle" title="Toggle Theme (Dark / Light)">
-					<svg class="moon-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-					</svg>
-					<svg class="sun-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
-						<circle cx="12" cy="12" r="5"></circle>
-						<line x1="12" y1="1" x2="12" y2="3"></line>
-						<line x1="12" y1="21" x2="12" y2="23"></line>
-						<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-						<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-						<line x1="1" y1="12" x2="3" y2="12"></line>
-						<line x1="21" y1="12" x2="23" y2="12"></line>
-						<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-						<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-					</svg>
-				</button>
 			</div>
 		</header>
 
@@ -151,16 +135,16 @@
 				<div class="diffs-view">
 					<aside class="diffs-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Zmodyfikowane Pliki</span>
-							<span class="file-counter" id="diff-file-counter">0 plików</span>
+							<span class="sidebar-title">Modified Files</span>
+							<span class="file-counter" id="diff-file-counter">0 files</span>
 						</div>
 						<div class="diffs-list" id="diffs-file-list">
-							<div class="empty-state">Brak zarejestrowanych zmian w plikach.</div>
+							<div class="empty-state">No file changes recorded.</div>
 						</div>
 					</aside>
 					<div class="diff-viewer-panel">
 						<div class="diff-viewer-header" id="diff-viewer-header">
-							<span class="diff-filename">Wybierz plik z listy po lewej, aby przejrzeć zmiany</span>
+							<span class="diff-filename">Select a file from the list to review changes</span>
 						</div>
 						<div class="diff-content" id="diff-content">
 							<div class="diff-placeholder">
@@ -170,7 +154,7 @@
 									<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
 									<line x1="6" y1="9" x2="6" y2="21"></line>
 								</svg>
-								<p>Gdy agent tworzy lub edytuje pliki, tutaj pojawi się podgląd różnic linia po linii (diff).</p>
+								<p>When the agent creates or edits files, line-by-line diffs will appear here.</p>
 							</div>
 						</div>
 					</div>
@@ -183,20 +167,23 @@
 					<div class="terminal-toolbar">
 						<div class="terminal-title">
 							<span class="terminal-prompt">$</span>
-							<span>Logi Terminala i Poleceń Agenta</span>
+							<span>Terminal & Agent Command Logs</span>
 						</div>
 						<div class="terminal-actions">
-							<button class="icon-btn" id="clear-terminal-btn" title="Wyczyść logi terminala">
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<polyline points="3 6 5 6 21 6"></polyline>
-									<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+							<button class="icon-btn" id="clear-terminal-btn" title="Clear terminal logs">
+								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M3 6h18"/>
+									<path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+									<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+									<line x1="10" y1="11" x2="10" y2="17"/>
+									<line x1="14" y1="11" x2="14" y2="17"/>
 								</svg>
-								<span>Wyczyść</span>
+								<span>Clear</span>
 							</button>
 						</div>
 					</div>
 					<div class="terminal-output" id="terminal-output">
-						<div class="terminal-empty">Tutaj pojawią się polecenia i logi wykonania narzędzi terminala Roo Code.</div>
+						<div class="terminal-empty">Roo Code terminal command executions and logs will appear here.</div>
 					</div>
 				</div>
 			</section>
@@ -206,48 +193,48 @@
 				<div class="files-view">
 					<aside class="files-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Pliki Projektu</span>
-							<input type="text" id="files-search" class="files-search-input" placeholder="Szukaj plików w projekcie...">
+							<span class="sidebar-title">Project Files</span>
+							<input type="text" id="files-search" class="files-search-input" placeholder="Search project files...">
 						</div>
 						<div class="files-tree" id="files-tree">
-							<div class="empty-state">Wczytywanie drzewa plików...</div>
+							<div class="empty-state">Loading file tree...</div>
 						</div>
 					</aside>
 					<div class="file-preview-panel">
 						<div class="preview-header">
 							<div class="preview-header-left">
 								<span class="preview-file-icon" id="preview-file-icon">📄</span>
-								<span id="preview-filename">Wybierz plik z drzewa do podglądu</span>
+								<span id="preview-filename">Select a file from the tree to preview</span>
 								<span class="preview-badge" id="preview-file-badge" style="display: none;"></span>
 								<span class="preview-size" id="preview-file-size"></span>
 							</div>
 							<div class="preview-header-actions" id="preview-header-actions" style="display: none;">
-								<button class="preview-action-btn" id="preview-copy-btn" title="Kopiuj zawartość lub ścieżkę">
+								<button class="preview-action-btn" id="preview-copy-btn" title="Copy content or path">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
 										<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
 									</svg>
-									<span>Kopiuj</span>
+									<span>Copy</span>
 								</button>
-								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Przełącz zawijanie wierszy">
+								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Toggle line wrap">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<line x1="3" y1="6" x2="21" y2="6"></line>
 										<line x1="3" y1="12" x2="15" y2="12"></line>
 										<path d="M18 9l3 3-3 3"></path>
 										<line x1="3" y1="18" x2="21" y2="18"></line>
 									</svg>
-									<span>Zawijaj</span>
+									<span>Wrap</span>
 								</button>
-								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Przełącz podgląd / źródło">
-									<span>Kod Źródłowy</span>
+								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Toggle preview / source">
+									<span>Source Code</span>
 								</button>
-								<button class="preview-action-btn" id="preview-open-external-btn" title="Pokaż w Eksploratorze Windows">
+								<button class="preview-action-btn" id="preview-open-external-btn" title="Show in File Explorer">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 										<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
 										<polyline points="15 3 21 3 21 9"></polyline>
 										<line x1="10" y1="14" x2="21" y2="3"></line>
 									</svg>
-									<span>W Eksploratorze</span>
+									<span>In Explorer</span>
 								</button>
 							</div>
 						</div>
@@ -260,7 +247,7 @@
 									<line x1="16" y1="17" x2="8" y2="17"></line>
 									<polyline points="10 9 9 9 8 9"></polyline>
 								</svg>
-								<p>Wybierz dowolny plik z drzewa projektu, aby wyświetlić jego kod, obraz lub szczegóły.</p>
+								<p>Select any file from the project tree to view its code, image, or details.</p>
 							</div>
 						</div>
 					</div>
@@ -290,11 +277,11 @@
 				<div class="modal-title-row">
 					<div class="modal-icon-badge">⚡</div>
 					<div>
-						<h3 class="modal-title">Konfiguracja API & Modeli AI</h3>
-						<p class="modal-subtitle">Wybierz dostawcę (np. xKiro z darmowymi tokenami) i podaj klucz API</p>
+						<h3 class="modal-title">API & AI Provider Configuration</h3>
+						<p class="modal-subtitle">Select a provider (e.g. xKiro with free tokens) and enter your API key</p>
 					</div>
 				</div>
-				<button class="modal-close-btn" id="close-api-modal-btn" title="Zamknij">
+				<button class="modal-close-btn" id="close-api-modal-btn" title="Close">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<line x1="18" y1="6" x2="6" y2="18"></line>
 						<line x1="6" y1="6" x2="18" y2="18"></line>
@@ -304,55 +291,59 @@
 
 			<div class="modal-body">
 				<div class="form-group">
-					<label class="form-label" for="api-provider-select">Dostawca API (Provider)</label>
+					<label class="form-label" for="api-provider-select">API Provider</label>
 					<select class="form-select" id="api-provider-select">
-						<option value="xkiro">xKiro (Polecany - Darmowe tokeny, DeepSeek, Claude, GPT)</option>
-						<option value="openrouter">OpenRouter (Wszystkie modele świata)</option>
+						<option value="xkiro">xKiro (Recommended - Free tokens, DeepSeek, Claude, GPT)</option>
+						<option value="openrouter">OpenRouter (All models)</option>
 						<option value="anthropic">Anthropic (Claude 3.7 Sonnet, Claude 3.5 Sonnet)</option>
 						<option value="openai">OpenAI (GPT-4o, o3-mini)</option>
 						<option value="gemini">Google Gemini (Gemini 2.5 Pro, Flash)</option>
-						<option value="ollama">Ollama (100% lokalnie i za darmo na Twoim PC)</option>
-						<option value="openai-compatible">Własny OpenAI Compatible (Dowolny serwer)</option>
+						<option value="ollama">Ollama (100% local and free on your PC)</option>
+						<option value="openai-compatible">Custom OpenAI Compatible (Any server)</option>
 					</select>
 				</div>
 
 				<div class="form-group" id="group-base-url">
-					<label class="form-label" for="api-base-url-input">Adres Bazowy API (Base URL)</label>
+					<label class="form-label" for="api-base-url-input">Base URL</label>
 					<input type="text" class="form-input" id="api-base-url-input" placeholder="https://api.xkiro.com/v1" />
-					<div class="form-hint" id="base-url-hint">Dla xKiro domyślny adres to: https://api.xkiro.com/v1</div>
+					<div class="form-hint" id="base-url-hint">Default xKiro endpoint: https://api.xkiro.com/v1</div>
 				</div>
 
 				<div class="form-group" id="group-api-key">
-					<label class="form-label" for="api-key-input">Klucz API (API Key)</label>
+					<label class="form-label" for="api-key-input">API Key</label>
 					<div class="input-password-wrapper">
-						<input type="password" class="form-input" id="api-key-input" placeholder="Wklej swój klucz API..." />
-						<button type="button" class="toggle-password-btn" id="toggle-key-visibility-btn" title="Pokaż / Ukryj klucz">👁️</button>
+						<input type="password" class="form-input" id="api-key-input" placeholder="Enter your API key..." />
+						<button type="button" class="toggle-password-btn" id="toggle-key-visibility-btn" title="Show / Hide key">👁️</button>
 					</div>
-					<div class="form-hint" id="api-key-hint">Dla xKiro zarejestruj się na <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a>, aby odebrać darmowe tokeny.</div>
+					<div class="form-hint" id="api-key-hint">For xKiro, sign up at <a href="https://xkiro.com" target="_blank" class="link-accent">xkiro.com</a> to get free tokens.</div>
 				</div>
 
 				<div class="form-group">
-					<label class="form-label" for="api-model-input">Identyfikator Modelu (Model ID)</label>
-					<input type="text" class="form-input" id="api-model-input" list="model-suggestions" placeholder="Wpisz lub wybierz model..." />
+					<label class="form-label" for="api-model-input">Model ID</label>
+					<input type="text" class="form-input" id="api-model-input" list="model-suggestions" placeholder="Enter or select model..." />
 					<datalist id="model-suggestions">
-						<option value="deepseek/deepseek-chat">xKiro DeepSeek-V3 (Bardzo szybki i tani)</option>
-						<option value="deepseek/deepseek-reasoner">xKiro DeepSeek-R1 (Myślenie i dedukcja)</option>
-						<option value="anthropic/claude-3.7-sonnet">xKiro Claude 3.7 Sonnet (Najwyższa jakość)</option>
+						<option value="deepseek/deepseek-chat">xKiro DeepSeek-V3</option>
+						<option value="deepseek/deepseek-reasoner">xKiro DeepSeek-R1</option>
+						<option value="anthropic/claude-3.7-sonnet">xKiro Claude 3.7 Sonnet</option>
+						<option value="anthropic/claude-3.5-sonnet">xKiro Claude 3.5 Sonnet</option>
 						<option value="openai/gpt-4o">xKiro GPT-4o</option>
+						<option value="openai/o1">xKiro o1</option>
+						<option value="openai/o3-mini">xKiro o3-mini</option>
 						<option value="google/gemini-2.5-pro">xKiro Gemini 2.5 Pro</option>
+						<option value="google/gemini-2.5-flash">xKiro Gemini 2.5 Flash</option>
 						<option value="qwen/qwen-2.5-coder-32b">xKiro Qwen 2.5 Coder 32B</option>
 					</datalist>
-					<div class="form-hint">Możesz wpisać dowolny model udostępniany przez wybranego dostawcę.</div>
+					<div class="form-hint">You can enter any model provided by the selected provider.</div>
 				</div>
 			</div>
 
 			<div class="modal-footer">
 				<button class="btn btn-secondary" id="open-full-settings-from-modal-btn">
-					⚙️ Otwórz Pełne Ustawienia
+					⚙️ Open Full Settings
 				</button>
 				<div class="modal-footer-right">
-					<button class="btn btn-ghost" id="cancel-api-modal-btn">Anuluj</button>
-					<button class="btn btn-primary" id="save-api-config-btn">Zapisz i Zastosuj</button>
+					<button class="btn btn-ghost" id="cancel-api-modal-btn">Cancel</button>
+					<button class="btn btn-primary" id="save-api-config-btn">Save & Apply</button>
 				</div>
 			</div>
 		</div>

@@ -13,6 +13,7 @@ import {
 	type SkillMetadata,
 	type Command,
 	type McpServer,
+	type ThemeType,
 	RouterModels,
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -32,7 +33,9 @@ export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean // Add the new state property
 	didHydrateState: boolean
 	showWelcome: boolean
-	theme: any
+	theme?: ThemeType
+	setTheme: (value: ThemeType) => void
+	syntaxTheme?: any
 	mcpServers: McpServer[]
 	currentCheckpoint?: string
 	currentTaskTodos?: TodoItem[] // Initial todos for the current task
@@ -171,6 +174,7 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 		customModePrompts,
 		customSupportPrompts: customSupportPrompts ?? prevState.customSupportPrompts,
 		experiments,
+		openAiModels: newState.openAiModels ?? prevState.openAiModels ?? [],
 	}
 }
 
@@ -218,6 +222,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		terminalZdotdir: false, // Default ZDOTDIR handling setting
 		historyPreviewCollapsed: false, // Initialize the new state (default to expanded)
 		reasoningBlockCollapsed: true, // Default to collapsed
+		theme: "linear-dark",
 		enterBehavior: "send", // Default: Enter sends, Shift+Enter creates newline
 		organizationAllowList: ORGANIZATION_ALLOW_ALL,
 		autoCondenseContext: true,
@@ -240,11 +245,12 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		includeCurrentTime: true,
 		includeCurrentCost: true,
 		lockApiConfigAcrossModes: false,
+		openAiModels: [],
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
 	const [showWelcome, setShowWelcome] = useState(false)
-	const [theme, setTheme] = useState<any>(undefined)
+	const [syntaxTheme, setSyntaxTheme] = useState<any>(undefined)
 	const [filePaths, setFilePaths] = useState<string[]>([])
 	const [openedTabs, setOpenedTabs] = useState<Array<{ label: string; isActive: boolean; path?: string }>>([])
 	const [commands, setCommands] = useState<Command[]>([])
@@ -282,6 +288,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setState((prevState) => mergeExtensionState(prevState, newState))
 					setShowWelcome(!checkExistKey(newState.apiConfiguration))
 					setDidHydrateState(true)
+					if (newState.theme) {
+						document.documentElement.setAttribute("data-theme", newState.theme)
+						const isLight = newState.theme === "clean-light"
+						document.body.classList.toggle("vscode-light", isLight)
+						document.body.classList.toggle("vscode-dark", !isLight)
+						window.parent?.postMessage({ type: "themeChange", theme: newState.theme }, "*")
+					}
 					// Update alwaysAllowFollowupQuestions if present in state message
 					if ((newState as any).alwaysAllowFollowupQuestions !== undefined) {
 						setAlwaysAllowFollowupQuestions((newState as any).alwaysAllowFollowupQuestions)
@@ -318,7 +331,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				}
 				case "theme": {
 					if (message.text) {
-						setTheme(convertTextMateToHljs(JSON.parse(message.text)))
+						setSyntaxTheme(convertTextMateToHljs(JSON.parse(message.text)))
 					}
 					break
 				}
@@ -378,6 +391,15 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setExtensionRouterModels(message.routerModels)
 					break
 				}
+				case "openAiModels": {
+					if (message.openAiModels) {
+						setState((prevState) => ({
+							...prevState,
+							openAiModels: message.openAiModels,
+						}))
+					}
+					break
+				}
 				case "taskHistoryUpdated": {
 					// Efficiently update just the task history without replacing entire state
 					if (message.taskHistory !== undefined) {
@@ -434,7 +456,16 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		reasoningBlockCollapsed: state.reasoningBlockCollapsed ?? true,
 		didHydrateState,
 		showWelcome,
-		theme,
+		theme: (state.theme as ThemeType) ?? "linear-dark",
+		setTheme: (value: ThemeType) => {
+			document.documentElement.setAttribute("data-theme", value)
+			const isLight = value === "clean-light"
+			document.body.classList.toggle("vscode-light", isLight)
+			document.body.classList.toggle("vscode-dark", !isLight)
+			window.parent?.postMessage({ type: "themeChange", theme: value }, "*")
+			setState((prevState) => ({ ...prevState, theme: value }))
+		},
+		syntaxTheme,
 		mcpServers,
 		currentCheckpoint,
 		filePaths,

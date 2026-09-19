@@ -110,5 +110,16 @@
 	"costs": {
 		"own": "Własne",
 		"subtasks": "Podzadania"
+	},
+	"footer": {
+		"unsavedChanges": "Niezapisane zmiany",
+		"allChangesSaved": "Wszystkie zmiany zapisane",
+		"discard": "Odrzuć zmiany",
+		"save": "Zapisz ustawienia",
+		"settings": {
+			"export": "Eksportuj ustawienia",
+			"import": "Importuj ustawienia",
+			"reset": "Zresetuj ustawienia"
+		}
 	}
 }

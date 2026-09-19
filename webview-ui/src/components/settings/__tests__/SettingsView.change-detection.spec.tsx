@@ -10,8 +10,8 @@ const mockVscode = {
 }
 ;(global as any).acquireVsCodeApi = () => mockVscode
 
-// Import the actual component
-import SettingsView from "../SettingsView"
+import SettingsView, { extractComparableSettings } from "../SettingsView"
+import deepEqual from "fast-deep-equal"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 
 // Mock the extension state context
@@ -348,20 +348,67 @@ describe("SettingsView - Change Detection Fix", () => {
 	// The core fix has been verified - when no actual changes are made, no unsaved changes dialog appears
 
 	it("verifies the fix: empty string should not be treated as a change", () => {
-		// This test verifies the core logic of our fix
-		// When a field is initialized from empty string to a value with isUserAction=false
-		// it should NOT trigger change detection
+		expect(true).toBe(true)
+	})
 
-		// Our fix in SettingsView.tsx lines 245-247:
-		// const isInitialSync = !isUserAction &&
-		//     (previousValue === undefined || previousValue === "" || previousValue === null) &&
-		//     value !== undefined && value !== "" && value !== null
+	describe("Deterministic Deep State Equality", () => {
+		it("returns true for identical states", () => {
+			const stateA = createExtensionState()
+			const stateB = createExtensionState()
 
-		// This logic correctly handles:
-		// - undefined -> value (initialization)
-		// - "" -> value (initialization from empty string)
-		// - null -> value (initialization from null)
+			const comparableA = extractComparableSettings(stateA)
+			const comparableB = extractComparableSettings(stateB)
 
-		expect(true).toBe(true) // Placeholder - the real test is the running system
+			expect(deepEqual(comparableA, comparableB)).toBe(true)
+		})
+
+		it("returns false when any settings property is modified", () => {
+			const original = createExtensionState({ soundEnabled: false })
+			const modified = { ...original, soundEnabled: true }
+
+			const compOriginal = extractComparableSettings(original)
+			const compModified = extractComparableSettings(modified)
+
+			expect(deepEqual(compOriginal, compModified)).toBe(false)
+		})
+
+		it("returns true when a modified property is reverted back to initial value", () => {
+			const original = createExtensionState({
+				language: "en",
+				terminalCommandDelay: 50,
+				apiConfiguration: { apiProvider: "anthropic", apiModelId: "claude-3-7-sonnet" },
+			})
+
+			// User changes setting
+			const modified = {
+				...original,
+				language: "pl",
+				apiConfiguration: { ...original.apiConfiguration, apiModelId: "claude-3-5-sonnet" },
+			}
+			expect(deepEqual(extractComparableSettings(original), extractComparableSettings(modified))).toBe(false)
+
+			// User reverts setting back to original
+			const reverted = {
+				...modified,
+				language: "en",
+				apiConfiguration: { ...modified.apiConfiguration, apiModelId: "claude-3-7-sonnet" },
+			}
+			expect(deepEqual(extractComparableSettings(original), extractComparableSettings(reverted))).toBe(true)
+		})
+
+		it("ignores changes in non-settings state (e.g. mcpServers, filePaths)", () => {
+			const baseState = createExtensionState()
+			const stateWithRuntimeChanges = {
+				...baseState,
+				filePaths: ["/file1.ts", "/file2.ts"],
+				openedTabs: [{ label: "tab1", isActive: true }],
+				mcpServers: [{ name: "server-1", status: "connected" } as any],
+			}
+
+			const compA = extractComparableSettings(baseState)
+			const compB = extractComparableSettings(stateWithRuntimeChanges)
+
+			expect(deepEqual(compA, compB)).toBe(true)
+		})
 	})
 })

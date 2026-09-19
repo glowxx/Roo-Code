@@ -35,7 +35,8 @@ export interface TaskHeaderProps {
 	costBreakdown?: string
 	contextTokens: number
 	buttonsDisabled: boolean
-	handleCondenseContext: (taskId: string) => void
+	isCondensing?: boolean
+	handleCondenseContext?: (taskId: string) => void
 	todos?: any[]
 }
 
@@ -52,11 +53,12 @@ const TaskHeader = ({
 	costBreakdown,
 	contextTokens,
 	buttonsDisabled,
+	isCondensing = false,
 	handleCondenseContext,
 	todos,
 }: TaskHeaderProps) => {
 	const { t } = useTranslation()
-	const { apiConfiguration, currentTaskItem } = useExtensionState()
+	const { apiConfiguration, currentTaskItem, clineMessages } = useExtensionState()
 	const { id: modelId, info: model } = useSelectedModel(apiConfiguration)
 	const [isTaskExpanded, setIsTaskExpanded] = useState(false)
 
@@ -78,14 +80,37 @@ const TaskHeader = ({
 	)
 	const reservedForOutput = maxTokens || 0
 
-	const condenseButton = (
+	const isCompactDisabled = Boolean(
+		buttonsDisabled || isCondensing || (clineMessages ? clineMessages.length < 4 : false),
+	)
+	const isSpinning = Boolean(isCondensing || buttonsDisabled)
+
+	const handleCompact = (e?: React.MouseEvent) => {
+		e?.stopPropagation()
+		if (isCompactDisabled || !currentTaskItem?.id) {
+			return
+		}
+		vscode.postMessage({ type: "compactTask", taskId: currentTaskItem.id })
+		handleCondenseContext?.(currentTaskItem.id)
+	}
+
+	const CompactIcon = useMemo(
+		() => (props: any) => (
+			<FoldVertical {...props} className={cn(props?.className, isSpinning && "animate-spin")} />
+		),
+		[isSpinning],
+	)
+
+	const compactButton = (
 		<LucideIconButton
-			title={t("chat:task.condenseContext")}
-			icon={FoldVertical}
-			disabled={buttonsDisabled}
-			onClick={() => currentTaskItem && handleCondenseContext(currentTaskItem.id)}
+			title={t("chat:task.compactContext", "Compress conversation history and reclaim context tokens")}
+			icon={CompactIcon as any}
+			disabled={isCompactDisabled}
+			onClick={handleCompact}
+			className="p-1"
 		/>
 	)
+	const condenseButton = compactButton
 
 	const hasTodos = todos && Array.isArray(todos) && todos.length > 0
 
@@ -237,6 +262,7 @@ const TaskHeader = ({
 									})()}
 								</span>
 							</StandardTooltip>
+							{compactButton}
 							{!!totalCost && (
 								<>
 									<span>·</span>
@@ -311,13 +337,13 @@ const TaskHeader = ({
 												{t("chat:task.contextWindow")}
 											</th>
 											<td className="font-light align-top">
-												<div className={`max-w-md -mt-1.5 flex flex-nowrap gap-1`}>
+												<div className={`max-w-md -mt-1.5 flex flex-nowrap gap-1 items-center`}>
 													<ContextWindowProgress
 														contextWindow={contextWindow}
 														contextTokens={contextTokens || 0}
 														maxTokens={maxTokens || undefined}
 													/>
-													{condenseButton}
+													{compactButton}
 												</div>
 											</td>
 										</tr>

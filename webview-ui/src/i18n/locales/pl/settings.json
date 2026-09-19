@@ -25,6 +25,33 @@
 		"cancelButton": "Anuluj",
 		"discardButton": "Odrzuć zmiany"
 	},
+	"categories": {
+		"providers": "Dostawcy i Modele",
+		"modes_prompts": "Tryby i Prompty",
+		"context": "Zarządzanie Kontekstem",
+		"permissions": "Uprawnienia i Auto-Approve",
+		"tools": "Narzędzia i Terminal",
+		"appearance": "Wygląd i Środowisko"
+	},
+	"categoryDescriptions": {
+		"providers": "Konfiguracja połączeń z modelami AI, profili API oraz dostawców (xKiro, OpenRouter i inni).",
+		"modes_prompts": "Dostosuj tryby pracy asystenta, instrukcje systemowe, komendy slash oraz umiejętności.",
+		"context": "Zarządzanie rozmiarem kontekstu, kondensacją historii, limitami tokenów i punktami kontrolnymi.",
+		"permissions": "Definiuj reguły bezpieczeństwa i uprawnienia do automatycznego wykonywania akcji.",
+		"tools": "Konfiguracja terminala, powłoki, serwerów MCP Hub oraz drzew roboczych Git Worktrees.",
+		"appearance": "Dostosuj interfejs użytkownika, dźwięki, powiadomienia, język i opcje zaawansowane."
+	},
+	"footer": {
+		"unsavedChanges": "Niezapisane zmiany",
+		"allChangesSaved": "Wszystkie zmiany zapisane",
+		"discard": "Odrzuć zmiany",
+		"save": "Zapisz ustawienia",
+		"settings": {
+			"export": "Eksportuj ustawienia",
+			"import": "Importuj ustawienia",
+			"reset": "Zresetuj ustawienia"
+		}
+	},
 	"sections": {
 		"providers": "Dostawcy",
 		"modes": "Tryby",
@@ -851,13 +878,6 @@
 		"noMatchFound": "Nie znaleziono dopasowań",
 		"useCustomModel": "Użyj niestandardowy: {{modelId}}",
 		"simplifiedExplanation": "Można dostosować szczegółowe ustawienia modelu później."
-	},
-	"footer": {
-		"settings": {
-			"import": "Importuj",
-			"export": "Eksportuj",
-			"reset": "Resetuj"
-		}
 	},
 	"thinkingBudget": {
 		"maxTokens": "Maksymalna liczba tokenów",

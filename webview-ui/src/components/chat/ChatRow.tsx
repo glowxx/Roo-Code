@@ -138,7 +138,7 @@ const ChatRow = memo(
 		const prevHeightRef = useRef(0)
 
 		const [chatrow, { height }] = useSize(
-			<div className="px-[15px] py-[10px] pr-[6px]">
+			<div className="px-3.5 py-2 pr-2">
 				<ChatRowContent {...props} />
 			</div>,
 		)
@@ -391,9 +391,9 @@ export const ChatRowContent = ({
 	const headerStyle: React.CSSProperties = {
 		display: "flex",
 		alignItems: "center",
-		gap: "10px",
+		gap: "8px",
 		cursor: "default",
-		marginBottom: "10px",
+		marginBottom: "6px",
 		wordBreak: "break-word",
 	}
 
@@ -476,7 +476,7 @@ export const ChatRowContent = ({
 										: t("chat:fileOperations.wantsToEdit")}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<CodeAccordion
 								path={tool.path}
 								code={unifiedDiff ?? tool.content ?? tool.diff ?? ""}
@@ -515,7 +515,7 @@ export const ChatRowContent = ({
 												})}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<CodeAccordion
 								path={tool.path}
 								code={unifiedDiff ?? tool.diff}
@@ -583,23 +583,49 @@ export const ChatRowContent = ({
 				}
 
 				// Regular single file read request
+				if (message.type !== "ask") {
+					return (
+						<div
+							className="flex items-center gap-2 py-1 px-2.5 my-0.5 text-xs rounded-md bg-card/40 border border-border/20 text-muted-foreground hover:text-foreground transition-colors group cursor-pointer"
+							onClick={() =>
+								vscode.postMessage({
+									type: "openFile",
+									text: tool.content,
+									values: tool.startLine ? { line: tool.startLine } : undefined,
+								})
+							}>
+							<FileCode2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground/80" aria-label="Read file icon" />
+							<span className="font-medium text-foreground/80">{t("chat:fileOperations.didRead")}</span>
+							<span className="text-border/60">·</span>
+							<PathTooltip content={formatPathTooltip(tool.path, tool.reason)}>
+								<span className="font-mono text-xs truncate rtl max-w-[240px]">
+									{tool.path?.startsWith(".") && <span>.</span>}
+									{formatPathTooltip(tool.path, tool.reason)}
+								</span>
+							</PathTooltip>
+							<div className="flex-1" />
+							<SquareArrowOutUpRight
+								className="w-3.5 h-3.5 shrink-0 codicon codicon-link-external opacity-0 group-hover:opacity-100 transition-opacity"
+							/>
+						</div>
+					)
+				}
+
 				return (
 					<>
 						<div style={headerStyle}>
 							<FileCode2 className="w-4 shrink-0" aria-label="Read file icon" />
 							<span style={{ fontWeight: "bold" }}>
-								{message.type === "ask"
-									? tool.isOutsideWorkspace
-										? t("chat:fileOperations.wantsToReadOutsideWorkspace")
-										: tool.additionalFileCount && tool.additionalFileCount > 0
-											? t("chat:fileOperations.wantsToReadAndXMore", {
-													count: tool.additionalFileCount,
-												})
-											: t("chat:fileOperations.wantsToRead")
-									: t("chat:fileOperations.didRead")}
+								{tool.isOutsideWorkspace
+									? t("chat:fileOperations.wantsToReadOutsideWorkspace")
+									: tool.additionalFileCount && tool.additionalFileCount > 0
+										? t("chat:fileOperations.wantsToReadAndXMore", {
+												count: tool.additionalFileCount,
+											})
+										: t("chat:fileOperations.wantsToRead")}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<ToolUseBlock>
 								<ToolUseBlockHeader
 									className="group"
@@ -637,25 +663,12 @@ export const ChatRowContent = ({
 							</span>
 						</div>
 						<div
-							style={{
-								marginTop: "4px",
-								backgroundColor: "var(--vscode-editor-background)",
-								border: "1px solid var(--vscode-editorGroup-border)",
-								borderRadius: "4px",
-								overflow: "hidden",
-								cursor: "pointer",
-							}}
+							className="mt-1 rounded-lg border border-border/30 bg-card/40 overflow-hidden cursor-pointer"
 							onClick={handleToggleExpand}>
 							<ToolUseBlockHeader
-								className="group"
-								style={{
-									display: "flex",
-									alignItems: "center",
-									justifyContent: "space-between",
-									padding: "10px 12px",
-								}}>
-								<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-									<span style={{ fontWeight: "500", fontSize: "var(--vscode-font-size)" }}>
+								className="group flex items-center justify-between p-2.5">
+								<div className="flex items-center gap-2">
+									<span className="font-medium text-sm">
 										{skillInfo.skill}
 									</span>
 									{skillInfo.source && (
@@ -668,23 +681,16 @@ export const ChatRowContent = ({
 									className={`codicon codicon-chevron-${isExpanded ? "up" : "down"} opacity-0 group-hover:opacity-100 transition-opacity duration-200`}></span>
 							</ToolUseBlockHeader>
 							{isExpanded && (skillInfo.args || skillInfo.description) && (
-								<div
-									style={{
-										padding: "12px 16px",
-										borderTop: "1px solid var(--vscode-editorGroup-border)",
-										display: "flex",
-										flexDirection: "column",
-										gap: "8px",
-									}}>
+								<div className="px-3 py-2 border-t border-border/20 flex flex-col gap-2 text-xs">
 									{skillInfo.description && (
-										<div style={{ color: "var(--vscode-descriptionForeground)" }}>
+										<div className="text-muted-foreground">
 											{skillInfo.description}
 										</div>
 									)}
 									{skillInfo.args && (
 										<div>
-											<span style={{ fontWeight: "500" }}>Arguments: </span>
-											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
+											<span className="font-medium">Arguments: </span>
+											<span className="text-muted-foreground">
 												{skillInfo.args}
 											</span>
 										</div>
@@ -710,7 +716,7 @@ export const ChatRowContent = ({
 										: t("chat:directoryOperations.didViewTopLevel")}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<CodeAccordion
 								path={tool.path}
 								code={tool.content}
@@ -736,7 +742,7 @@ export const ChatRowContent = ({
 										: t("chat:directoryOperations.didViewRecursive")}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<CodeAccordion
 								path={tool.path}
 								code={tool.content}
@@ -776,7 +782,7 @@ export const ChatRowContent = ({
 								)}
 							</span>
 						</div>
-						<div className="pl-6">
+						<div className="ml-5">
 							<CodeAccordion
 								path={tool.path! + (tool.filePattern ? `/(${tool.filePattern})` : "")}
 								code={tool.content}
@@ -891,7 +897,7 @@ export const ChatRowContent = ({
 							{toolIcon("check-all")}
 							<span style={{ fontWeight: "bold" }}>{t("chat:subtasks.wantsToFinish")}</span>
 						</div>
-						<div className="text-muted-foreground pl-6">
+						<div className="text-muted-foreground ml-5">
 							<MarkdownBlock markdown={t("chat:subtasks.completionInstructions")} />
 						</div>
 					</>
@@ -909,25 +915,12 @@ export const ChatRowContent = ({
 							</span>
 						</div>
 						<div
-							style={{
-								marginTop: "4px",
-								backgroundColor: "var(--vscode-editor-background)",
-								border: "1px solid var(--vscode-editorGroup-border)",
-								borderRadius: "4px",
-								overflow: "hidden",
-								cursor: "pointer",
-							}}
+							className="mt-1 rounded-lg border border-border/30 bg-card/40 overflow-hidden cursor-pointer"
 							onClick={handleToggleExpand}>
 							<ToolUseBlockHeader
-								className="group"
-								style={{
-									display: "flex",
-									alignItems: "center",
-									justifyContent: "space-between",
-									padding: "10px 12px",
-								}}>
-								<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-									<span style={{ fontWeight: "500", fontSize: "var(--vscode-font-size)" }}>
+								className="group flex items-center justify-between p-2.5">
+								<div className="flex items-center gap-2">
+									<span className="font-medium text-sm">
 										/{slashCommandInfo.command}
 									</span>
 									{slashCommandInfo.source && (
@@ -940,24 +933,17 @@ export const ChatRowContent = ({
 									className={`codicon codicon-chevron-${isExpanded ? "up" : "down"} opacity-0 group-hover:opacity-100 transition-opacity duration-200`}></span>
 							</ToolUseBlockHeader>
 							{isExpanded && (slashCommandInfo.args || slashCommandInfo.description) && (
-								<div
-									style={{
-										padding: "12px 16px",
-										borderTop: "1px solid var(--vscode-editorGroup-border)",
-										display: "flex",
-										flexDirection: "column",
-										gap: "8px",
-									}}>
+								<div className="px-3 py-2 border-t border-border/20 flex flex-col gap-2 text-xs">
 									{slashCommandInfo.args && (
 										<div>
-											<span style={{ fontWeight: "500" }}>Arguments: </span>
-											<span style={{ color: "var(--vscode-descriptionForeground)" }}>
+											<span className="font-medium">Arguments: </span>
+											<span className="text-muted-foreground">
 												{slashCommandInfo.args}
 											</span>
 										</div>
 									)}
 									{slashCommandInfo.description && (
-										<div style={{ color: "var(--vscode-descriptionForeground)" }}>
+										<div className="text-muted-foreground">
 											{slashCommandInfo.description}
 										</div>
 									)}
@@ -1188,7 +1174,7 @@ export const ChatRowContent = ({
 								<div style={{ flexGrow: 1 }} />
 								<OpenMarkdownPreviewButton markdown={message.text} />
 							</div>
-							<div className="pl-6">
+							<div className="border-l-2 border-border/30 ml-2 pl-3 pb-0.5">
 								<Markdown markdown={message.text} partial={message.partial} />
 								{message.images && message.images.length > 0 && (
 									<div style={{ marginTop: "10px" }}>
@@ -1209,10 +1195,10 @@ export const ChatRowContent = ({
 							</div>
 							<div
 								className={cn(
-									"ml-6 border rounded-sm overflow-hidden whitespace-pre-wrap",
+									"ml-5 border rounded-lg overflow-hidden whitespace-pre-wrap transition-colors",
 									isEditing
-										? "bg-vscode-editor-background text-vscode-editor-foreground"
-										: "cursor-text p-1 bg-vscode-editor-foreground/70 text-vscode-editor-background",
+										? "bg-card text-foreground border-border/40 p-2"
+										: "cursor-text p-2.5 bg-card/60 hover:bg-card/80 border-l-2 border-l-vscode-focusBorder border-y border-r border-border/30 text-foreground",
 								)}>
 								{isEditing ? (
 									<div className="flex flex-col gap-2">
@@ -1237,7 +1223,7 @@ export const ChatRowContent = ({
 								) : (
 									<div className="flex justify-between">
 										<div
-											className="flex-grow px-2 py-1 wrap-anywhere rounded-lg transition-colors"
+											className="flex-grow px-1 py-0.5 wrap-anywhere rounded transition-colors"
 											onClick={(e) => {
 												e.stopPropagation()
 												if (!isStreaming) {
@@ -1245,7 +1231,7 @@ export const ChatRowContent = ({
 												}
 											}}
 											title={t("chat:queuedMessages.clickToEdit")}>
-											<Mention text={message.text} withShadow />
+											<Mention text={message.text} />
 										</div>
 										<div className="flex gap-2 pr-1">
 											<div
@@ -1328,7 +1314,7 @@ export const ChatRowContent = ({
 								<div style={{ flexGrow: 1 }} />
 								<OpenMarkdownPreviewButton markdown={message.text} />
 							</div>
-							<div className="border-l border-green-600/30 ml-2 pl-4 pb-1">
+							<div className="border-l-2 border-emerald-500/40 ml-2 pl-3 pb-1">
 								<Markdown markdown={message.text} />
 							</div>
 						</div>
@@ -1418,7 +1404,7 @@ export const ChatRowContent = ({
 											}}></span>
 										<span style={{ fontWeight: "bold" }}>{t("chat:slashCommand.didRun")}</span>
 									</div>
-									<div className="pl-6">
+									<div className="ml-5">
 										<ToolUseBlock>
 											<ToolUseBlockHeader
 												style={{
@@ -1614,7 +1600,7 @@ export const ChatRowContent = ({
 								{icon}
 								{title}
 							</div>
-							<div className="w-full bg-vscode-editor-background border border-vscode-border rounded-xs p-2 mt-2">
+							<div className="w-full bg-card/40 border border-border/30 rounded-lg p-2.5 mt-1.5">
 								{useMcpServer.type === "access_mcp_resource" && (
 									<McpResourceRow
 										item={{

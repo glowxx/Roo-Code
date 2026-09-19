@@ -164,8 +164,8 @@ vi.mock("@/components/ui", () => ({
 			data-testid={dataTestId}
 		/>
 	),
-	Button: ({ children, onClick, variant, className, "data-testid": dataTestId }: any) => (
-		<button onClick={onClick} data-variant={variant} className={className} data-testid={dataTestId}>
+	Button: ({ children, onClick, variant, className, "data-testid": dataTestId, disabled, ...props }: any) => (
+		<button onClick={onClick} data-variant={variant} className={className} data-testid={dataTestId} disabled={disabled} {...props}>
 			{children}
 		</button>
 	),
@@ -643,6 +643,57 @@ describe("SettingsView - Allowed Commands", () => {
 
 			// Check that unsaved changes dialog is shown
 			expect(screen.getByText("settings:unsavedChangesDialog.title")).toBeInTheDocument()
+		})
+
+		it("reverting setting back to initial value resets unsaved changes", () => {
+			const { activateTab, getSettingsContent } = renderSettingsView()
+
+			activateTab("notifications")
+
+			const content = getSettingsContent()
+			const soundCheckbox = within(content).getByTestId("sound-enabled-checkbox")
+
+			// Check that initially save button is disabled and shows all changes saved
+			const saveButton = screen.getByTestId("save-button")
+			expect(saveButton).toBeDisabled()
+			expect(screen.getByText("settings:footer.allChangesSaved")).toBeInTheDocument()
+
+			// Change setting
+			fireEvent.click(soundCheckbox)
+			expect(saveButton).not.toBeDisabled()
+			expect(screen.getByText("settings:footer.unsavedChanges")).toBeInTheDocument()
+
+			// Revert setting back to initial
+			fireEvent.click(soundCheckbox)
+			expect(saveButton).toBeDisabled()
+			expect(screen.getByText("settings:footer.allChangesSaved")).toBeInTheDocument()
+
+			// Click Done button - should not show unsaved dialog
+			const doneButton = screen.getByText("settings:common.done")
+			fireEvent.click(doneButton)
+			expect(screen.getByTestId("alert-dialog")).toHaveAttribute("data-open", "false")
+		})
+
+		it("discarding changes resets to initial state and clears unsaved changes", () => {
+			const { activateTab, getSettingsContent } = renderSettingsView()
+
+			activateTab("notifications")
+
+			const content = getSettingsContent()
+			const soundCheckbox = within(content).getByTestId("sound-enabled-checkbox")
+
+			// Change setting
+			fireEvent.click(soundCheckbox)
+			expect(screen.getByText("settings:footer.unsavedChanges")).toBeInTheDocument()
+
+			// Click Discard
+			const discardButton = screen.getByText("settings:footer.discard")
+			expect(discardButton).not.toBeDisabled()
+			fireEvent.click(discardButton)
+
+			// Should be back to all changes saved and disabled buttons
+			expect(screen.getByText("settings:footer.allChangesSaved")).toBeInTheDocument()
+			expect(screen.getByTestId("save-button")).toBeDisabled()
 		})
 	})
 })
