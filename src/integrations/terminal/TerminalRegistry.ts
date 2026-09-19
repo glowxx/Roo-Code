@@ -25,7 +25,7 @@ export class TerminalRegistry {
 
 	public static initialize() {
 		if (this.isInitialized) {
-			throw new Error("TerminalRegistry.initialize() should only be called once")
+			return
 		}
 
 		this.isInitialized = true
@@ -272,8 +272,25 @@ export class TerminalRegistry {
 	public static cleanup() {
 		// Clean up all temporary directories.
 		ShellIntegrationManager.clear()
+		for (const term of this.terminals) {
+			try {
+				const proc = term.process as any
+				if (proc) {
+					proc.abort?.()
+					proc.kill?.()
+				}
+				const vsceTerm = (term as any).terminal
+				if (vsceTerm) {
+					vsceTerm.dispose?.()
+				}
+			} catch (e) {
+				console.error("[TerminalRegistry] Error terminating process in cleanup:", e)
+			}
+		}
+		this.terminals = []
 		this.disposables.forEach((disposable) => disposable.dispose())
 		this.disposables = []
+		this.isInitialized = false
 	}
 
 	/**

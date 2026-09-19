@@ -282,6 +282,11 @@ Please analyze this codebase and create an AGENTS.md file containing:
 
 Remember: The goal is to create documentation that enables AI assistants to be immediately productive in this codebase, focusing on project-specific knowledge that isn't obvious from the code structure alone.`,
 	},
+	compact: {
+		name: "compact",
+		description: "Compress conversation history and reclaim context tokens",
+		content: "Please condense and summarize our conversation history to reclaim context tokens while preserving essential technical details, decisions, constraints, and current state.",
+	},
 }
 
 /**

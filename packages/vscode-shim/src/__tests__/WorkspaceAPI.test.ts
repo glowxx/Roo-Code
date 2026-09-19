@@ -50,6 +50,46 @@ describe("WorkspaceAPI", () => {
 		})
 	})
 
+	describe("setWorkspaceFolders()", () => {
+		it("should update workspaceFolders and name with string path", () => {
+			const newPath = path.join(tempDir, "new-workspace")
+			fs.mkdirSync(newPath, { recursive: true })
+
+			let eventFired = false
+			workspaceAPI.onDidChangeWorkspaceFolders((e) => {
+				eventFired = true
+				expect(e.added).toHaveLength(1)
+				expect(e.added[0]?.uri.fsPath).toBe(newPath)
+				expect(e.removed).toHaveLength(1)
+				expect(e.removed[0]?.uri.fsPath).toBe(workspacePath)
+			})
+
+			workspaceAPI.setWorkspaceFolders(newPath)
+
+			expect(workspaceAPI.workspaceFolders).toHaveLength(1)
+			expect(workspaceAPI.workspaceFolders?.[0]?.uri.fsPath).toBe(newPath)
+			expect(workspaceAPI.name).toBe("new-workspace")
+			expect(eventFired).toBe(true)
+		})
+
+		it("should update workspaceFolders with WorkspaceFolder array", () => {
+			const newPath = path.join(tempDir, "another-workspace")
+			fs.mkdirSync(newPath, { recursive: true })
+
+			workspaceAPI.setWorkspaceFolders([
+				{
+					uri: Uri.file(newPath),
+					name: "another-workspace",
+					index: 0,
+				},
+			])
+
+			expect(workspaceAPI.workspaceFolders).toHaveLength(1)
+			expect(workspaceAPI.workspaceFolders?.[0]?.uri.fsPath).toBe(newPath)
+			expect(workspaceAPI.name).toBe("another-workspace")
+		})
+	})
+
 	describe("asRelativePath()", () => {
 		it("should convert absolute path to relative", () => {
 			const absolutePath = path.join(workspacePath, "subdir", "file.txt")

@@ -393,7 +393,7 @@ export class CustomModesManager {
 				.map((mode) => ({ ...mode, source: "global" as const })),
 		]
 
-		await this.context.globalState.update("customModes", mergedModes)
+		await this.context.globalState.update("customModes", settingsModes)
 
 		this.cachedModes = mergedModes
 		this.cachedAt = now

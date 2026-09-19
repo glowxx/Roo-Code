@@ -64,6 +64,8 @@ export interface ExtensionMessage {
 		| "authenticatedUser"
 		| "condenseTaskContextStarted"
 		| "condenseTaskContextResponse"
+		| "taskCompacted"
+		| "compactTaskProgress"
 		| "singleRouterModelFetchResponse"
 		| "rooCreditBalance"
 		| "indexingStatusUpdate"
@@ -92,6 +94,7 @@ export interface ExtensionMessage {
 		| "folderSelected"
 		| "skills"
 		| "fileContent"
+		| "testConnectionResult"
 	text?: string
 	/** For fileContent: { path, content, error? } */
 	fileContent?: { path: string; content: string | null; error?: string }
@@ -108,6 +111,7 @@ export interface ExtensionMessage {
 		| "focusInput"
 		| "switchTab"
 		| "toggleAutoApprove"
+		| "clearTask"
 	invoke?: "newChat" | "sendMessage" | "primaryButtonClick" | "secondaryButtonClick" | "setChatBoxMessage"
 	/**
 	 * Partial state updates are allowed to reduce message size (e.g. omit large fields like taskHistory).
@@ -217,6 +221,10 @@ export interface ExtensionMessage {
 	copyProgressItemName?: string
 	// folderSelected
 	path?: string
+	// compactTask properties
+	previousTokens?: number
+	newTokens?: number
+	savedTokensPercentage?: number
 }
 
 export interface OpenAiCodexRateLimitsMessage {
@@ -278,6 +286,7 @@ export type ExtensionState = Pick<
 	| "openRouterImageGenerationSelectedModel"
 	| "includeTaskHistoryInEnhance"
 	| "reasoningBlockCollapsed"
+	| "theme"
 	| "enterBehavior"
 	| "includeCurrentTime"
 	| "includeCurrentCost"
@@ -285,6 +294,7 @@ export type ExtensionState = Pick<
 	| "requestDelaySeconds"
 	| "showWorktreesInHomeScreen"
 	| "disabledTools"
+	| "openAiModels"
 > & {
 	lockApiConfigAcrossModes?: boolean
 	version: string
@@ -470,6 +480,7 @@ export interface WebviewMessage {
 		| "focusPanelRequest"
 		| "openExternal"
 		| "switchTab"
+		| "testConnection"
 		| "exportMode"
 		| "exportModeResult"
 		| "importMode"
@@ -521,6 +532,7 @@ export interface WebviewMessage {
 		| "moveSkill"
 		| "updateSkillModes"
 		| "openSkillFile"
+		| "compactTask"
 	text?: string
 	taskId?: string
 	editedMessageContent?: string
@@ -626,6 +638,7 @@ export interface WebviewMessage {
 	worktreeForce?: boolean
 	worktreeNewWindow?: boolean
 	worktreeIncludeContent?: string
+	customInstructions?: string
 }
 
 export interface RequestOpenAiCodexRateLimitsMessage {

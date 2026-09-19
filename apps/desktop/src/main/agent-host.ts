@@ -31,12 +31,13 @@ export class DesktopAgentHost extends EventEmitter {
 	private status: AgentStatusType = "idle"
 	private terminalLogs: TerminalLogEntry[] = []
 	private diffFiles: Map<string, DiffFileEntry> = new Map()
+	private provider: any = null
 
 	constructor(options: AgentHostOptions) {
 		super()
-		this.currentWorkspace = path.resolve(options.workspacePath)
-		this.extensionPath = path.resolve(options.extensionPath)
-		this.storageDir = options.storageDir
+		this.currentWorkspace = path.normalize(path.resolve(options.workspacePath))
+		this.extensionPath = path.normalize(path.resolve(options.extensionPath))
+		this.storageDir = options.storageDir ? path.normalize(path.resolve(options.storageDir)) : undefined
 	}
 
 	public getWorkspace(): string {
@@ -44,27 +45,31 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public setWorkspace(newWorkspace: string): void {
-		const resolved = path.resolve(newWorkspace)
-		if (!fs.existsSync(resolved)) {
-			throw new Error(`Directory does not exist: ${resolved}`)
+		const normalized = path.normalize(path.resolve(newWorkspace))
+		if (!fs.existsSync(normalized)) {
+			throw new Error(`Directory does not exist: ${normalized}`)
 		}
-		this.currentWorkspace = resolved
+		this.currentWorkspace = normalized
 		this.diffFiles.clear()
 		this.terminalLogs = []
 		if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
-			const ws = (this.vscode as Record<string, unknown>).workspace as {
-				workspaceFolders?: Array<{ uri: unknown; name: string; index: number }>
-				name?: string
+			const ws = (this.vscode as Record<string, unknown>).workspace as any
+			if (typeof ws.setWorkspaceFolders === "function") {
+				ws.setWorkspaceFolders(this.currentWorkspace)
+			} else {
+				const UriClass = (this.vscode as Record<string, unknown>).Uri as { file: (p: string) => unknown }
+				ws.workspaceFolders = [
+					{
+						uri: UriClass.file(this.currentWorkspace),
+						name: path.basename(this.currentWorkspace),
+						index: 0,
+					},
+				]
+				ws.name = path.basename(this.currentWorkspace)
+				this.provider?.handleWorkspaceChanged?.(this.currentWorkspace)
 			}
-			const UriClass = (this.vscode as Record<string, unknown>).Uri as { file: (p: string) => unknown }
-			ws.workspaceFolders = [
-				{
-					uri: UriClass.file(resolved),
-					name: path.basename(resolved),
-					index: 0,
-				},
-			]
-			ws.name = path.basename(resolved)
+		} else {
+			this.provider?.handleWorkspaceChanged?.(this.currentWorkspace)
 		}
 		this.emit("workspaceChanged", this.currentWorkspace)
 	}
@@ -75,6 +80,10 @@ export class DesktopAgentHost extends EventEmitter {
 
 	public getTerminalLogs(): TerminalLogEntry[] {
 		return [...this.terminalLogs]
+	}
+
+	public clearTerminalLogs(): void {
+		this.terminalLogs = []
 	}
 
 	public getDiffFiles(): DiffFileEntry[] {
@@ -104,15 +113,18 @@ export class DesktopAgentHost extends EventEmitter {
 		// Find appRoot for VSCode API (needs node_modules/@vscode/ripgrep/bin/rg)
 		const binName = process.platform === "win32" ? "rg.exe" : "rg"
 		const candidateAppRoots = [
+			process.resourcesPath || "",
 			path.join(__dirname, ".."), // dist/
 			path.join(__dirname, "../.."), // apps/desktop
-			process.resourcesPath || "",
 			this.extensionPath,
 		].filter(Boolean)
 
 		let appRoot = ""
 		for (const candidate of candidateAppRoots) {
-			if (fs.existsSync(path.join(candidate, "node_modules", "@vscode", "ripgrep", "bin", binName))) {
+			if (
+				fs.existsSync(path.join(candidate, "node_modules", "@vscode", "ripgrep", "bin", binName)) ||
+				fs.existsSync(path.join(candidate, "bin", binName))
+			) {
 				appRoot = candidate
 				break
 			}
@@ -208,8 +220,12 @@ export class DesktopAgentHost extends EventEmitter {
 		return !this.isReady
 	}
 
-	public registerWebviewProvider(_viewId: string, _provider: unknown): void {}
-	public unregisterWebviewProvider(_viewId: string): void {}
+	public registerWebviewProvider(_viewId: string, provider: unknown): void {
+		this.provider = provider
+	}
+	public unregisterWebviewProvider(_viewId: string): void {
+		this.provider = null
+	}
 
 	public sendToExtension(message: WebviewMessage): void {
 		this.emit("webviewMessage", message)

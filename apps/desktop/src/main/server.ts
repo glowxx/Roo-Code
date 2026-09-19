@@ -17,7 +17,111 @@ export interface DesktopServerOptions {
 	staticDir?: string
 }
 
-function getGitBranch(workspacePath: string): string | undefined {
+export interface PathValidationResult {
+	safe: boolean
+	resolvedPath?: string
+	error?: string
+}
+
+function normalizeFsPath(p: string): string {
+	let normalized = path.normalize(path.resolve(p))
+	if (process.platform === "win32") {
+		if (normalized.startsWith("\\\\?\\UNC\\")) {
+			normalized = "\\\\" + normalized.slice(8)
+		} else if (normalized.startsWith("\\\\?\\")) {
+			normalized = normalized.slice(4)
+		}
+	}
+	return normalized
+}
+
+/**
+ * Validates that a requested path is strictly located within an allowed root directory.
+ * - Prevents null byte injection
+ * - Resolves relative paths (../)
+ * - Resolves symlinks using realpath to prevent symlink traversal
+ * - Ensures path boundary matching (prevents /parent-other starting with /parent)
+ * - Handles Windows case-insensitivity, drive letter variations, and leading slash quirks
+ */
+export function validatePathWithinRoot(
+	targetPath: string,
+	allowedRoot: string,
+	options: { allowExactRoot?: boolean } = {}
+): PathValidationResult {
+	if (!targetPath || typeof targetPath !== "string") {
+		return { safe: false, error: "Path must be a non-empty string" }
+	}
+
+	// Guard against null bytes
+	if (targetPath.includes("\0")) {
+		return { safe: false, error: "Null byte detected in path" }
+	}
+
+	try {
+		const resolvedRoot = normalizeFsPath(allowedRoot)
+		const realRoot = normalizeFsPath(fs.existsSync(resolvedRoot) ? fs.realpathSync(resolvedRoot) : resolvedRoot)
+
+		let cleanTarget = targetPath.trim()
+		if (process.platform === "win32") {
+			// On Windows, path.isAbsolute("/src/...") returns true!
+			// If path starts with / or \ but is NOT a drive letter (e.g. C:\) and NOT a UNC path (\\server\share),
+			// treat it as a relative path from the allowed root.
+			const isWindowsDrive = /^[a-zA-Z]:[/\\]/.test(cleanTarget)
+			const isUNC = cleanTarget.startsWith("\\\\") || cleanTarget.startsWith("//")
+			if (!isWindowsDrive && !isUNC && (cleanTarget.startsWith("/") || cleanTarget.startsWith("\\"))) {
+				cleanTarget = cleanTarget.replace(/^[/\\]+/, "")
+			}
+		}
+
+		const absoluteTarget = path.isAbsolute(cleanTarget)
+			? normalizeFsPath(cleanTarget)
+			: normalizeFsPath(path.resolve(realRoot, cleanTarget))
+
+		let realTarget = absoluteTarget
+		if (fs.existsSync(absoluteTarget)) {
+			try {
+				realTarget = normalizeFsPath(fs.realpathSync(absoluteTarget))
+			} catch {
+				return { safe: false, error: "Failed to resolve real path" }
+			}
+		} else {
+			// If file does not exist, verify nearest existing ancestor directory
+			let checkDir = path.dirname(absoluteTarget)
+			while (checkDir !== path.dirname(checkDir) && !fs.existsSync(checkDir)) {
+				checkDir = path.dirname(checkDir)
+			}
+			if (fs.existsSync(checkDir)) {
+				const realAncestor = normalizeFsPath(fs.realpathSync(checkDir))
+				const normRoot = process.platform === "win32" ? realRoot.toLowerCase() : realRoot
+				const normAncestor = process.platform === "win32" ? realAncestor.toLowerCase() : realAncestor
+				const relToRoot = path.relative(normRoot, normAncestor)
+				if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+					return { safe: false, error: "Path resolves outside allowed directory via symlink ancestor" }
+				}
+			}
+		}
+
+		const normalizedRoot = process.platform === "win32" ? realRoot.toLowerCase() : realRoot
+		const normalizedTarget = process.platform === "win32" ? realTarget.toLowerCase() : realTarget
+
+		if (options.allowExactRoot && normalizedTarget === normalizedRoot) {
+			return { safe: true, resolvedPath: realTarget }
+		}
+
+		const relative = path.relative(normalizedRoot, normalizedTarget)
+		const isInside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative)
+
+		if (!isInside) {
+			return { safe: false, error: "Access outside allowed directory forbidden" }
+		}
+
+		return { safe: true, resolvedPath: realTarget }
+	} catch (err) {
+		return { safe: false, error: `Path validation error: ${err instanceof Error ? err.message : String(err)}` }
+	}
+}
+
+export function getGitBranch(workspacePath: string): string | undefined {
 	try {
 		const branch = execSync("git rev-parse --abbrev-ref HEAD", {
 			cwd: workspacePath,
@@ -30,7 +134,19 @@ function getGitBranch(workspacePath: string): string | undefined {
 	}
 }
 
-function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
+export function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
+	if (!dir || typeof dir !== "string") return []
+
+	let normalizedDir = ""
+	try {
+		normalizedDir = path.normalize(path.resolve(dir))
+		if (!fs.existsSync(normalizedDir)) return []
+		const stat = fs.statSync(normalizedDir)
+		if (!stat.isDirectory()) return []
+	} catch {
+		return []
+	}
+
 	const results: string[] = []
 	const IGNORED_DIRS = new Set([
 		"node_modules",
@@ -61,32 +177,95 @@ function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
 		try {
 			entries = fs.readdirSync(currentDir, { withFileTypes: true })
 		} catch {
+			// Ignore directory read errors on Windows (permissions, etc.)
 			return
 		}
 
-		entries.sort((a, b) => {
-			if (a.isDirectory() && !b.isDirectory()) return -1
-			if (!a.isDirectory() && b.isDirectory()) return 1
-			return a.name.localeCompare(b.name)
-		})
+		const fileEntries: fs.Dirent[] = []
+		const dirEntries: fs.Dirent[] = []
 
 		for (const entry of entries) {
 			if (results.length >= maxFiles) break
-			if (entry.name.startsWith(".") && entry.name !== ".env" && !entry.name.startsWith(".env.")) {
-				if (entry.isDirectory() || IGNORED_DIRS.has(entry.name)) continue
-			}
-			if (IGNORED_DIRS.has(entry.name)) continue
-			if (IGNORED_SYSTEM_FILES.has(entry.name.toLowerCase())) continue
+			try {
+				const nameLower = entry.name.toLowerCase()
+				if (IGNORED_SYSTEM_FILES.has(nameLower)) continue
 
-			const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
-			if (entry.isDirectory()) {
-				walk(path.join(currentDir, entry.name), relPath)
-			} else if (entry.isFile()) {
-				results.push(relPath)
+				let isDirectory = false
+				try {
+					isDirectory = entry.isDirectory()
+				} catch {
+					isDirectory = false
+				}
+
+				let isFile = false
+				try {
+					isFile = entry.isFile()
+				} catch {
+					isFile = false
+				}
+
+				// If it's a symbolic link (e.g. symlink or junction on Windows) and neither returned true, try statSync safely
+				if (!isDirectory && !isFile) {
+					try {
+						if (entry.isSymbolicLink()) {
+							const targetStat = fs.statSync(path.join(currentDir, entry.name))
+							isDirectory = targetStat.isDirectory()
+							isFile = targetStat.isFile()
+						}
+					} catch {
+						// Broken symlink, inaccessible junction, or permission denied
+						continue
+					}
+				}
+
+				if (isDirectory) {
+					if (IGNORED_DIRS.has(entry.name) || IGNORED_DIRS.has(nameLower)) continue
+					if (entry.name.startsWith(".") && entry.name !== ".github") continue
+					dirEntries.push(entry)
+				} else if (isFile) {
+					fileEntries.push(entry)
+				}
+			} catch {
+				continue
+			}
+		}
+
+		try {
+			fileEntries.sort((a, b) => a.name.localeCompare(b.name))
+		} catch {
+			// Fallback if sorting fails
+		}
+
+		for (const file of fileEntries) {
+			if (results.length >= maxFiles) return
+			const relPath = (relPrefix ? `${relPrefix}/${file.name}` : file.name).replace(/\\/g, "/")
+			results.push(relPath)
+		}
+
+		try {
+			dirEntries.sort((a, b) => a.name.localeCompare(b.name))
+		} catch {
+			// Fallback if sorting fails
+		}
+
+		for (const dir of dirEntries) {
+			if (results.length >= maxFiles) return
+			const relPath = (relPrefix ? `${relPrefix}/${dir.name}` : dir.name).replace(/\\/g, "/")
+			const subDirPath = path.join(currentDir, dir.name)
+			try {
+				walk(subDirPath, relPath)
+			} catch {
+				// Prevent recursive failure from aborting outer scan
 			}
 		}
 	}
-	walk(dir)
+
+	try {
+		walk(normalizedDir)
+	} catch {
+		return results
+	}
+
 	return results
 }
 
@@ -126,11 +305,12 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		broadcast({ type: "diffsUpdated", diffs })
 	})
 	agentHost.on("workspaceChanged", (wsPath) => {
+		const normalized = path.normalize(path.resolve(wsPath))
 		const newWs: WorkspaceInfo = {
-			path: wsPath,
-			name: path.basename(wsPath),
-			branch: getGitBranch(wsPath),
-			files: listWorkspaceFiles(wsPath),
+			path: normalized,
+			name: path.basename(normalized),
+			branch: getGitBranch(normalized),
+			files: listWorkspaceFiles(normalized),
 		}
 		broadcast({ type: "workspaceInfo", workspace: newWs })
 		broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
@@ -156,15 +336,40 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 		// API endpoints
 		if (pathname === "/api/workspace") {
-			const wsPath = agentHost.getWorkspace()
+			let wsPath = ""
+			try {
+				const ws = agentHost.getWorkspace()
+				if (ws) {
+					wsPath = path.normalize(path.resolve(ws))
+				}
+			} catch {
+				wsPath = ""
+			}
+			const files = wsPath ? listWorkspaceFiles(wsPath) : []
 			const info: WorkspaceInfo = {
 				path: wsPath,
-				name: path.basename(wsPath),
-				branch: getGitBranch(wsPath),
-				files: listWorkspaceFiles(wsPath),
+				name: wsPath ? path.basename(wsPath) : "",
+				branch: wsPath ? getGitBranch(wsPath) : undefined,
+				files: Array.isArray(files) ? files : [],
 			}
 			res.writeHead(200, { "Content-Type": "application/json" })
 			res.end(JSON.stringify(info))
+			return
+		}
+
+		if (pathname === "/api/files") {
+			let files: string[] = []
+			try {
+				const ws = agentHost.getWorkspace()
+				if (ws) {
+					const wsPath = path.normalize(path.resolve(ws))
+					files = listWorkspaceFiles(wsPath)
+				}
+			} catch {
+				files = []
+			}
+			res.writeHead(200, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ files: Array.isArray(files) ? files : [] }))
 			return
 		}
 
@@ -175,15 +380,16 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				res.end(JSON.stringify({ error: "Missing path parameter" }))
 				return
 			}
-			const wsRoot = path.resolve(agentHost.getWorkspace())
-			const absPath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
+			const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+			const validation = validatePathWithinRoot(filePath, wsRoot)
 
 			// Path traversal check
-			if (!absPath.startsWith(wsRoot)) {
+			if (!validation.safe || !validation.resolvedPath) {
 				res.writeHead(403, { "Content-Type": "application/json" })
-				res.end(JSON.stringify({ error: "Access outside workspace forbidden" }))
+				res.end(JSON.stringify({ error: validation.error || "Access outside workspace forbidden" }))
 				return
 			}
+			const absPath = validation.resolvedPath
 
 			try {
 				if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
@@ -217,7 +423,14 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				}
 				const contentType = mimeTypes[ext] || "application/octet-stream"
 				res.writeHead(200, { "Content-Type": contentType })
-				fs.createReadStream(absPath).pipe(res)
+				const fileStream = fs.createReadStream(absPath)
+				fileStream.on("error", (err) => {
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" })
+						res.end("File read error")
+					}
+				})
+				fileStream.pipe(res)
 			} catch {
 				res.writeHead(500, { "Content-Type": "application/json" })
 				res.end(JSON.stringify({ error: "Error reading file" }))
@@ -266,7 +479,11 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			let relWebviewPath = pathname.startsWith("/webview")
 				? pathname.replace(/^\/webview\/?/, "") || "index.html"
 				: pathname.replace(/^\//, "")
-			let targetWebviewPath = path.join(webviewBuildDir, relWebviewPath)
+
+			const webviewValidation = validatePathWithinRoot(relWebviewPath, webviewBuildDir, { allowExactRoot: true })
+			let targetWebviewPath = webviewValidation.safe && webviewValidation.resolvedPath
+				? webviewValidation.resolvedPath
+				: path.join(webviewBuildDir, "index.html")
 
 			if (!fs.existsSync(targetWebviewPath) || fs.statSync(targetWebviewPath).isDirectory()) {
 				targetWebviewPath = path.join(webviewBuildDir, "index.html")
@@ -300,36 +517,36 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	--vscode-editor-font-family: "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
 	--vscode-editor-font-size: 13px;
 
-	/* Dark Modern Tokens */
-	--vscode-editor-background: #0b0c10;
+	/* Dark Modern Tokens (Linear / Raycast tier) */
+	--vscode-editor-background: #090a0f;
 	--vscode-editor-foreground: #e4e7ec;
 	--vscode-foreground: #f2f4f7;
 	--vscode-descriptionForeground: #98a2b3;
 	--vscode-disabledForeground: #667085;
 	--vscode-errorForeground: #f04438;
 
-	--vscode-input-background: #14161f;
+	--vscode-input-background: #12141c;
 	--vscode-input-foreground: #f8fafc;
-	--vscode-input-border: #252836;
+	--vscode-input-border: rgba(255, 255, 255, 0.08);
 	--vscode-input-placeholderForeground: #667085;
 	--vscode-focusBorder: #3b82f6;
 
 	--vscode-button-background: #2563eb;
 	--vscode-button-foreground: #ffffff;
 	--vscode-button-hoverBackground: #1d4ed8;
-	--vscode-button-secondaryBackground: #1a1d28;
+	--vscode-button-secondaryBackground: #181b26;
 	--vscode-button-secondaryForeground: #f2f4f7;
-	--vscode-button-secondaryHoverBackground: #252838;
+	--vscode-button-secondaryHoverBackground: #222634;
 
-	--vscode-dropdown-background: #14161f;
+	--vscode-dropdown-background: #12141c;
 	--vscode-dropdown-foreground: #f8fafc;
-	--vscode-dropdown-border: #252836;
-	--vscode-dropdown-listBackground: #10121a;
+	--vscode-dropdown-border: rgba(255, 255, 255, 0.08);
+	--vscode-dropdown-listBackground: #0e1017;
 
-	--vscode-menu-background: #14161f;
+	--vscode-menu-background: #12141c;
 	--vscode-menu-foreground: #f8fafc;
 
-	--vscode-list-hoverBackground: #1a1d28;
+	--vscode-list-hoverBackground: rgba(255, 255, 255, 0.06);
 	--vscode-list-hoverForeground: #ffffff;
 	--vscode-list-activeSelectionBackground: #2563eb;
 	--vscode-list-activeSelectionForeground: #ffffff;
@@ -339,14 +556,18 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 	--vscode-textLink-foreground: #60a5fa;
 	--vscode-textLink-activeForeground: #93c5fd;
-	--vscode-textCodeBlock-background: #14161f;
+	--vscode-textCodeBlock-background: #06070a;
 
-	--vscode-sideBar-background: #0b0c10;
+	--vscode-sideBar-background: #090a0f;
 	--vscode-sideBar-foreground: #e4e7ec;
-	--vscode-panel-border: #1e212d;
-	--vscode-editorGroup-border: #1e212d;
-	--vscode-widget-border: #1e212d;
+	--vscode-panel-border: rgba(255, 255, 255, 0.06);
+	--vscode-editorGroup-border: rgba(255, 255, 255, 0.06);
+	--vscode-widget-border: rgba(255, 255, 255, 0.06);
 	--vscode-widget-shadow: rgba(0, 0, 0, 0.5);
+
+	--vscode-scrollbarSlider-background: rgba(255, 255, 255, 0.12);
+	--vscode-scrollbarSlider-hoverBackground: rgba(255, 255, 255, 0.25);
+	--vscode-scrollbarSlider-activeBackground: rgba(255, 255, 255, 0.35);
 
 	--vscode-charts-red: #f04438;
 	--vscode-charts-blue: #3b82f6;
@@ -355,10 +576,97 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	--vscode-charts-orange: #fb6514;
 }
 
-body.vscode-light {
+/* 2. OLED Black (Pure Black, Maximum Contrast) */
+[data-theme="oled-black"] {
+	--vscode-editor-background: #000000;
+	--vscode-editor-foreground: #ffffff;
+	--vscode-foreground: #ffffff;
+	--vscode-descriptionForeground: #a1a1aa;
+	--vscode-disabledForeground: #71717a;
+	--vscode-input-background: #0a0a0a;
+	--vscode-input-foreground: #ffffff;
+	--vscode-input-border: rgba(255, 255, 255, 0.14);
+	--vscode-focusBorder: #3b82f6;
+	--vscode-button-background: #2563eb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #1d4ed8;
+	--vscode-button-secondaryBackground: #121212;
+	--vscode-button-secondaryForeground: #ffffff;
+	--vscode-dropdown-background: #0a0a0a;
+	--vscode-dropdown-foreground: #ffffff;
+	--vscode-dropdown-border: rgba(255, 255, 255, 0.14);
+	--vscode-sideBar-background: #000000;
+	--vscode-sideBar-foreground: #ffffff;
+	--vscode-panel-border: rgba(255, 255, 255, 0.12);
+	--vscode-editorGroup-border: rgba(255, 255, 255, 0.12);
+	--vscode-badge-background: #2563eb;
+	--vscode-textLink-foreground: #60a5fa;
+	--vscode-textCodeBlock-background: #050505;
+}
+
+/* 3. Midnight Navy (GitHub Dark Dimmed Tone) */
+[data-theme="midnight-navy"] {
+	--vscode-editor-background: #0d1117;
+	--vscode-editor-foreground: #e6edf3;
+	--vscode-foreground: #e6edf3;
+	--vscode-descriptionForeground: #8b949e;
+	--vscode-disabledForeground: #6e7681;
+	--vscode-input-background: #161b22;
+	--vscode-input-foreground: #e6edf3;
+	--vscode-input-border: rgba(240, 246, 252, 0.12);
+	--vscode-focusBorder: #58a6ff;
+	--vscode-button-background: #1f6feb;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #388bfd;
+	--vscode-button-secondaryBackground: #21262d;
+	--vscode-button-secondaryForeground: #e6edf3;
+	--vscode-dropdown-background: #161b22;
+	--vscode-dropdown-foreground: #e6edf3;
+	--vscode-dropdown-border: rgba(240, 246, 252, 0.12);
+	--vscode-sideBar-background: #0d1117;
+	--vscode-sideBar-foreground: #e6edf3;
+	--vscode-panel-border: rgba(240, 246, 252, 0.1);
+	--vscode-editorGroup-border: rgba(240, 246, 252, 0.1);
+	--vscode-badge-background: #1f6feb;
+	--vscode-textLink-foreground: #58a6ff;
+	--vscode-textCodeBlock-background: #090d12;
+}
+
+/* 4. Cyberpunk (Cool Graphite with Neon Cyan) */
+[data-theme="cyberpunk"] {
+	--vscode-editor-background: #090d16;
+	--vscode-editor-foreground: #f1f5f9;
+	--vscode-foreground: #f1f5f9;
+	--vscode-descriptionForeground: #94a3b8;
+	--vscode-disabledForeground: #64748b;
+	--vscode-input-background: #0f172a;
+	--vscode-input-foreground: #f1f5f9;
+	--vscode-input-border: rgba(0, 240, 255, 0.2);
+	--vscode-focusBorder: #00f0ff;
+	--vscode-button-background: #00b4d8;
+	--vscode-button-foreground: #090d16;
+	--vscode-button-hoverBackground: #00f0ff;
+	--vscode-button-secondaryBackground: #1e293b;
+	--vscode-button-secondaryForeground: #00f0ff;
+	--vscode-dropdown-background: #0f172a;
+	--vscode-dropdown-foreground: #f1f5f9;
+	--vscode-dropdown-border: rgba(0, 240, 255, 0.2);
+	--vscode-sideBar-background: #090d16;
+	--vscode-sideBar-foreground: #f1f5f9;
+	--vscode-panel-border: rgba(0, 240, 255, 0.15);
+	--vscode-editorGroup-border: rgba(0, 240, 255, 0.15);
+	--vscode-badge-background: #00f0ff;
+	--vscode-badge-foreground: #090d16;
+	--vscode-textLink-foreground: #00f0ff;
+	--vscode-textCodeBlock-background: #06090e;
+}
+
+/* 5. Clean Light (Warm Paper Slate) */
+body.vscode-light,
+[data-theme="clean-light"] {
 	/* Warm paper slate anti-glare background */
-	--vscode-editor-background: #f1f3f6;
-	--vscode-editor-foreground: #1e293b;
+	--vscode-editor-background: #f8fafc;
+	--vscode-editor-foreground: #0f172a;
 	--vscode-foreground: #0f172a;
 	--vscode-descriptionForeground: #475569;
 	--vscode-disabledForeground: #94a3b8;
@@ -366,7 +674,7 @@ body.vscode-light {
 
 	--vscode-input-background: #ffffff;
 	--vscode-input-foreground: #0f172a;
-	--vscode-input-border: #cbd5e1;
+	--vscode-input-border: rgba(0, 0, 0, 0.12);
 	--vscode-input-placeholderForeground: #94a3b8;
 	--vscode-focusBorder: #2563eb;
 
@@ -379,13 +687,13 @@ body.vscode-light {
 
 	--vscode-dropdown-background: #ffffff;
 	--vscode-dropdown-foreground: #0f172a;
-	--vscode-dropdown-border: #cbd5e1;
+	--vscode-dropdown-border: rgba(0, 0, 0, 0.12);
 	--vscode-dropdown-listBackground: #ffffff;
 
 	--vscode-menu-background: #ffffff;
 	--vscode-menu-foreground: #0f172a;
 
-	--vscode-list-hoverBackground: #e2e8f0;
+	--vscode-list-hoverBackground: rgba(0, 0, 0, 0.05);
 	--vscode-list-hoverForeground: #0f172a;
 	--vscode-list-activeSelectionBackground: #2563eb;
 	--vscode-list-activeSelectionForeground: #ffffff;
@@ -397,12 +705,16 @@ body.vscode-light {
 	--vscode-textLink-activeForeground: #1d4ed8;
 	--vscode-textCodeBlock-background: #e2e8f0;
 
-	--vscode-sideBar-background: #e8ecf1;
-	--vscode-sideBar-foreground: #1e293b;
-	--vscode-panel-border: #cbd5e1;
-	--vscode-editorGroup-border: #cbd5e1;
-	--vscode-widget-border: #cbd5e1;
+	--vscode-sideBar-background: #f8fafc;
+	--vscode-sideBar-foreground: #0f172a;
+	--vscode-panel-border: rgba(0, 0, 0, 0.08);
+	--vscode-editorGroup-border: rgba(0, 0, 0, 0.08);
+	--vscode-widget-border: rgba(0, 0, 0, 0.08);
 	--vscode-widget-shadow: rgba(15, 23, 42, 0.08);
+
+	--vscode-scrollbarSlider-background: rgba(0, 0, 0, 0.15);
+	--vscode-scrollbarSlider-hoverBackground: rgba(0, 0, 0, 0.28);
+	--vscode-scrollbarSlider-activeBackground: rgba(0, 0, 0, 0.4);
 }
 
 html, body {
@@ -583,10 +895,10 @@ window.acquireVsCodeApi = function() {
 window.addEventListener("message", function(e) {
 	if (e.data && e.data.type === "state" && e.data.state) {
 		e.data.state.showWelcome = false;
-		if (!e.data.state.apiConfiguration || !e.data.state.apiConfiguration.apiKey) {
+		if (!e.data.state.apiConfiguration || (!e.data.state.apiConfiguration.apiKey && !e.data.state.apiConfiguration.xkiroApiKey)) {
 			e.data.state.apiConfiguration = e.data.state.apiConfiguration || {};
 			if (!e.data.state.apiConfiguration.apiProvider) {
-				e.data.state.apiConfiguration.apiProvider = "anthropic";
+				e.data.state.apiConfiguration.apiProvider = "xkiro";
 			}
 			e.data.state.apiConfiguration.ollamaModelId = e.data.state.apiConfiguration.ollamaModelId ?? "auto";
 		}
@@ -596,11 +908,14 @@ window.addEventListener("message", function(e) {
 (function() {
 	function syncTheme() {
 		try {
-			var theme = localStorage.getItem("roo-theme") || "dark";
-			var cls = theme === "light" ? "vscode-light" : "vscode-dark";
+			var theme = localStorage.getItem("roo-theme") || "linear-dark";
+			var isLight = theme === "clean-light" || theme === "light";
+			var cls = isLight ? "vscode-light" : "vscode-dark";
 			document.body.className = cls;
 			document.body.setAttribute("data-vscode-theme-kind", cls);
 			document.documentElement.className = cls;
+			document.documentElement.setAttribute("data-theme", theme);
+			document.body.setAttribute("data-theme", theme);
 		} catch(e) {}
 	}
 	if (document.readyState === "loading") {
@@ -610,10 +925,15 @@ window.addEventListener("message", function(e) {
 	}
 	window.addEventListener("message", function(e) {
 		if (e.data && e.data.type === "themeChange") {
-			var cls = e.data.theme === "light" ? "vscode-light" : "vscode-dark";
+			var theme = e.data.theme || "linear-dark";
+			var isLight = theme === "clean-light" || theme === "light";
+			var cls = isLight ? "vscode-light" : "vscode-dark";
 			document.body.className = cls;
 			document.body.setAttribute("data-vscode-theme-kind", cls);
 			document.documentElement.className = cls;
+			document.documentElement.setAttribute("data-theme", theme);
+			document.body.setAttribute("data-theme", theme);
+			try { localStorage.setItem("roo-theme", theme); } catch(err) {}
 		}
 	});
 })();
@@ -627,7 +947,14 @@ window.addEventListener("message", function(e) {
 				}
 
 				res.writeHead(200, { "Content-Type": contentType })
-				fs.createReadStream(targetWebviewPath).pipe(res)
+				const fileStream = fs.createReadStream(targetWebviewPath)
+				fileStream.on("error", (err) => {
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" })
+						res.end("File read error")
+					}
+				})
+				fileStream.pipe(res)
 				return
 			}
 		}
@@ -635,7 +962,10 @@ window.addEventListener("message", function(e) {
 		// Serve static frontend assets
 		if (staticDir && fs.existsSync(staticDir)) {
 			let relativeFilePath = pathname === "/" ? "index.html" : pathname.replace(/^\//, "")
-			let targetPath = path.join(staticDir, relativeFilePath)
+			const staticValidation = validatePathWithinRoot(relativeFilePath, staticDir, { allowExactRoot: true })
+			let targetPath = staticValidation.safe && staticValidation.resolvedPath
+				? staticValidation.resolvedPath
+				: path.join(staticDir, "index.html")
 
 			if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
 				targetPath = path.join(staticDir, "index.html")
@@ -659,7 +989,14 @@ window.addEventListener("message", function(e) {
 				}
 				const contentType = mimeTypes[ext] || "application/octet-stream"
 				res.writeHead(200, { "Content-Type": contentType })
-				fs.createReadStream(targetPath).pipe(res)
+				const fileStream = fs.createReadStream(targetPath)
+				fileStream.on("error", (err) => {
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" })
+						res.end("File read error")
+					}
+				})
+				fileStream.pipe(res)
 				return
 			}
 		}
@@ -674,12 +1011,21 @@ window.addEventListener("message", function(e) {
 		clients.add(ws)
 
 		// Send initial state to newly connected client
-		const wsPath = agentHost.getWorkspace()
+		let wsPath = ""
+		try {
+			const rawWs = agentHost.getWorkspace()
+			if (rawWs) {
+				wsPath = path.normalize(path.resolve(rawWs))
+			}
+		} catch {
+			wsPath = ""
+		}
+		const initialFiles = wsPath ? listWorkspaceFiles(wsPath) : []
 		const initialWorkspace: WorkspaceInfo = {
 			path: wsPath,
-			name: path.basename(wsPath),
-			branch: getGitBranch(wsPath),
-			files: listWorkspaceFiles(wsPath),
+			name: wsPath ? path.basename(wsPath) : "",
+			branch: wsPath ? getGitBranch(wsPath) : undefined,
+			files: Array.isArray(initialFiles) ? initialFiles : [],
 		}
 		ws.send(JSON.stringify({ type: "workspaceInfo", workspace: initialWorkspace }))
 		ws.send(JSON.stringify({ type: "agentStatus", status: agentHost.getStatus() }))
@@ -691,23 +1037,33 @@ window.addEventListener("message", function(e) {
 				if (clientMsg.type === "webviewMessage") {
 					agentHost.sendToExtension(clientMsg.message)
 				} else if (clientMsg.type === "getWorkspaceInfo") {
-					const curPath = agentHost.getWorkspace()
+					let curPath = ""
+					try {
+						const rawWs = agentHost.getWorkspace()
+						if (rawWs) {
+							curPath = path.normalize(path.resolve(rawWs))
+						}
+					} catch {
+						curPath = ""
+					}
+					const files = curPath ? listWorkspaceFiles(curPath) : []
 					ws.send(
 						JSON.stringify({
 							type: "workspaceInfo",
 							workspace: {
 								path: curPath,
-								name: path.basename(curPath),
-								branch: getGitBranch(curPath),
-								files: listWorkspaceFiles(curPath),
+								name: curPath ? path.basename(curPath) : "",
+								branch: curPath ? getGitBranch(curPath) : undefined,
+								files: Array.isArray(files) ? files : [],
 							},
 						}),
 					)
 				} else if (clientMsg.type === "selectFolder") {
 					if (clientMsg.path && fs.existsSync(clientMsg.path)) {
 						try {
-							agentHost.setWorkspace(clientMsg.path)
-							const curPath = agentHost.getWorkspace()
+							const normalized = path.normalize(path.resolve(clientMsg.path))
+							agentHost.setWorkspace(normalized)
+							const curPath = path.normalize(path.resolve(agentHost.getWorkspace()))
 							const newWs: WorkspaceInfo = {
 								path: curPath,
 								name: path.basename(curPath),
@@ -723,11 +1079,14 @@ window.addEventListener("message", function(e) {
 						ws.send(JSON.stringify({ type: "error", message: `Folder does not exist: ${clientMsg.path}` }))
 					}
 				} else if (clientMsg.type === "readFile") {
-					const wsRoot = path.resolve(agentHost.getWorkspace())
-					const abs = path.isAbsolute(clientMsg.filePath)
-						? path.resolve(clientMsg.filePath)
-						: path.resolve(wsRoot, clientMsg.filePath)
-					if (abs.startsWith(wsRoot) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const validation = validatePathWithinRoot(clientMsg.filePath, wsRoot)
+					if (!validation.safe || !validation.resolvedPath) {
+						ws.send(JSON.stringify({ type: "error", message: validation.error || "Access outside workspace forbidden" }))
+						return
+					}
+					const abs = validation.resolvedPath
+					if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
 						try {
 							const stat = fs.statSync(abs)
 							const ext = path.extname(abs).toLowerCase()
@@ -788,10 +1147,17 @@ window.addEventListener("message", function(e) {
 								)
 							} else {
 								// Detect binary by reading first 1024 bytes and checking for null bytes
-								const fd = fs.openSync(abs, "r")
-								const sample = Buffer.alloc(Math.min(1024, stat.size))
-								fs.readSync(fd, sample, 0, sample.length, 0)
-								fs.closeSync(fd)
+								let fd: number | undefined
+								let sample: Buffer
+								try {
+									fd = fs.openSync(abs, "r")
+									sample = Buffer.alloc(Math.min(1024, stat.size))
+									fs.readSync(fd, sample, 0, sample.length, 0)
+								} finally {
+									if (fd !== undefined) {
+										fs.closeSync(fd)
+									}
+								}
 
 								let isBinary = false
 								for (let i = 0; i < sample.length; i++) {
@@ -835,11 +1201,10 @@ window.addEventListener("message", function(e) {
 						ws.send(JSON.stringify({ type: "error", message: "File not found or outside workspace" }))
 					}
 				} else if (clientMsg.type === "showItem" || clientMsg.type === "openFile") {
-					const wsRoot = path.resolve(agentHost.getWorkspace())
-					const abs = path.isAbsolute(clientMsg.filePath)
-						? path.resolve(clientMsg.filePath)
-						: path.resolve(wsRoot, clientMsg.filePath)
-					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
+					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const validation = validatePathWithinRoot(clientMsg.filePath, wsRoot)
+					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
+						const abs = validation.resolvedPath
 						try {
 							if (process.platform === "win32") {
 								if (clientMsg.type === "showItem") {
@@ -849,7 +1214,16 @@ window.addEventListener("message", function(e) {
 								}
 							}
 						} catch {}
+					} else {
+						ws.send(JSON.stringify({ type: "error", message: validation.error || "Access outside workspace forbidden" }))
 					}
+				} else if (clientMsg.type === "getDiffs") {
+					ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
+				} else if (clientMsg.type === "clearTerminalLogs") {
+					if (typeof (agentHost as any).clearTerminalLogs === "function") {
+						;(agentHost as any).clearTerminalLogs()
+					}
+					ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
 				}
 			} catch (err) {
 				ws.send(JSON.stringify({ type: "error", message: String(err) }))

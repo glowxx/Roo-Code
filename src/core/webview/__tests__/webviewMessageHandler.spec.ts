@@ -234,6 +234,69 @@ describe("webviewMessageHandler - image mentions", () => {
 			"data:image/png;base64,from-mention",
 		])
 	})
+
+	it("should intercept /compact command in askResponse and invoke compactConversation", async () => {
+		const mockCompactConversation = vi.fn().mockResolvedValue({
+			previousTokens: 50000,
+			newTokens: 10000,
+			savedTokensPercentage: 80,
+		})
+		const mockHandleWebviewAskResponse = vi.fn()
+
+		vi.mocked(mockClineProvider.getCurrentTask).mockReturnValue({
+			cwd: "/mock/workspace",
+			rooIgnoreController: undefined,
+			compactConversation: mockCompactConversation,
+			handleWebviewAskResponse: mockHandleWebviewAskResponse,
+		} as any)
+
+		await webviewMessageHandler(mockClineProvider, {
+			type: "askResponse",
+			askResponse: "messageResponse",
+			text: "/compact preserve latest database schema",
+			images: [],
+		})
+
+		expect(mockCompactConversation).toHaveBeenCalledWith("preserve latest database schema")
+		expect(mockHandleWebviewAskResponse).not.toHaveBeenCalled()
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "compactTaskProgress",
+		})
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "taskCompacted",
+			previousTokens: 50000,
+			newTokens: 10000,
+			savedTokensPercentage: 80,
+		})
+	})
+
+	it("should handle compactTask message and invoke compactConversation", async () => {
+		const mockCompactConversation = vi.fn().mockResolvedValue({
+			previousTokens: 40000,
+			newTokens: 8000,
+		})
+
+		vi.mocked(mockClineProvider.getCurrentTask).mockReturnValue({
+			cwd: "/mock/workspace",
+			compactConversation: mockCompactConversation,
+		} as any)
+
+		await webviewMessageHandler(mockClineProvider, {
+			type: "compactTask",
+			customInstructions: "keep recent tests",
+		})
+
+		expect(mockCompactConversation).toHaveBeenCalledWith("keep recent tests")
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "compactTaskProgress",
+		})
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "taskCompacted",
+			previousTokens: 40000,
+			newTokens: 8000,
+			savedTokensPercentage: 80,
+		})
+	})
 })
 
 describe("webviewMessageHandler - requestOllamaModels", () => {
@@ -984,6 +1047,12 @@ describe("webviewMessageHandler - requestCommands", () => {
 					filePath: "<built-in:build>",
 					description: "Build command",
 					argumentHint: "target",
+				},
+				{
+					name: "compact",
+					description: "Compress conversation history and reclaim context tokens",
+					argumentHint: "[instructions]",
+					source: "built-in",
 				},
 			],
 		})

@@ -438,7 +438,7 @@ export class McpHub {
 		}
 	}
 
-	private async cleanupProjectMcpServers(): Promise<void> {
+	public async cleanupProjectMcpServers(): Promise<void> {
 		// Disconnect and remove all project MCP servers
 		const projectConnections = this.connections.filter((conn) => conn.server.source === "project")
 

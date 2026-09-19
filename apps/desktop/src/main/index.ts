@@ -3,7 +3,8 @@ import fs from "fs"
 import os from "os"
 import { fileURLToPath } from "url"
 import { DesktopAgentHost } from "./agent-host.js"
-import { createDesktopServer } from "./server.js"
+import { createDesktopServer, validatePathWithinRoot, getGitBranch, listWorkspaceFiles } from "./server.js"
+import type { WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -100,6 +101,9 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				title: "Roo Code Desktop",
 				backgroundColor: "#090a0f",
 				icon: fs.existsSync(iconCandidate) ? iconCandidate : undefined,
+				frame: false,
+				titleBarStyle: "hidden",
+				titleBarOverlay: false,
 				webPreferences: {
 					preload: path.join(__dirname, "..", "preload", "index.js"),
 					contextIsolation: true,
@@ -112,6 +116,23 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				agentHost.sendToExtension(message as any)
 			})
 
+			// Window control IPC handlers
+			ipcMain.on("desktop:window-minimize", () => {
+				if (!win.isDestroyed()) win.minimize()
+			})
+			ipcMain.on("desktop:window-maximize", () => {
+				if (!win.isDestroyed()) {
+					if (win.isMaximized()) {
+						win.unmaximize()
+					} else {
+						win.maximize()
+					}
+				}
+			})
+			ipcMain.on("desktop:window-close", () => {
+				if (!win.isDestroyed()) win.close()
+			})
+
 			ipcMain.handle("desktop:select-folder", async () => {
 				const result = await dialog.showOpenDialog(win, {
 					properties: ["openDirectory"],
@@ -121,8 +142,19 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 					const selectedPath = result.filePaths[0]
 					if (selectedPath) {
 						console.log(`Switching workspace to: ${selectedPath}`)
-						agentHost.setWorkspace(selectedPath)
-						return selectedPath
+						const normalized = path.normalize(path.resolve(selectedPath))
+						agentHost.setWorkspace(normalized)
+						const newWs: WorkspaceInfo = {
+							path: normalized,
+							name: path.basename(normalized),
+							branch: getGitBranch(normalized),
+							files: listWorkspaceFiles(normalized),
+						}
+						if (!win.isDestroyed()) {
+							win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
+							win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+						}
+						return normalized
 					}
 				}
 				return null
@@ -130,10 +162,10 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			ipcMain.handle("desktop:show-item", async (_event, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
-					const wsRoot = path.resolve(agentHost.getWorkspace())
-					const abs = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
-					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
-						shell.showItemInFolder(abs)
+					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const validation = validatePathWithinRoot(filePath, wsRoot)
+					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
+						shell.showItemInFolder(validation.resolvedPath)
 						return true
 					}
 				}
@@ -142,36 +174,14 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			ipcMain.handle("desktop:open-path", async (_event, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
-					const wsRoot = path.resolve(agentHost.getWorkspace())
-					const abs = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(wsRoot, filePath)
-					if (abs.startsWith(wsRoot) && fs.existsSync(abs)) {
-						await shell.openPath(abs)
+					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const validation = validatePathWithinRoot(filePath, wsRoot)
+					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
+						await shell.openPath(validation.resolvedPath)
 						return true
 					}
 				}
 				return false
-			})
-
-			// Bridge agentHost events directly to Electron window
-			agentHost.on("messageToUI", (message) => {
-				if (!win.isDestroyed()) {
-					win.webContents.send("desktop:message-from-extension", { type: "extensionMessage", message })
-				}
-			})
-			agentHost.on("statusChange", (status) => {
-				if (!win.isDestroyed()) {
-					win.webContents.send("desktop:message-from-extension", { type: "agentStatus", status })
-				}
-			})
-			agentHost.on("terminalLog", (entry) => {
-				if (!win.isDestroyed()) {
-					win.webContents.send("desktop:message-from-extension", { type: "terminalLog", entry })
-				}
-			})
-			agentHost.on("diffsUpdated", (diffs) => {
-				if (!win.isDestroyed()) {
-					win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs })
-				}
 			})
 
 			// Create application menu
@@ -191,7 +201,18 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 									const selectedPath = result.filePaths[0]
 									if (selectedPath) {
 										console.log(`Switching workspace to: ${selectedPath}`)
-										agentHost.setWorkspace(selectedPath)
+										const normalized = path.normalize(path.resolve(selectedPath))
+										agentHost.setWorkspace(normalized)
+										const newWs: WorkspaceInfo = {
+											path: normalized,
+											name: path.basename(normalized),
+											branch: getGitBranch(normalized),
+											files: listWorkspaceFiles(normalized),
+										}
+										if (!win.isDestroyed()) {
+											win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
+											win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+										}
 									}
 								}
 							},
@@ -230,6 +251,20 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			const menu = Menu.buildFromTemplate(menuTemplate)
 			Menu.setApplicationMenu(menu)
+
+			win.webContents.on("did-finish-load", () => {
+				if (!win.isDestroyed()) {
+					const curWs = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const newWs: WorkspaceInfo = {
+						path: curWs,
+						name: path.basename(curWs),
+						branch: getGitBranch(curWs),
+						files: listWorkspaceFiles(curWs),
+					}
+					win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
+					win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+				}
+			})
 
 			await win.loadURL(appUrl)
 

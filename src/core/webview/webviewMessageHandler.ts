@@ -5,6 +5,7 @@ import * as fs from "fs/promises"
 import { getRooDirectoriesForCwd } from "../../services/roo-config/index.js"
 import pWaitFor from "p-wait-for"
 import * as vscode from "vscode"
+import axios from "axios"
 
 import {
 	type Language,
@@ -53,7 +54,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { playTts, setTtsEnabled, setTtsSpeed, stopTts } from "../../utils/tts"
 import { searchCommits } from "../../utils/git"
 import { exportSettings, importSettingsWithFeedback } from "../config/importExport"
-import { getOpenAiModels } from "../../api/providers/openai"
+import { getOpenAiModels, sortOpenAiModels } from "../../api/providers/openai"
 import { getVsCodeLmModels } from "../../api/providers/vscode-lm"
 import { openMention } from "../mentions"
 import { resolveImageMentions } from "../mentions/resolveImageMentions"
@@ -133,6 +134,17 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		}))
 
 		const existingCommandNames = new Set(commandList.map((command) => command.name))
+
+		if (!existingCommandNames.has("compact")) {
+			existingCommandNames.add("compact")
+			commandList.push({
+				name: "compact",
+				description: "Compress conversation history and reclaim context tokens",
+				argumentHint: "[instructions]",
+				source: "built-in",
+			})
+		}
+
 		const skillsManager = provider.getSkillsManager()
 
 		if (!skillsManager) {
@@ -177,6 +189,36 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			maxTotalImageSize: state.maxTotalImageSize,
 		})
 		return resolved
+	}
+
+	const handleCompactTask = async (customInstructions?: string) => {
+		const currentTask = provider.getCurrentTask()
+		if (!currentTask) {
+			return
+		}
+		try {
+			await provider.postMessageToWebview({ type: "compactTaskProgress" })
+			const result = await currentTask.compactConversation(customInstructions)
+			const previousTokens = result.previousTokens
+			const newTokens = result.newTokens
+			const savedTokensPercentage = result.savedTokensPercentage
+
+			await provider.postMessageToWebview({
+				type: "taskCompacted",
+				previousTokens,
+				newTokens,
+				savedTokensPercentage,
+			})
+		} catch (error) {
+			console.error("Failed to compact conversation:", error)
+			vscode.window.showErrorMessage(
+				`Failed to compact conversation: ${error instanceof Error ? error.message : String(error)}`,
+			)
+			await provider.postMessageToWebview({
+				type: "taskCompacted",
+				error: error instanceof Error ? error.message : String(error),
+			})
+		}
 	}
 	/**
 	 * Shared utility to find message indices based on timestamp.
@@ -629,6 +671,15 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "askResponse":
 			{
 				const resolved = await resolveIncomingImages({ text: message.text, images: message.images })
+				const trimmedText = resolved.text?.trim() || ""
+				const compactRegex = /^\/(compact|compress|summarize)(?:\s+(.*))?$/i
+				const match = trimmedText.match(compactRegex)
+				if (match && message.askResponse === "messageResponse") {
+					const customInstructions = match[2]?.trim() || undefined
+					await handleCompactTask(customInstructions)
+					break
+				}
+
 				provider
 					.getCurrentTask()
 					?.handleWebviewAskResponse(message.askResponse!, resolved.text, resolved.images)
@@ -769,6 +820,9 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			break
 		case "condenseTaskContextRequest":
 			provider.condenseTaskContext(message.text!)
+			break
+		case "compactTask":
+			await handleCompactTask(message.customInstructions)
 			break
 		case "deleteTaskWithId":
 			provider.deleteTaskWithId(message.text!)
@@ -1056,18 +1110,157 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			}
 			break
 		}
-		case "requestOpenAiModels":
-			if (message?.values?.baseUrl && message?.values?.apiKey) {
-				const openAiModels = await getOpenAiModels(
-					message?.values?.baseUrl,
-					message?.values?.apiKey,
-					message?.values?.openAiHeaders,
-				)
+		case "requestOpenAiModels": {
+			const { apiConfiguration } = await provider.getState()
+			const requestedProvider = message?.values?.provider || apiConfiguration?.apiProvider || "xkiro"
+			const isXkiro = requestedProvider === "xkiro"
 
-				provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+			let baseUrl = message?.values?.baseUrl
+			let apiKey = message?.values?.apiKey
+			const openAiHeaders = message?.values?.openAiHeaders
+
+			if (!baseUrl) {
+				baseUrl = isXkiro
+					? (apiConfiguration?.xkiroBaseUrl || "https://api.xkiro.com/v1")
+					: apiConfiguration?.openAiBaseUrl
+			}
+			if (!apiKey) {
+				apiKey = isXkiro
+					? (apiConfiguration?.xkiroApiKey || apiConfiguration?.apiKey)
+					: (apiConfiguration?.openAiApiKey || apiConfiguration?.apiKey)
+			}
+
+			if (baseUrl) {
+				const openAiModels = await getOpenAiModels(baseUrl, apiKey, openAiHeaders)
+				if (openAiModels && openAiModels.length > 0) {
+					await provider.setValue("openAiModels", openAiModels)
+					await provider.setGlobalState("openAiModels", openAiModels)
+					provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+				} else {
+					const cached =
+						(provider.getValue("openAiModels") as string[] | undefined) ??
+						(await provider.getGlobalState("openAiModels"))
+					if (cached && cached.length > 0) {
+						provider.postMessageToWebview({ type: "openAiModels", openAiModels: cached })
+					} else {
+						provider.postMessageToWebview({ type: "openAiModels", openAiModels: [] })
+					}
+				}
 			}
 
 			break
+		}
+		case "testConnection": {
+			const baseUrl = (message?.values?.baseUrl || "https://api.xkiro.com/v1").trim().replace(/\/+$/, "")
+			const apiKey = message?.values?.apiKey
+			const providerType = message?.values?.provider || "xkiro"
+
+			if (!apiKey) {
+				provider.postMessageToWebview({
+					type: "testConnectionResult",
+					success: false,
+					error: "Please enter an API key before testing connection.",
+				})
+				break
+			}
+
+			try {
+				const response = await axios.get(`${baseUrl}/models`, {
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						"User-Agent": "Roo-Code-Desktop/1.0",
+						"Content-Type": "application/json",
+					},
+					timeout: 10000,
+				})
+
+				if (response.status === 200) {
+					const data = response.data
+					const rawList: any[] = Array.isArray(data)
+						? data
+						: Array.isArray(data?.data)
+							? data.data
+							: Array.isArray(data?.models)
+								? data.models
+								: []
+
+					const extractedIds = rawList
+						.map((item: any) => (typeof item === "string" ? item : item?.id || item?.name || ""))
+						.map((id: string) => id.trim())
+						.filter((id: string) => id.length > 0)
+
+					const openAiModels = sortOpenAiModels(Array.from(new Set(extractedIds)))
+
+					if (openAiModels.length > 0) {
+						await provider.setValue("openAiModels", openAiModels)
+						await provider.setGlobalState("openAiModels", openAiModels)
+						provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+					}
+
+					const count = openAiModels.length || (Array.isArray(data?.data) ? data.data.length : null)
+					provider.postMessageToWebview({
+						type: "testConnectionResult",
+						success: true,
+						text: count
+							? `Connected successfully! (${count} models available)`
+							: `Connected successfully to ${providerType === "xkiro" ? "xKiro" : "API"}!`,
+						values: { count, models: openAiModels },
+					})
+				} else {
+					provider.postMessageToWebview({
+						type: "testConnectionResult",
+						success: false,
+						error: `Connection returned status ${response.status}: ${response.statusText || "Unexpected error"}`,
+					})
+				}
+			} catch (error: any) {
+				if (axios.isAxiosError(error)) {
+					const apiErrorMessage =
+						typeof error.response?.data?.error?.message === "string"
+							? error.response.data.error.message
+							: typeof error.response?.data?.message === "string"
+								? error.response.data.message
+								: ""
+
+					if (error.response?.status === 401 || error.response?.status === 403) {
+						provider.postMessageToWebview({
+							type: "testConnectionResult",
+							success: false,
+							error: apiErrorMessage
+								? `Authentication failed (${error.response.status}): ${apiErrorMessage}`
+								: `Authentication failed (${error.response.status}): Invalid API key.`,
+						})
+					} else if (error.code === "ECONNABORTED" || error.message?.includes("timeout")) {
+						provider.postMessageToWebview({
+							type: "testConnectionResult",
+							success: false,
+							error: "Connection timed out after 10000ms. Please check your network or base URL.",
+						})
+					} else if (error.response) {
+						provider.postMessageToWebview({
+							type: "testConnectionResult",
+							success: false,
+							error: apiErrorMessage
+								? `Connection failed with status ${error.response.status}: ${apiErrorMessage}`
+								: `Connection failed with status ${error.response.status}: ${error.response.statusText || error.message}`,
+						})
+					} else {
+						provider.postMessageToWebview({
+							type: "testConnectionResult",
+							success: false,
+							error: `Connection test failed (network error): ${error.message || "Failed to connect to host"}`,
+						})
+					}
+				} else {
+					provider.postMessageToWebview({
+						type: "testConnectionResult",
+						success: false,
+						error: `Connection test failed: ${error?.message || "Unknown error"}`,
+					})
+				}
+			}
+			break
+		}
 		case "requestVsCodeLmModels":
 			const vsCodeLmModels = await getVsCodeLmModels()
 			// TODO: Cache like we do for OpenRouter, etc?
@@ -1540,6 +1733,8 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 						includeTaskHistoryInEnhance,
 						currentClineMessages: currentCline?.clineMessages,
 						providerSettingsManager: provider.providerSettingsManager,
+						currentWorkspace: provider.cwd,
+						taskWorkspace: currentCline?.cwd,
 					})
 
 					if (result.success && result.enhancedText) {
@@ -1715,6 +1910,33 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		case "upsertApiConfiguration":
 			if (message.text && message.apiConfiguration) {
 				await provider.upsertProviderProfile(message.text, message.apiConfiguration)
+
+				// Automatically discover and cache models for xKiro or OpenAI-compatible
+				const config = message.apiConfiguration
+				const providerType = config.apiProvider || "xkiro"
+				if (providerType === "xkiro" || providerType === "openai") {
+					const isXkiro = providerType === "xkiro"
+					const baseUrl = isXkiro
+						? (config.xkiroBaseUrl || "https://api.xkiro.com/v1")
+						: config.openAiBaseUrl
+					const apiKey = isXkiro
+						? (config.xkiroApiKey || config.apiKey)
+						: (config.openAiApiKey || config.apiKey)
+
+					if (baseUrl && apiKey) {
+						getOpenAiModels(baseUrl, apiKey, config.openAiHeaders)
+							.then(async (openAiModels) => {
+								if (openAiModels && openAiModels.length > 0) {
+									await provider.setValue("openAiModels", openAiModels)
+									await provider.setGlobalState("openAiModels", openAiModels)
+									provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+								}
+							})
+							.catch((err) => {
+								console.debug("Background model discovery on upsertApiConfiguration failed:", err)
+							})
+					}
+				}
 			}
 			break
 		case "renameApiConfiguration":

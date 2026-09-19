@@ -1,5 +1,11 @@
 import { render, screen, fireEvent } from "@/utils/test-utils"
-import { ModelSelector, cleanModelDisplayName } from "../ModelSelector"
+import {
+	ModelSelector,
+	cleanModelDisplayName,
+	extractModelFamily,
+	extractModelVersion,
+	promoteDynamicFlagships,
+} from "../ModelSelector"
 import { vscode } from "@/utils/vscode"
 
 vi.mock("@/utils/vscode", () => ({
@@ -10,17 +16,21 @@ vi.mock("@/utils/vscode", () => ({
 
 const mockSetApiConfiguration = vi.fn()
 
+let mockExtensionState = {
+	apiConfiguration: {
+		apiProvider: "xkiro",
+		apiModelId: "deepseek/deepseek-chat",
+		xkiroModelId: "deepseek/deepseek-chat",
+		apiKey: "test-api-key",
+	},
+	currentApiConfigName: "default",
+	setApiConfiguration: mockSetApiConfiguration,
+	routerModels: undefined,
+	openAiModels: undefined as string[] | undefined,
+}
+
 vi.mock("@/context/ExtensionStateContext", () => ({
-	useExtensionState: () => ({
-		apiConfiguration: {
-			apiProvider: "xkiro",
-			apiModelId: "deepseek/deepseek-chat",
-			xkiroModelId: "deepseek/deepseek-chat",
-		},
-		currentApiConfigName: "default",
-		setApiConfiguration: mockSetApiConfiguration,
-		routerModels: undefined,
-	}),
+	useExtensionState: () => mockExtensionState,
 }))
 
 vi.mock("@/components/ui/hooks/useSelectedModel", () => ({
@@ -36,14 +46,31 @@ vi.mock("@/components/ui/hooks/useSelectedModel", () => ({
 describe("ModelSelector", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		mockExtensionState = {
+			apiConfiguration: {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+				apiKey: "test-api-key",
+			},
+			currentApiConfigName: "default",
+			setApiConfiguration: mockSetApiConfiguration,
+			routerModels: undefined,
+			openAiModels: undefined,
+		}
 	})
 
-	test("cleanModelDisplayName formats known models correctly", () => {
+	test("cleanModelDisplayName formats known models and new generations correctly", () => {
 		expect(cleanModelDisplayName("deepseek/deepseek-chat")).toBe("DeepSeek V3")
 		expect(cleanModelDisplayName("deepseek/deepseek-reasoner")).toBe("DeepSeek R1")
 		expect(cleanModelDisplayName("anthropic/claude-3.7-sonnet")).toBe("Claude 3.7 Sonnet")
+		expect(cleanModelDisplayName("anthropic/claude-4.5-sonnet")).toBe("Claude 4.5 Sonnet")
+		expect(cleanModelDisplayName("openai/gpt-5")).toBe("GPT-5")
+		expect(cleanModelDisplayName("openai/gpt-4.5-preview")).toBe("GPT-4.5 Preview")
 		expect(cleanModelDisplayName("openai/gpt-4o")).toBe("GPT-4o")
 		expect(cleanModelDisplayName("google/gemini-2.5-pro")).toBe("Gemini 2.5 Pro")
+		expect(cleanModelDisplayName("google/gemini-3-pro")).toBe("Gemini 3 Pro")
+		expect(cleanModelDisplayName("qwen/qwen-3-coder")).toBe("Qwen 3 Coder")
 	})
 
 	test("renders the trigger button with current model display name", () => {
@@ -87,5 +114,87 @@ describe("ModelSelector", () => {
 				}),
 			}),
 		)
+	})
+
+	test("clicking refresh button sends requestOpenAiModels IPC message", () => {
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Find the single refresh button in the popover header
+		const refreshBtn = screen.getByTestId("refresh-models-button")
+		expect(refreshBtn).toBeInTheDocument()
+		expect(refreshBtn).toHaveAttribute("aria-label", "Refresh models")
+
+		// Redundant footer button should not exist
+		expect(screen.queryByText("Refresh Models")).not.toBeInTheDocument()
+
+		fireEvent.click(refreshBtn)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "requestOpenAiModels",
+			}),
+		)
+	})
+
+	test("displays dynamic models from openAiModels in state with flagship and all models sections", () => {
+		mockExtensionState.openAiModels = [
+			"anthropic/claude-3.7-sonnet",
+			"openai/gpt-4o",
+			"custom-provider/custom-test-model",
+		]
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Section headers
+		expect(screen.getByText("Recommended / Flagship")).toBeInTheDocument()
+		expect(screen.getByText(/All Available Models/)).toBeInTheDocument()
+
+		// Dynamic model rendered
+		expect(screen.getByText("custom-test-model")).toBeInTheDocument()
+		expect(screen.getByText("custom-provider/custom-test-model")).toBeInTheDocument()
+	})
+
+	test("promotes newest generation models dynamically to Flagship section", () => {
+		mockExtensionState.openAiModels = [
+			"anthropic/claude-4.5-sonnet",
+			"anthropic/claude-3.5-sonnet",
+			"openai/gpt-5",
+			"openai/gpt-4o",
+			"google/gemini-3-pro",
+			"qwen/qwen-3-coder",
+		]
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Check that newest generation models are rendered with their formatted names
+		expect(screen.getByText("Claude 4.5 Sonnet")).toBeInTheDocument()
+		expect(screen.getByText("GPT-5")).toBeInTheDocument()
+		expect(screen.getByText("Gemini 3 Pro")).toBeInTheDocument()
+		expect(screen.getByText("Qwen 3 Coder")).toBeInTheDocument()
+	})
+
+	test("renders smart badges (Reasoning, Fast, Coder, Vision) accurately", () => {
+		mockExtensionState.openAiModels = [
+			"openai/o3-mini",
+			"anthropic/claude-3.5-haiku",
+			"qwen/qwen-2.5-coder",
+			"openai/gpt-4o-vision",
+		]
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Badges in document
+		expect(screen.getAllByText("Reasoning").length).toBeGreaterThan(0)
+		expect(screen.getAllByText("Fast").length).toBeGreaterThan(0)
+		expect(screen.getAllByText("Coder").length).toBeGreaterThan(0)
+		expect(screen.getAllByText("Vision").length).toBeGreaterThan(0)
 	})
 })

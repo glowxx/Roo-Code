@@ -1,6 +1,7 @@
 import { ProviderSettings, ClineMessage, GlobalState } from "@roo-code/types"
 import { supportPrompt } from "../../shared/support-prompt"
 import { singleCompletionHandler } from "../../utils/single-completion-handler"
+import { arePathsEqual } from "../../utils/path"
 import { ProviderSettingsManager } from "../config/ProviderSettingsManager"
 import { ClineProvider } from "./ClineProvider"
 
@@ -13,6 +14,8 @@ export interface MessageEnhancerOptions {
 	includeTaskHistoryInEnhance?: boolean
 	currentClineMessages?: ClineMessage[]
 	providerSettingsManager: ProviderSettingsManager
+	currentWorkspace?: string
+	taskWorkspace?: string
 }
 
 export interface MessageEnhancerResult {
@@ -62,9 +65,15 @@ export class MessageEnhancer {
 
 			// Include task history if enabled and available
 			if (includeTaskHistoryInEnhance && currentClineMessages && currentClineMessages.length > 0) {
-				const taskHistory = this.extractTaskHistory(currentClineMessages)
-				if (taskHistory) {
-					promptToEnhance = `${text}\n\nUse the following previous conversation context as needed:\n${taskHistory}`
+				const isSameWorkspace =
+					!options.taskWorkspace ||
+					!options.currentWorkspace ||
+					arePathsEqual(options.taskWorkspace, options.currentWorkspace)
+				if (isSameWorkspace) {
+					const taskHistory = this.extractTaskHistory(currentClineMessages)
+					if (taskHistory) {
+						promptToEnhance = `${text}\n\nUse the following previous conversation context as needed:\n${taskHistory}`
+					}
 				}
 			}
 

@@ -73,6 +73,9 @@ export const MAX_CHECKPOINT_TIMEOUT_SECONDS = 60
  */
 export const DEFAULT_CHECKPOINT_TIMEOUT_SECONDS = 15
 
+export const themeTypes = ["linear-dark", "oled-black", "midnight-navy", "cyberpunk", "clean-light"] as const
+export type ThemeType = (typeof themeTypes)[number]
+
 /**
  * GlobalSettings
  */
@@ -199,6 +202,11 @@ export const globalSettingsSchema = z.object({
 	historyPreviewCollapsed: z.boolean().optional(),
 	reasoningBlockCollapsed: z.boolean().optional(),
 	/**
+	 * Visual theme for desktop and webview UI.
+	 * @default "linear-dark"
+	 */
+	theme: z.enum(themeTypes).optional(),
+	/**
 	 * Controls the keyboard behavior for sending messages in the chat input.
 	 * - "send": Enter sends message, Shift+Enter creates newline (default)
 	 * - "newline": Enter creates newline, Shift+Enter/Ctrl+Enter sends message
@@ -229,6 +237,12 @@ export const globalSettingsSchema = z.object({
 	 * Tools in this list will be excluded from prompt generation and rejected at execution time.
 	 */
 	disabledTools: z.array(toolNamesSchema).optional(),
+
+	/**
+	 * Dynamically discovered models for OpenAI-compatible and xKiro providers.
+	 * Persisted across sessions via ContextProxy.
+	 */
+	openAiModels: z.array(z.string()).optional(),
 })
 
 export type GlobalSettings = z.infer<typeof globalSettingsSchema>
@@ -277,6 +291,7 @@ export const SECRET_STATE_KEYS = [
 	"fireworksApiKey",
 	"vercelAiGatewayApiKey",
 	"basetenApiKey",
+	"xkiroApiKey",
 ] as const
 
 // Global secrets that are part of GlobalSettings (not ProviderSettings)

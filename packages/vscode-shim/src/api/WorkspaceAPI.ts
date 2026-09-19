@@ -55,6 +55,25 @@ export class WorkspaceAPI {
 		this.fs = new FileSystemAPI()
 	}
 
+	public setWorkspaceFolders(folders: WorkspaceFolder[] | string): void {
+		const prevFolders = this.workspaceFolders || []
+		const newPath = typeof folders === "string" ? folders : folders[0]?.uri.fsPath
+		if (newPath) {
+			const newFolder: WorkspaceFolder = {
+				uri: Uri.file(newPath),
+				name: path.basename(newPath),
+				index: 0,
+			}
+			this.workspaceFolders = [newFolder]
+			this.name = path.basename(newPath)
+			this.context?.updateWorkspace(newPath)
+			this._onDidChangeWorkspaceFolders.fire({
+				added: [newFolder],
+				removed: prevFolders,
+			})
+		}
+	}
+
 	asRelativePath(pathOrUri: string | Uri, includeWorkspaceFolder?: boolean): string {
 		const fsPath = typeof pathOrUri === "string" ? pathOrUri : pathOrUri.fsPath
 

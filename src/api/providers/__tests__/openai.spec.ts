@@ -1,6 +1,6 @@
 // npx vitest run api/providers/__tests__/openai.spec.ts
 
-import { OpenAiHandler, getOpenAiModels } from "../openai"
+import { OpenAiHandler, getOpenAiModels, sortOpenAiModels } from "../openai"
 import { ApiHandlerOptions } from "../../../shared/api"
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
@@ -1278,5 +1278,71 @@ describe("getOpenAiModels", () => {
 		const result = await getOpenAiModels("https://api.example.com/v1", "test-key")
 
 		expect(result).toEqual(["gpt-4", "gpt-3.5-turbo"])
+	})
+
+	it("should prioritize flagship models (Claude, GPT, DeepSeek, Gemini, Qwen)", () => {
+		const models = [
+			"other-model-b",
+			"qwen/qwen-2.5-coder",
+			"google/gemini-2.5-pro",
+			"deepseek/deepseek-chat",
+			"openai/gpt-4o",
+			"anthropic/claude-3.7-sonnet",
+			"other-model-a",
+		]
+		const sorted = sortOpenAiModels(models)
+		expect(sorted).toEqual([
+			"anthropic/claude-3.7-sonnet",
+			"openai/gpt-4o",
+			"deepseek/deepseek-chat",
+			"google/gemini-2.5-pro",
+			"qwen/qwen-2.5-coder",
+			"other-model-a",
+			"other-model-b",
+		])
+	})
+
+	it("should sort models within families descending by generation/version", () => {
+		const models = [
+			"anthropic/claude-3.5-sonnet",
+			"anthropic/claude-4.5-sonnet",
+			"anthropic/claude-3.7-sonnet",
+			"openai/gpt-4o",
+			"openai/gpt-5",
+			"openai/gpt-4.5-preview",
+			"google/gemini-2.0-flash",
+			"google/gemini-3-pro",
+			"google/gemini-2.5-pro",
+		]
+		const sorted = sortOpenAiModels(models)
+		expect(sorted).toEqual([
+			"anthropic/claude-4.5-sonnet",
+			"anthropic/claude-3.7-sonnet",
+			"anthropic/claude-3.5-sonnet",
+			"openai/gpt-5",
+			"openai/gpt-4.5-preview",
+			"openai/gpt-4o",
+			"google/gemini-3-pro",
+			"google/gemini-2.5-pro",
+			"google/gemini-2.0-flash",
+		])
+	})
+
+	it("should handle alternative response formats like models array or root array", async () => {
+		const mockResponse1 = {
+			data: {
+				models: [{ id: "model-x" }],
+			},
+		}
+		vi.mocked(axios.get).mockResolvedValueOnce(mockResponse1)
+		const res1 = await getOpenAiModels("https://api.example.com/v1", "test-key")
+		expect(res1).toEqual(["model-x"])
+
+		const mockResponse2 = {
+			data: [{ id: "model-y" }],
+		}
+		vi.mocked(axios.get).mockResolvedValueOnce(mockResponse2)
+		const res2 = await getOpenAiModels("https://api.example.com/v1", "test-key")
+		expect(res2).toEqual(["model-y"])
 	})
 })

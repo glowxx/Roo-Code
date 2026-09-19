@@ -123,6 +123,7 @@ import {
 } from "../checkpoints"
 import { processUserContentMentions } from "../mentions/processUserContentMentions"
 import { getMessagesSinceLastSummary, summarizeConversation, getEffectiveApiHistory } from "../condense"
+import { compactHistory } from "../context/ContextCompactor"
 import { MessageQueueService } from "../message-queue/MessageQueueService"
 import { AutoApprovalHandler, checkAutoApproval } from "../auto-approval"
 import { MessageManager } from "../message-manager"
@@ -341,6 +342,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	presentAssistantMessageHasPendingUpdates = false
 	userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolResultBlockParam)[] = []
 	userMessageContentReady = false
+	private isCompacting = false
 
 	/**
 	 * Flag indicating whether the assistant message for the current streaming session
@@ -1705,6 +1707,97 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		// Process any queued messages after condensing completes
 		this.processQueuedMessages()
+	}
+
+	public async compactConversation(
+		customInstructions?: string,
+	): Promise<{ previousTokens: number; newTokens: number; savedTokensPercentage: number }> {
+		if (this.isCompacting) {
+			throw new Error("Context compaction is already in progress.")
+		}
+
+		await pWaitFor(
+			() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
+			{ timeout: 60000, interval: 100 },
+		)
+
+		if (this.isCompacting) {
+			throw new Error("Context compaction is already in progress.")
+		}
+
+		this.isCompacting = true
+
+		try {
+			await this.flushPendingToolResultsToHistory()
+
+			const systemPrompt = await this.getSystemPrompt()
+
+			const {
+				newHistory,
+				summary,
+				previousTokens,
+				newTokens,
+				cost,
+			} = await compactHistory({
+				messages: this.apiConversationHistory,
+				apiHandler: this.api,
+				systemPrompt,
+				taskId: this.taskId,
+				customInstructions,
+				cwd: this.cwd,
+				rooIgnoreController: this.rooIgnoreController,
+			})
+
+			await this.overwriteApiConversationHistory(newHistory)
+
+			const contextCondense: ContextCondense = {
+				summary,
+				cost,
+				prevContextTokens: previousTokens,
+				newContextTokens: newTokens,
+			}
+
+			await this.say(
+				"condense_context",
+				undefined /* text */,
+				undefined /* images */,
+				false /* partial */,
+				undefined /* checkpoint */,
+				undefined /* progressStatus */,
+				{ isNonInteractive: true } /* options */,
+				contextCondense,
+			)
+
+			const savedTokens = Math.max(0, previousTokens - newTokens)
+			const savedTokensPercentage =
+				previousTokens > 0 ? Math.round((savedTokens / previousTokens) * 100) : 0
+
+			const provider = this.providerRef.deref()
+			await provider?.postMessageToWebview({
+				type: "taskCompacted",
+				text: this.taskId,
+				previousTokens,
+				newTokens,
+				savedTokensPercentage,
+				payload: {
+					taskId: this.taskId,
+					previousTokens,
+					newTokens,
+					savedTokens,
+					savedTokensPercentage,
+				},
+			})
+			await provider?.postMessageToWebview({
+				type: "condenseTaskContextResponse",
+				text: this.taskId,
+			})
+
+			this.processQueuedMessages()
+
+			return { previousTokens, newTokens, savedTokensPercentage }
+		} finally {
+			this.isCompacting = false
+		}
 	}
 
 	async say(

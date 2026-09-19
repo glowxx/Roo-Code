@@ -273,7 +273,14 @@ function getSelectedModel({
 		}
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
-			const info = xkiroModels[id as keyof typeof xkiroModels]
+			const info =
+				(xkiroModels as Record<string, ModelInfo>)[id] ?? {
+					maxTokens: 8192,
+					contextWindow: 128_000,
+					supportsImages: true,
+					supportsPromptCache: true,
+					description: `xKiro model: ${id}`,
+				}
 			return { id, info }
 		}
 		case "ollama": {

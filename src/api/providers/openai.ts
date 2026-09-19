@@ -534,6 +534,143 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 }
 
+export type ModelFamily = "claude" | "openai" | "deepseek" | "gemini" | "qwen" | "other"
+
+export function extractModelFamily(id: string): ModelFamily {
+	const lower = id.toLowerCase()
+	if (lower.includes("claude") || lower.includes("anthropic")) return "claude"
+	if (lower.includes("gpt") || lower.includes("openai") || /(?:^|[\/_\-])o[1-9](?:[\/_\-]|$)/i.test(lower)) return "openai"
+	if (lower.includes("deepseek")) return "deepseek"
+	if (lower.includes("gemini") || lower.includes("google")) return "gemini"
+	if (lower.includes("qwen")) return "qwen"
+	return "other"
+}
+
+export function extractModelVersion(id: string): number {
+	const lower = id.toLowerCase()
+	const family = extractModelFamily(id)
+
+	if (family === "claude") {
+		const match = lower.match(/claude-?(?:v)?(\d+)(?:[.\-_](\d+))?/)
+		if (match) {
+			const major = parseInt(match[1], 10)
+			const minor = match[2] ? parseInt(match[2], 10) : 0
+			return major + minor / 10
+		}
+	} else if (family === "openai") {
+		const oMatch = lower.match(/(?:^|[\/_\-])o(\d+)(?:[.\-_](\d+))?/)
+		if (oMatch) {
+			const major = parseInt(oMatch[1], 10)
+			const minor = oMatch[2] ? parseInt(oMatch[2], 10) : 0
+			return major + minor / 10
+		}
+		const gptMatch = lower.match(/gpt-?(?:v)?(\d+)(?:[.\-_](\d+))?/)
+		if (gptMatch) {
+			const major = parseInt(gptMatch[1], 10)
+			const minor = gptMatch[2] ? parseInt(gptMatch[2], 10) : 0
+			return major + minor / 10
+		}
+	} else if (family === "deepseek") {
+		const vMatch = lower.match(/deepseek-?(?:v)(\d+)(?:[.\-_](\d+))?/)
+		if (vMatch) {
+			const major = parseInt(vMatch[1], 10)
+			const minor = vMatch[2] ? parseInt(vMatch[2], 10) : 0
+			return major + minor / 10
+		}
+		const rMatch = lower.match(/deepseek-?(?:r)(\d+)(?:[.\-_](\d+))?/)
+		if (rMatch) {
+			const major = parseInt(rMatch[1], 10)
+			const minor = rMatch[2] ? parseInt(rMatch[2], 10) : 0
+			return major + minor / 10
+		}
+		if (lower.includes("chat")) return 3.0
+		if (lower.includes("reasoner")) return 1.0
+	} else if (family === "gemini") {
+		const geminiMatch = lower.match(/gemini-?(?:v)?(\d+)(?:[.\-_](\d+))?/)
+		if (geminiMatch) {
+			const major = parseInt(geminiMatch[1], 10)
+			const minor = geminiMatch[2] ? parseInt(geminiMatch[2], 10) : 0
+			return major + minor / 10
+		}
+	} else if (family === "qwen") {
+		const qwenMatch = lower.match(/qwen-?(?:v)?(\d+)(?:[.\-_](\d+))?/)
+		if (qwenMatch) {
+			const major = parseInt(qwenMatch[1], 10)
+			const minor = qwenMatch[2] ? parseInt(qwenMatch[2], 10) : 0
+			return major + minor / 10
+		}
+	}
+
+	const genericMatch = lower.match(/(?:v)?(\d+)[.\-_](\d+)/)
+	if (genericMatch) {
+		return parseInt(genericMatch[1], 10) + parseInt(genericMatch[2], 10) / 10
+	}
+	const singleNum = lower.match(/(?:v|-)(\d+)(?:$|[^0-9])/)
+	if (singleNum) {
+		return parseInt(singleNum[1], 10)
+	}
+
+	return 0
+}
+
+export function getModelTierScore(id: string): number {
+	const lower = id.toLowerCase()
+	let score = 0
+	if (lower.includes("opus")) score += 30
+	else if (lower.includes("sonnet") || lower.includes("pro") || lower.includes("max")) score += 20
+	else if (lower.includes("plus") || lower.includes("chat") || lower.includes("reasoner")) score += 15
+	else if (lower.includes("mini") || lower.includes("flash") || lower.includes("haiku") || lower.includes("turbo") || lower.includes("lite")) score += 5
+	else score += 10
+
+	if (lower.includes("reason") || lower.includes("r1") || lower.includes("o1") || lower.includes("o3") || lower.includes("thinking")) {
+		score += 5
+	}
+	return score
+}
+
+export function sortOpenAiModels(models: string[]): string[] {
+	const getFamilyPriority = (family: ModelFamily): number => {
+		switch (family) {
+			case "claude":
+				return 1
+			case "openai":
+				return 2
+			case "deepseek":
+				return 3
+			case "gemini":
+				return 4
+			case "qwen":
+				return 5
+			default:
+				return 6
+		}
+	}
+
+	return [...models].sort((a, b) => {
+		const famA = extractModelFamily(a)
+		const famB = extractModelFamily(b)
+		const prioA = getFamilyPriority(famA)
+		const prioB = getFamilyPriority(famB)
+
+		if (prioA !== prioB) return prioA - prioB
+
+		if (famA !== "other") {
+			// Inside same known family: sort descending by version
+			const verA = extractModelVersion(a)
+			const verB = extractModelVersion(b)
+			if (verA !== verB) return verB - verA
+
+			// Inside same version: sort descending by tier score
+			const tierA = getModelTierScore(a)
+			const tierB = getModelTierScore(b)
+			if (tierA !== tierB) return tierB - tierA
+		}
+
+		// Tie-break alphabetically
+		return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
+	})
+}
+
 export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiHeaders?: Record<string, string>) {
 	try {
 		if (!baseUrl) {
@@ -547,9 +684,12 @@ export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiH
 			return []
 		}
 
-		const config: Record<string, any> = {}
+		const config: Record<string, any> = {
+			timeout: 10000,
+		}
 		const headers: Record<string, string> = {
 			...DEFAULT_HEADERS,
+			"User-Agent": "Roo-Code-Desktop/1.0",
 			...(openAiHeaders || {}),
 		}
 
@@ -562,8 +702,22 @@ export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiH
 		}
 
 		const response = await axios.get(`${trimmedBaseUrl}/models`, config)
-		const modelsArray = response.data?.data?.map((model: any) => model.id) || []
-		return [...new Set<string>(modelsArray)]
+		const rawData = response.data
+		const rawList: any[] = Array.isArray(rawData)
+			? rawData
+			: Array.isArray(rawData?.data)
+				? rawData.data
+				: Array.isArray(rawData?.models)
+					? rawData.models
+					: []
+
+		const extractedIds = rawList
+			.map((item: any) => (typeof item === "string" ? item : item?.id || item?.name || ""))
+			.map((id: string) => id.trim())
+			.filter((id: string) => id.length > 0)
+
+		const deduplicated = Array.from(new Set(extractedIds))
+		return sortOpenAiModels(deduplicated)
 	} catch (error) {
 		return []
 	}

@@ -51,6 +51,7 @@ import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels"
 import { ProfileValidator } from "../../shared/ProfileValidator"
 
 import { Terminal } from "../../integrations/terminal/Terminal"
+import { TerminalRegistry } from "../../integrations/terminal/TerminalRegistry"
 import { downloadTask, getTaskFileName } from "../../integrations/misc/export-markdown"
 import { resolveDefaultSaveUri, saveLastExportPath } from "../../utils/export"
 import { getTheme } from "../../integrations/theme/getTheme"
@@ -129,7 +130,7 @@ export class ClineProvider
 	protected mcpHub?: McpHub // Change from private to protected
 	protected skillsManager?: SkillsManager
 	private taskCreationCallback: (task: Task) => void
-	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
+	private taskEventListeners: Map<Task, Array<() => void>> = new Map()
 	private currentWorkspacePath: string | undefined
 	private _disposed = false
 
@@ -161,6 +162,12 @@ export class ClineProvider
 	) {
 		super()
 		this.currentWorkspacePath = getWorkspacePath()
+		const workspaceDisposable = vscode.workspace.onDidChangeWorkspaceFolders?.(async () => {
+			await this.handleWorkspaceChanged(getWorkspacePath())
+		})
+		if (workspaceDisposable) {
+			this.disposables.push(workspaceDisposable)
+		}
 
 		ClineProvider.activeInstances.add(this)
 
@@ -1820,6 +1827,47 @@ export class ClineProvider
 		await this.postStateToWebview()
 	}
 
+	public async handleWorkspaceChanged(newPath?: string): Promise<void> {
+		this.currentWorkspacePath = newPath || getWorkspacePath()
+		// 1. Anuluj i wyczyść aktywne zadania
+		while (this.clineStack.length > 0) {
+			const task = this.clineStack.pop()
+			if (task) {
+				try {
+					await task.abortTask(true)
+				} catch (e) {
+					this.log(`Error aborting task on workspace change: ${e}`)
+				}
+			}
+		}
+		// 2. Wyczyść listenery zadań
+		this.taskEventListeners.clear()
+		// 3. Wyślij komunikat do Webview o resecie czatu
+		this.postMessageToWebview({ type: "action", action: "clearTask" })
+		await this.postStateToWebview()
+		// 4. Przeładuj umiejętności i reguły
+		if (this.skillsManager) {
+			try {
+				await this.skillsManager.initialize()
+			} catch (e) {
+				this.log(`Error reinitializing skills: ${e}`)
+			}
+		}
+		await this.postStateToWebviewWithoutClineMessages()
+		// 5. Wyczyść terminale
+		try {
+			TerminalRegistry.cleanup()
+		} catch (e) {
+			this.log(`Error cleaning terminals: ${e}`)
+		}
+		// 6. Wyczyść serwery MCP starego projektu
+		try {
+			await this.mcpHub?.cleanupProjectMcpServers?.()
+		} catch (e) {
+			this.log(`Error cleaning up project MCP servers: ${e}`)
+		}
+	}
+
 	async refreshWorkspace() {
 		this.currentWorkspacePath = getWorkspacePath()
 		await this.postStateToWebview()
@@ -1981,6 +2029,7 @@ export class ClineProvider
 			maxTotalImageSize,
 			historyPreviewCollapsed,
 			reasoningBlockCollapsed,
+			theme,
 			enterBehavior,
 			organizationAllowList,
 			customCondensingPrompt,
@@ -1999,12 +2048,17 @@ export class ClineProvider
 			openRouterImageApiKey,
 			openRouterImageGenerationSelectedModel,
 			lockApiConfigAcrossModes,
+			openAiModels,
 		} = await this.getState()
 
 		const mergedAllowedCommands = this.mergeAllowedCommands(allowedCommands)
 		const mergedDeniedCommands = this.mergeDeniedCommands(deniedCommands)
 		const cwd = this.cwd
 		const currentTask = this.getCurrentTask()
+		const cachedOpenAiModels =
+			(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
+			(await this.getGlobalState("openAiModels")) ??
+			[]
 
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
@@ -2073,6 +2127,7 @@ export class ClineProvider
 			settingsImportedAt: this.settingsImportedAt,
 			historyPreviewCollapsed: historyPreviewCollapsed ?? false,
 			reasoningBlockCollapsed: reasoningBlockCollapsed ?? true,
+			theme: theme ?? "linear-dark",
 			enterBehavior: enterBehavior ?? "send",
 			organizationAllowList,
 			customCondensingPrompt,
@@ -2094,6 +2149,7 @@ export class ClineProvider
 			profileThresholds: profileThresholds ?? {},
 			hasOpenedModeSelector: this.getGlobalState("hasOpenedModeSelector") ?? false,
 			lockApiConfigAcrossModes: lockApiConfigAcrossModes ?? false,
+			openAiModels: openAiModels && openAiModels.length > 0 ? openAiModels : cachedOpenAiModels,
 			alwaysAllowFollowupQuestions: alwaysAllowFollowupQuestions ?? false,
 			followupAutoApproveTimeoutMs: followupAutoApproveTimeoutMs ?? 60000,
 			includeDiagnosticMessages: includeDiagnosticMessages ?? true,
@@ -2215,6 +2271,7 @@ export class ClineProvider
 			maxTotalImageSize: stateValues.maxTotalImageSize ?? 20,
 			historyPreviewCollapsed: stateValues.historyPreviewCollapsed ?? false,
 			reasoningBlockCollapsed: stateValues.reasoningBlockCollapsed ?? true,
+			theme: stateValues.theme ?? "linear-dark",
 			enterBehavior: stateValues.enterBehavior ?? "send",
 			organizationAllowList,
 			customCondensingPrompt: stateValues.customCondensingPrompt,
@@ -2249,6 +2306,10 @@ export class ClineProvider
 			imageGenerationProvider: stateValues.imageGenerationProvider,
 			openRouterImageApiKey: stateValues.openRouterImageApiKey,
 			openRouterImageGenerationSelectedModel: stateValues.openRouterImageGenerationSelectedModel,
+			openAiModels:
+				(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
+				(await this.getGlobalState("openAiModels")) ??
+				[],
 		}
 	}
 
@@ -2345,8 +2406,16 @@ export class ClineProvider
 	}
 
 	// @deprecated - Use `ContextProxy#getValue` instead.
-	private getGlobalState<K extends keyof GlobalState>(key: K) {
-		return this.contextProxy.getValue(key)
+	public getGlobalState<K extends keyof GlobalState>(key: K) {
+		return (
+			(this.contextProxy.getValue(key) as GlobalState[K] | undefined) ??
+			this.context.globalState.get<GlobalState[K]>(key)
+		)
+	}
+
+	public async setGlobalState<K extends keyof GlobalState>(key: K, value: GlobalState[K]) {
+		await this.context.globalState.update(key, value)
+		await this.contextProxy.setValue(key, value)
 	}
 
 	public async setValue<K extends keyof RooCodeSettings>(key: K, value: RooCodeSettings[K]) {

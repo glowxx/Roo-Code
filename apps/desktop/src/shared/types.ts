@@ -40,6 +40,8 @@ export type DesktopClientMessage =
 	| { type: "selectFolder"; path?: string }
 	| { type: "getWorkspaceInfo" }
 	| { type: "readFile"; filePath: string }
+	| { type: "showItem"; filePath: string }
+	| { type: "openFile"; filePath: string }
 	| { type: "getDiffs" }
 	| { type: "clearTerminalLogs" }
 
@@ -49,5 +51,17 @@ export type DesktopServerMessage =
 	| { type: "agentStatus"; status: AgentStatusType }
 	| { type: "terminalLog"; entry: TerminalLogEntry }
 	| { type: "diffsUpdated"; diffs: DiffFileEntry[] }
-	| { type: "fileContent"; filePath: string; content: string }
+	| {
+			type: "fileContent"
+			filePath: string
+			content: string
+			fileName?: string
+			ext?: string
+			fileType?: string
+			mimeType?: string
+			size?: number
+			rawText?: string
+			isTruncated?: boolean
+			error?: string
+	  }
 	| { type: "error"; message: string }

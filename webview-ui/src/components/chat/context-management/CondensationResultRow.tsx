@@ -1,22 +1,16 @@
 import { useState } from "react"
-import { useTranslation } from "react-i18next"
-import { VSCodeBadge } from "@vscode/webview-ui-toolkit/react"
-import { FoldVertical } from "lucide-react"
-
 import type { ContextCondense } from "@roo-code/types"
-
 import { Markdown } from "../Markdown"
 
 interface CondensationResultRowProps {
-	data: ContextCondense
+	data: Partial<ContextCondense>
 }
 
 /**
- * Displays the result of a successful context condensation operation.
- * Shows token reduction, cost, and an expandable summary section.
+ * Displays the result of a successful context condensation/compaction operation.
+ * Shows token reduction, percentage saved, cost, and an expandable summary card.
  */
 export function CondensationResultRow({ data }: CondensationResultRowProps) {
-	const { t } = useTranslation()
 	const [isExpanded, setIsExpanded] = useState(false)
 
 	const { cost, prevContextTokens, newContextTokens, summary } = data
@@ -25,33 +19,44 @@ export function CondensationResultRow({ data }: CondensationResultRowProps) {
 	const prevTokens = prevContextTokens ?? 0
 	const newTokens = newContextTokens ?? 0
 	const displayCost = cost ?? 0
+	const percentage =
+		prevTokens > 0 ? Math.max(0, Math.round(((prevTokens - newTokens) / prevTokens) * 100)) : 0
 
 	return (
-		<div className="mb-2">
-			<div
-				className="flex items-center justify-between cursor-pointer select-none"
-				onClick={() => setIsExpanded(!isExpanded)}>
-				<div className="flex items-center gap-2 flex-grow">
-					<FoldVertical size={16} className="text-vscode-foreground" />
-					<span className="font-bold text-vscode-foreground">
-						{t("chat:contextManagement.condensation.title")}
-					</span>
-					<span className="text-vscode-descriptionForeground text-sm">
-						{prevTokens.toLocaleString()} → {newTokens.toLocaleString()}{" "}
-						{t("chat:contextManagement.tokens")}
-					</span>
-					<VSCodeBadge className={displayCost > 0 ? "opacity-100" : "opacity-0"}>
-						${displayCost.toFixed(2)}
-					</VSCodeBadge>
+		<div className="mb-2 text-xs">
+			<div className="bg-vscode-editor-background border border-vscode-editorGroup-border/60 rounded-md p-2 shadow-sm transition-all duration-150">
+				<div
+					className="flex items-center justify-between cursor-pointer select-none gap-2"
+					onClick={() => setIsExpanded(!isExpanded)}>
+					<div className="flex items-center gap-1.5 flex-wrap">
+						<span>⚡</span>
+						<span className="font-semibold text-vscode-foreground">Context compacted:</span>
+						<span className="text-vscode-descriptionForeground">
+							{`${prevTokens.toLocaleString()} → ${newTokens.toLocaleString()} tokens (-${percentage}%)`}
+						</span>
+						<button
+							type="button"
+							className="inline-flex items-center text-vscode-textLink-foreground hover:underline font-medium ml-1 bg-transparent border-none p-0 cursor-pointer text-xs"
+							onClick={(e) => {
+								e.stopPropagation()
+								setIsExpanded(!isExpanded)
+							}}>
+							{isExpanded ? "Hide Summary ▴" : "View Summary ▾"}
+						</button>
+					</div>
+					{displayCost > 0 && (
+						<span className="text-vscode-descriptionForeground text-xs shrink-0 font-mono">
+							${displayCost.toFixed(2)}
+						</span>
+					)}
 				</div>
-				<span className={`codicon codicon-chevron-${isExpanded ? "up" : "down"}`}></span>
-			</div>
 
-			{isExpanded && (
-				<div className="mt-2 ml-0 p-4 bg-vscode-editor-background rounded text-vscode-foreground text-sm">
-					<Markdown markdown={summary} />
-				</div>
-			)}
+				{isExpanded && summary && (
+					<div className="mt-2 pt-2 border-t border-vscode-editorGroup-border/40 text-vscode-foreground text-xs leading-relaxed overflow-auto max-h-96">
+						<Markdown markdown={summary} />
+					</div>
+				)}
+			</div>
 		</div>
 	)
 }

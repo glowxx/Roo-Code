@@ -260,5 +260,24 @@ describe("Command Autocomplete", () => {
 			const commandNames = options.map((option) => option.value)
 			expect(commandNames).toContain("v2-setup")
 		})
+
+		it("should support /compact command with description", () => {
+			const commandsWithCompact: Command[] = [
+				...mockCommands,
+				{
+					name: "compact",
+					description: "Compress conversation history and reclaim context tokens",
+					source: "built-in",
+				},
+			]
+
+			const options = getContextMenuOptions("/compact", null, mockQueryItems, [], [], commandsWithCompact)
+			const compactOption = options.find(
+				(opt) => opt.type === ContextMenuOptionType.Command && opt.value === "compact",
+			)
+			expect(compactOption).toBeDefined()
+			expect(compactOption?.slashCommand).toBe("/compact")
+			expect(compactOption?.description).toBe("Compress conversation history and reclaim context tokens")
+		})
 	})
 })

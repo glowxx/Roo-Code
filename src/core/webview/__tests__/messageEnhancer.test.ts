@@ -242,6 +242,47 @@ describe("MessageEnhancer", () => {
 			// Should not include task history section
 			expect(calledPrompt).not.toContain("previous conversation context")
 		})
+
+		it("should not include task history if taskWorkspace and currentWorkspace differ", async () => {
+			const result = await MessageEnhancer.enhanceMessage({
+				text: "Test",
+				apiConfiguration: mockApiConfiguration,
+				listApiConfigMeta: mockListApiConfigMeta,
+				includeTaskHistoryInEnhance: true,
+				currentClineMessages: [
+					{ type: "ask", text: "User message from old workspace", ts: 1000 },
+					{ type: "say", say: "text", text: "Assistant response", ts: 2000 },
+				],
+				providerSettingsManager: mockProviderSettingsManager,
+				currentWorkspace: "/workspace/b",
+				taskWorkspace: "/workspace/a",
+			})
+
+			expect(result.success).toBe(true)
+			const calledPrompt = mockSingleCompletionHandler.mock.calls[0][1]
+			expect(calledPrompt).not.toContain("previous conversation context")
+		})
+
+		it("should include task history if taskWorkspace and currentWorkspace match", async () => {
+			const result = await MessageEnhancer.enhanceMessage({
+				text: "Test",
+				apiConfiguration: mockApiConfiguration,
+				listApiConfigMeta: mockListApiConfigMeta,
+				includeTaskHistoryInEnhance: true,
+				currentClineMessages: [
+					{ type: "ask", text: "User message from same workspace", ts: 1000 },
+					{ type: "say", say: "text", text: "Assistant response", ts: 2000 },
+				],
+				providerSettingsManager: mockProviderSettingsManager,
+				currentWorkspace: "/workspace/a",
+				taskWorkspace: "/workspace/a",
+			})
+
+			expect(result.success).toBe(true)
+			const calledPrompt = mockSingleCompletionHandler.mock.calls[0][1]
+			expect(calledPrompt).toContain("previous conversation context")
+			expect(calledPrompt).toContain("User message from same workspace")
+		})
 	})
 
 	describe("extractTaskHistory", () => {
