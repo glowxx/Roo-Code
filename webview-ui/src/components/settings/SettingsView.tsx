@@ -945,17 +945,11 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-modes"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.modes")}
-												</SectionHeader>
 												<ModesView />
 											</div>
 											<div
 												id="section-prompts"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.prompts")}
-												</SectionHeader>
 												<PromptsSettings
 													customSupportPrompts={customSupportPrompts || {}}
 													setCustomSupportPrompts={setCustomSupportPromptsField}
@@ -968,17 +962,11 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-slashCommands"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.slashCommands")}
-												</SectionHeader>
 												<SlashCommandsSettings />
 											</div>
 											<div
 												id="section-skills"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.skills")}
-												</SectionHeader>
 												<SkillsSettings />
 											</div>
 										</div>
@@ -990,9 +978,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-contextManagement"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.contextManagement")}
-												</SectionHeader>
 												<ContextManagementSettings
 													autoCondenseContext={autoCondenseContext}
 													autoCondenseContextPercent={autoCondenseContextPercent}
@@ -1018,9 +1003,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-checkpoints"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.checkpoints")}
-												</SectionHeader>
 												<CheckpointSettings
 													enableCheckpoints={enableCheckpoints}
 													checkpointTimeout={checkpointTimeout}
@@ -1036,9 +1018,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-autoApprove"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.autoApprove")}
-												</SectionHeader>
 												<AutoApproveSettings
 													alwaysAllowReadOnly={alwaysAllowReadOnly}
 													alwaysAllowReadOnlyOutsideWorkspace={
@@ -1069,9 +1048,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-terminal"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.terminal")}
-												</SectionHeader>
 												<TerminalSettings
 													terminalOutputPreviewSize={terminalOutputPreviewSize}
 													terminalShellIntegrationTimeout={terminalShellIntegrationTimeout}
@@ -1088,17 +1064,11 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-mcp"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.mcp")}
-												</SectionHeader>
 												<McpView />
 											</div>
 											<div
 												id="section-worktrees"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.worktrees")}
-												</SectionHeader>
 												<WorktreesView />
 											</div>
 										</div>
@@ -1110,9 +1080,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-ui"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.ui")}
-												</SectionHeader>
 												<UISettings
 													reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
 													enterBehavior={enterBehavior ?? "send"}
@@ -1123,9 +1090,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-notifications"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.notifications")}
-												</SectionHeader>
 												<NotificationSettings
 													ttsEnabled={ttsEnabled}
 													ttsSpeed={ttsSpeed}
@@ -1137,9 +1101,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-language"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.language")}
-												</SectionHeader>
 												<LanguageSettings
 													language={language || "en"}
 													setCachedStateField={setCachedStateField}
@@ -1148,9 +1109,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-experimental"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.experimental")}
-												</SectionHeader>
 												<ExperimentalSettings
 													setExperimentEnabled={setExperimentEnabled}
 													experiments={experiments}
@@ -1169,9 +1127,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<div
 												id="section-about"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
-												<SectionHeader>
-													{t("settings:sections.about")}
-												</SectionHeader>
 												<About debug={cachedState.debug} setDebug={setDebug} />
 											</div>
 										</div>
