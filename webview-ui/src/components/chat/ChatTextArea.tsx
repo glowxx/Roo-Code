@@ -23,6 +23,8 @@ import {
 import { cn } from "@src/lib/utils"
 import { convertToMentionPath } from "@src/utils/path-mentions"
 import { StandardTooltip } from "@src/components/ui"
+import { useSelectedModel } from "@/components/ui/hooks/useSelectedModel"
+import { getModelMaxOutputTokens } from "@roo/api"
 
 import Thumbnails from "../common/Thumbnails"
 import { ModeSelector } from "./ModeSelector"
@@ -32,6 +34,7 @@ import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
 import ContextMenu from "./ContextMenu"
 import { IndexingStatusBadge } from "./IndexingStatusBadge"
 import { usePromptHistory } from "./hooks/usePromptHistory"
+import { ContextWindowProgress } from "./ContextWindowProgress"
 
 interface ChatTextAreaProps {
 	inputValue: string
@@ -46,7 +49,7 @@ interface ChatTextAreaProps {
 	shouldDisableImages: boolean
 	onHeightChange?: (height: number) => void
 	mode: Mode
-	setMode: (value: Mode) => void
+	setMode: (mode: Mode) => void
 	modeShortcutText: string
 	// Edit mode props
 	isEditMode?: boolean
@@ -55,6 +58,7 @@ interface ChatTextAreaProps {
 	isStreaming?: boolean
 	onStop?: () => void
 	onEnqueueMessage?: () => void
+	contextTokens?: number
 }
 
 export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
@@ -78,6 +82,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			isStreaming = false,
 			onStop,
 			onEnqueueMessage,
+			contextTokens = 0,
 		},
 		ref,
 	) => {
@@ -99,7 +104,22 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			commands,
 			enterBehavior,
 			lockApiConfigAcrossModes,
+			apiConfiguration,
 		} = useExtensionState()
+
+		const { id: modelId, info: model } = useSelectedModel(apiConfiguration)
+		const contextWindow = model?.contextWindow || 0
+		const maxTokens = useMemo(
+			() =>
+				model
+					? getModelMaxOutputTokens({
+							modelId,
+							model,
+							settings: apiConfiguration,
+						})
+					: 0,
+			[model, modelId, apiConfiguration],
+		)
 
 		// Find the ID and display text for the currently selected API configuration.
 		const { currentConfigId, displayName } = useMemo(() => {
@@ -334,31 +354,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				if (type === ContextMenuOptionType.Mode && value) {
 					// Handle mode selection.
 					setMode(value)
-					setInputValue("")
-					setShowContextMenu(false)
 					vscode.postMessage({ type: "mode", text: value })
-					return
-				}
-
-				if (type === ContextMenuOptionType.Command && value) {
-					// Handle command selection.
-					setSelectedMenuIndex(-1)
-					setInputValue("")
-					setShowContextMenu(false)
-
-					// Insert the command mention into the textarea
-					const commandMention = `/${value}`
-					setInputValue(commandMention + " ")
-					setCursorPosition(commandMention.length + 1)
-					setIntendedCursorPosition(commandMention.length + 1)
-
-					// Focus the textarea
-					setTimeout(() => {
-						if (textAreaRef.current) {
-							textAreaRef.current.focus()
-						}
-					}, 0)
-					return
 				}
 
 				if (
@@ -376,50 +372,52 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 				setShowContextMenu(false)
 				setSelectedType(null)
+				setSelectedMenuIndex(-1)
 
-				if (textAreaRef.current) {
-					let insertValue = value || ""
+				const currentText = textAreaRef.current ? textAreaRef.current.value : inputValue
+				let insertValue = value || ""
 
-					if (type === ContextMenuOptionType.URL) {
-						insertValue = value || ""
-					} else if (type === ContextMenuOptionType.File || type === ContextMenuOptionType.Folder) {
-						insertValue = value || ""
-					} else if (type === ContextMenuOptionType.Problems) {
-						insertValue = "problems"
-					} else if (type === ContextMenuOptionType.Terminal) {
-						insertValue = "terminal"
-					} else if (type === ContextMenuOptionType.Git) {
-						insertValue = value || ""
-					} else if (type === ContextMenuOptionType.Command) {
-						insertValue = value ? `/${value}` : ""
-					}
-
-					// Determine if this is a slash command selection
-					const isSlashCommand = type === ContextMenuOptionType.Mode || type === ContextMenuOptionType.Command
-
-					const { newValue, mentionIndex } = insertMention(
-						textAreaRef.current.value,
-						cursorPosition,
-						insertValue,
-						isSlashCommand,
-					)
-
-					setInputValue(newValue)
-					const newCursorPosition = newValue.indexOf(" ", mentionIndex + insertValue.length) + 1
-					setCursorPosition(newCursorPosition)
-					setIntendedCursorPosition(newCursorPosition)
-
-					// Scroll to cursor.
-					setTimeout(() => {
-						if (textAreaRef.current) {
-							textAreaRef.current.blur()
-							textAreaRef.current.focus()
-						}
-					}, 0)
+				if (type === ContextMenuOptionType.URL) {
+					insertValue = value || ""
+				} else if (type === ContextMenuOptionType.File || type === ContextMenuOptionType.Folder) {
+					insertValue = value || ""
+				} else if (type === ContextMenuOptionType.Problems) {
+					insertValue = "problems"
+				} else if (type === ContextMenuOptionType.Terminal) {
+					insertValue = "terminal"
+				} else if (type === ContextMenuOptionType.Git) {
+					insertValue = value || ""
+				} else if (type === ContextMenuOptionType.Command || type === ContextMenuOptionType.Mode) {
+					insertValue = value || ""
 				}
+
+				// Determine if this is a slash command selection
+				const isSlashCommand = type === ContextMenuOptionType.Mode || type === ContextMenuOptionType.Command
+
+				const { newValue, mentionIndex } = insertMention(
+					currentText,
+					cursorPosition,
+					insertValue,
+					isSlashCommand,
+				)
+
+				setInputValue(newValue)
+				const command = (insertValue.startsWith("/") ? insertValue : `/${insertValue}`).trimEnd() + " "
+				const newCursorPosition = isSlashCommand
+					? mentionIndex + command.length
+					: newValue.indexOf(" ", mentionIndex + insertValue.length) + 1
+				setCursorPosition(newCursorPosition)
+				setIntendedCursorPosition(newCursorPosition)
+
+				// Scroll to cursor.
+				setTimeout(() => {
+					if (textAreaRef.current) {
+						textAreaRef.current.blur()
+						textAreaRef.current.focus()
+					}
+				}, 0)
 			},
-			// eslint-disable-next-line react-hooks/exhaustive-deps
-			[setInputValue, cursorPosition],
+			[setMode, setInputValue, cursorPosition, inputValue],
 		)
 
 		const handleKeyDown = useCallback(
@@ -610,9 +608,12 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setShowContextMenu(showMenu)
 
 				if (showMenu) {
-					if (newValue.startsWith("/") && !newValue.includes(" ")) {
+					const beforeCursor = newValue.slice(0, newCursorPosition)
+					const slashMatch = beforeCursor.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/)
+
+					if (slashMatch) {
 						// Handle slash command - request fresh commands
-						const query = newValue
+						const query = `/${slashMatch[1]}`
 						setSearchQuery(query)
 						// Set to first selectable item (skip section headers)
 						setSelectedMenuIndex(1) // Section header is at 0, first command is at 1
@@ -1057,9 +1058,9 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 										: isDraggingOver
 											? "border-2 border-dashed border-vscode-focusBorder"
 											: "border border-transparent",
-									"pl-2",
-									"py-2",
+									"py-2 pl-2",
 									isEditMode ? "pr-20" : "pr-9",
+									"box-border",
 									"z-10",
 									"forced-color-adjust-none",
 									"rounded-lg",
@@ -1128,7 +1129,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									"will-change-background-color",
 									"min-h-[94px]",
 									"box-border",
-									"rounded",
+									"rounded-lg",
 									"resize-none",
 									"overflow-x-hidden",
 									"overflow-y-auto",
@@ -1312,6 +1313,16 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							marginBottom: 0,
 						}}
 					/>
+				)}
+
+				{!isEditMode && contextWindow > 0 && (
+					<div className="flex items-center px-1 text-xs text-vscode-descriptionForeground min-w-0 -mt-0.5 mb-0.5">
+						<ContextWindowProgress
+							contextWindow={contextWindow}
+							contextTokens={contextTokens || 0}
+							maxTokens={maxTokens || undefined}
+						/>
+					</div>
 				)}
 
 				<div className="flex items-center justify-between gap-1.5 w-full min-w-0 overflow-hidden">

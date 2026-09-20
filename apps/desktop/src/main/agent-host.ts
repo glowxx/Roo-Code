@@ -259,6 +259,101 @@ export class DesktopAgentHost extends EventEmitter {
 	public unregisterWebviewProvider(_viewId: string): void {
 		this.provider = null
 	}
+	public getProvider(): any {
+		return this.provider
+	}
+
+	public getChatsByWorkspace(): Record<string, Array<{ id: string; title: string; ts: number }>> {
+		let items: any[] = []
+
+		// 1. Try in-memory provider.taskHistoryStore
+		if (this.provider?.taskHistoryStore && typeof this.provider.taskHistoryStore.getAll === "function") {
+			try {
+				const storeItems = this.provider.taskHistoryStore.getAll()
+				if (Array.isArray(storeItems)) {
+					items = [...storeItems]
+				}
+			} catch (e) {
+				console.warn("[DesktopAgentHost] Error getting task history from store:", e)
+			}
+		}
+
+		// 2. Fallback to index on disk if empty
+		if (items.length === 0 && this.storageDir) {
+			try {
+				const indexPath = path.join(this.storageDir, "global-storage", "tasks", "_index.json")
+				if (fs.existsSync(indexPath)) {
+					const content = fs.readFileSync(indexPath, "utf-8")
+					const parsed = JSON.parse(content)
+					if (Array.isArray(parsed?.entries)) {
+						items = parsed.entries
+					}
+				}
+			} catch {}
+		}
+
+		// 3. Fallback to reading task folders on disk
+		if (items.length === 0 && this.storageDir) {
+			try {
+				const tasksDir = path.join(this.storageDir, "global-storage", "tasks")
+				if (fs.existsSync(tasksDir)) {
+					const entries = fs.readdirSync(tasksDir, { withFileTypes: true })
+					for (const entry of entries) {
+						if (entry.isDirectory() && entry.name !== "checkpoints") {
+							const itemPath = path.join(tasksDir, entry.name, "history_item.json")
+							if (fs.existsSync(itemPath)) {
+								try {
+									const hItem = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
+									if (hItem && hItem.id) items.push(hItem)
+								} catch {}
+							}
+						}
+					}
+				}
+			} catch {}
+		}
+
+		const result: Record<string, Array<{ id: string; title: string; ts: number }>> = {}
+
+		for (const item of items) {
+			if (!item || !item.id) continue
+			let ws = ""
+			if (item.workspace && typeof item.workspace === "string" && item.workspace.trim()) {
+				ws = path.normalize(path.resolve(item.workspace.trim()))
+			} else if (this.currentWorkspace) {
+				ws = path.normalize(path.resolve(this.currentWorkspace))
+			} else {
+				ws = "__unassigned__"
+			}
+
+			const list = result[ws] ?? []
+			list.push({
+				id: String(item.id),
+				title: typeof item.task === "string" && item.task.trim() ? item.task.trim() : "Untitled Task",
+				ts: typeof item.ts === "number" ? item.ts : Date.now(),
+			})
+			result[ws] = list
+		}
+
+		// Sort each workspace's chats by timestamp descending (newest first)
+		for (const ws of Object.keys(result)) {
+			result[ws]?.sort((a, b) => b.ts - a.ts)
+		}
+
+		return result
+	}
+
+	public async showTaskWithId(taskId: string): Promise<void> {
+		if (!taskId || typeof taskId !== "string") return
+		if (this.provider && typeof this.provider.showTaskWithId === "function") {
+			try {
+				await this.provider.showTaskWithId(taskId)
+			} catch (err) {
+				console.warn("[DesktopAgentHost] provider.showTaskWithId error:", err)
+			}
+		}
+		this.sendToExtension({ type: "showTaskWithId", text: taskId } as any)
+	}
 
 	public sendToExtension(message: WebviewMessage): void {
 		this.emit("webviewMessage", message)
@@ -299,6 +394,15 @@ export class DesktopAgentHost extends EventEmitter {
 			}
 		} else if (raw.type === "ask") {
 			this.setStatus("waiting_approval")
+		}
+
+		if (
+			raw.type === "taskHistoryUpdated" ||
+			raw.type === "taskHistoryItemUpdated" ||
+			raw.type === "relinquishControl" ||
+			(raw.type === "say" && (raw.say === "task" || raw.say === "completion_result"))
+		) {
+			this.emit("taskHistoryChanged")
 		}
 
 		// Relay to all attached UI clients

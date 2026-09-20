@@ -9,8 +9,8 @@ import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
 import { execSync, spawn } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
-import { saveDesktopConfig } from "./config.js"
-import type { DesktopClientMessage, DesktopServerMessage, WorkspaceInfo } from "../shared/types.js"
+import { loadDesktopConfig, saveDesktopConfig } from "./config.js"
+import type { DesktopClientMessage, DesktopServerMessage, SidebarData, WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -393,6 +393,31 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		}
 	}
 
+	function getSidebarData(): SidebarData {
+		const config = loadDesktopConfig()
+		let recent = Array.isArray(config.recentWorkspaces) ? [...config.recentWorkspaces] : []
+		if (recent.length === 0 && config.lastWorkspacePath) {
+			recent = [config.lastWorkspacePath]
+		}
+		const curWs = agentHost.getWorkspace()
+		if (curWs) {
+			const normCur = path.normalize(path.resolve(curWs))
+			if (!recent.some((p) => path.normalize(path.resolve(p)) === normCur)) {
+				recent.unshift(curWs)
+			}
+		}
+		const chats = agentHost.getChatsByWorkspace()
+		return {
+			recentWorkspaces: recent,
+			currentWorkspace: curWs,
+			chats,
+		}
+	}
+
+	function broadcastSidebarData() {
+		broadcast({ type: "sidebarData", data: getSidebarData() })
+	}
+
 	// Listen to agent host events and broadcast to webview
 	agentHost.on("messageToUI", (message) => {
 		broadcast({ type: "extensionMessage", message })
@@ -418,6 +443,10 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		}
 		broadcast({ type: "workspaceInfo", workspace: newWs })
 		broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+		broadcastSidebarData()
+	})
+	agentHost.on("taskHistoryChanged", () => {
+		broadcastSidebarData()
 	})
 
 	const server = http.createServer((req, res) => {
@@ -488,6 +517,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 								}
 								broadcast({ type: "workspaceInfo", workspace: newWs })
 								broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+								broadcastSidebarData()
 								res.writeHead(200, { "Content-Type": "application/json" })
 								res.end(JSON.stringify(newWs))
 								return
@@ -522,6 +552,65 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			}
 			res.writeHead(200, { "Content-Type": "application/json" })
 			res.end(JSON.stringify(info))
+			return
+		}
+
+		if (pathname === "/api/sidebar-data") {
+			res.writeHead(200, { "Content-Type": "application/json" })
+			res.end(JSON.stringify(getSidebarData()))
+			return
+		}
+
+		if (pathname === "/api/chat/switch") {
+			if (req.method === "POST") {
+				let body = ""
+				req.on("data", (chunk) => {
+					body += chunk
+				})
+				req.on("end", async () => {
+					try {
+						const data = JSON.parse(body || "{}")
+						const taskId = data.taskId
+						if (!taskId || typeof taskId !== "string") {
+							res.writeHead(400, { "Content-Type": "application/json" })
+							res.end(JSON.stringify({ error: "Missing or invalid taskId" }))
+							return
+						}
+
+						const requestedWs = data.workspacePath
+						if (requestedWs && typeof requestedWs === "string" && fs.existsSync(requestedWs)) {
+							const normReq = path.normalize(path.resolve(requestedWs))
+							const curWs = agentHost.getWorkspace()
+							if (!curWs || path.normalize(path.resolve(curWs)) !== normReq) {
+								await agentHost.setWorkspace(normReq)
+								saveDesktopConfig({ lastWorkspacePath: normReq })
+								const folderScan = scanWorkspace(normReq)
+								const newWs: WorkspaceInfo = {
+									path: normReq,
+									name: path.basename(normReq),
+									branch: getGitBranch(normReq),
+									files: folderScan.files,
+									directories: folderScan.directories,
+								}
+								broadcast({ type: "workspaceInfo", workspace: newWs })
+								broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+							}
+						}
+
+						await agentHost.showTaskWithId(taskId)
+						broadcastSidebarData()
+
+						res.writeHead(200, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ success: true, taskId }))
+					} catch (e) {
+						res.writeHead(500, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: String(e) }))
+					}
+				})
+				return
+			}
+			res.writeHead(405, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ error: "Method not allowed" }))
 			return
 		}
 
@@ -1081,6 +1170,14 @@ window.addEventListener("message", function(e) {
 	}
 }, true);
 
+// Forward Ctrl+B / Cmd+B to desktop app to toggle sidebar
+window.addEventListener("keydown", function(e) {
+	if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && !e.shiftKey && !e.altKey) {
+		e.preventDefault();
+		window.parent.postMessage({ type: "toggleSidebar" }, "*");
+	}
+}, true);
+
 (function() {
 	function syncTheme() {
 		try {
@@ -1217,6 +1314,7 @@ window.addEventListener("message", function(e) {
 			safeSend(ws, { type: "workspaceInfo", workspace: initialWorkspace })
 			safeSend(ws, { type: "agentStatus", status: agentHost.getStatus() })
 			safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+			safeSend(ws, { type: "sidebarData", data: getSidebarData() })
 			logStartupDebug("[WS] Initial state dispatched successfully.")
 		} catch (err) {
 			logStartupDebug(`[WS] Error during initial connection state dispatch: ${err}`)
@@ -1440,6 +1538,41 @@ window.addEventListener("message", function(e) {
 						;(agentHost as any).clearTerminalLogs()
 					}
 					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+				} else if (clientMsg.type === "getSidebarData") {
+					safeSend(ws, { type: "sidebarData", data: getSidebarData() })
+				} else if (clientMsg.type === "switchChat") {
+					if (clientMsg.workspacePath && fs.existsSync(clientMsg.workspacePath)) {
+						try {
+							const normReq = path.normalize(path.resolve(clientMsg.workspacePath))
+							const curWs = agentHost.getWorkspace()
+							if (!curWs || path.normalize(path.resolve(curWs)) !== normReq) {
+								await agentHost.setWorkspace(normReq)
+								saveDesktopConfig({ lastWorkspacePath: normReq })
+								const folderScan = scanWorkspace(normReq)
+								const newWs: WorkspaceInfo = {
+									path: normReq,
+									name: path.basename(normReq),
+									branch: getGitBranch(normReq),
+									files: folderScan.files,
+									directories: folderScan.directories,
+								}
+								broadcast({ type: "workspaceInfo", workspace: newWs })
+								broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+							}
+						} catch (err) {
+							safeSend(ws, { type: "error", message: `Failed to switch workspace: ${String(err)}` })
+						}
+					}
+					await agentHost.showTaskWithId(clientMsg.taskId)
+					broadcastSidebarData()
+				} else if (clientMsg.type === "removeRecentWorkspace") {
+					const curCfg = loadDesktopConfig()
+					const normRemove = path.normalize(path.resolve(clientMsg.path))
+					const updated = (curCfg.recentWorkspaces || []).filter(
+						(p) => path.normalize(path.resolve(p)) !== normRemove
+					)
+					saveDesktopConfig({ recentWorkspaces: updated })
+					broadcastSidebarData()
 				}
 			} catch (err) {
 				safeSend(ws, { type: "error", message: String(err) })

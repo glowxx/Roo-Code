@@ -28,6 +28,18 @@ export interface DiffFileEntry {
 
 export type AgentStatusType = "idle" | "thinking" | "executing" | "waiting_approval" | "error"
 
+export interface SidebarChatEntry {
+	id: string
+	title: string
+	ts: number
+}
+
+export interface SidebarData {
+	recentWorkspaces: string[]
+	currentWorkspace: string
+	chats: Record<string, SidebarChatEntry[]>
+}
+
 export interface DesktopState {
 	workspace: WorkspaceInfo
 	agentStatus: AgentStatusType
@@ -45,6 +57,9 @@ export type DesktopClientMessage =
 	| { type: "openFile"; filePath: string }
 	| { type: "getDiffs" }
 	| { type: "clearTerminalLogs" }
+	| { type: "getSidebarData" }
+	| { type: "switchChat"; taskId: string; workspacePath?: string }
+	| { type: "removeRecentWorkspace"; path: string }
 
 export type DesktopServerMessage =
 	| { type: "extensionMessage"; message: ExtensionMessage }
@@ -52,6 +67,7 @@ export type DesktopServerMessage =
 	| { type: "agentStatus"; status: AgentStatusType }
 	| { type: "terminalLog"; entry: TerminalLogEntry }
 	| { type: "diffsUpdated"; diffs: DiffFileEntry[] }
+	| { type: "sidebarData"; data: SidebarData }
 	| {
 			type: "fileContent"
 			filePath: string

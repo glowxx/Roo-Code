@@ -1831,6 +1831,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				isStreaming={isStreaming}
 				onStop={handleStopTask}
 				onEnqueueMessage={handleEnqueueCurrentMessage}
+				contextTokens={apiMetrics.contextTokens}
 			/>
 
 			{isProfileDisabled && (

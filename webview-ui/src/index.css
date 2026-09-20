@@ -142,9 +142,9 @@
 
 	--color-vscode-textCodeBlock-background: var(--vscode-textCodeBlock-background);
 
-	--color-vscode-editorHoverWidget-foreground: var(--vscode-editorHoverWidget-foreground);
-	--color-vscode-editorHoverWidget-background: var(--vscode-editorHoverWidget-background);
-	--color-vscode-editorHoverWidget-border: var(--vscode-editorHoverWidget-border);
+	--color-vscode-editorHoverWidget-foreground: var(--vscode-editorHoverWidget-foreground, #cccccc);
+	--color-vscode-editorHoverWidget-background: var(--vscode-editorHoverWidget-background, #252526);
+	--color-vscode-editorHoverWidget-border: var(--vscode-editorHoverWidget-border, #454545);
 
 	--color-vscode-banner-background: var(--vscode-banner-background);
 	--color-vscode-banner-foreground: var(--vscode-banner-foreground);
@@ -152,6 +152,9 @@
 
 @layer base {
 	:root {
+		--vscode-editorHoverWidget-background: #252526;
+		--vscode-editorHoverWidget-foreground: #cccccc;
+		--vscode-editorHoverWidget-border: #454545;
 		--background: var(--vscode-editor-background, #090a0f);
 		--foreground: var(--vscode-editor-foreground, #f2f4f7);
 		--card: var(--vscode-sideBarSectionHeader-background, #12141c);
@@ -402,6 +405,8 @@ vscode-dropdown::part(listbox) {
 	border-radius: 3px;
 	box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent);
 	color: transparent;
+	margin: 0;
+	padding: 0;
 }
 
 .mention-context-highlight {

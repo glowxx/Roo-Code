@@ -52,7 +52,7 @@ describe("insertMention", () => {
 
 	it("should handle slash command replacement", () => {
 		const result = insertMention("/mode some", 5, "code", true) // Simulating mode selection
-		expect(result.newValue).toBe("code") // Should replace the whole text
+		expect(result.newValue).toBe("/code  some")
 		expect(result.mentionIndex).toBe(0)
 	})
 
@@ -106,16 +106,22 @@ describe("insertMention", () => {
 
 	// --- Tests for isSlashCommand parameter ---
 	describe("isSlashCommand parameter", () => {
-		it("should replace entire text when isSlashCommand is true", () => {
+		it("should replace slash command before cursor when isSlashCommand is true", () => {
 			const result = insertMention("/cod", 4, "code", true)
-			expect(result.newValue).toBe("code")
+			expect(result.newValue).toBe("/code ")
 			expect(result.mentionIndex).toBe(0)
 		})
 
-		it("should replace entire text even when @ mentions exist and isSlashCommand is true", () => {
+		it("should replace slash command without overwriting surrounding text when isSlashCommand is true", () => {
 			const result = insertMention("/code @some/file.ts", 5, "debug", true)
-			expect(result.newValue).toBe("debug")
+			expect(result.newValue).toBe("/debug  @some/file.ts")
 			expect(result.mentionIndex).toBe(0)
+		})
+
+		it("should replace slash command positioned mid-text preserving text before slash and after cursor", () => {
+			const result = insertMention("Hello /gra world", 10, "graphify", true)
+			expect(result.newValue).toBe("Hello /graphify  world")
+			expect(result.mentionIndex).toBe(6)
 		})
 
 		it("should insert @ mention correctly after slash command when isSlashCommand is false", () => {
@@ -584,5 +590,24 @@ describe("shouldShowContextMenu", () => {
 	it("should return false if an unescaped space exists after @", () => {
 		// This case means the regex wouldn't match anyway, but confirms context menu logic
 		expect(shouldShowContextMenu("@/path/with space", 13)).toBe(false) // Cursor after unescaped space
+	})
+
+	it("should return true for slash command at start", () => {
+		expect(shouldShowContextMenu("/", 1)).toBe(true)
+		expect(shouldShowContextMenu("/test", 5)).toBe(true)
+	})
+
+	it("should return true for slash command mid-text preceded by whitespace", () => {
+		expect(shouldShowContextMenu("Hello /", 7)).toBe(true)
+		expect(shouldShowContextMenu("Hello /graphify", 15)).toBe(true)
+	})
+
+	it("should return false for slash in path not preceded by whitespace", () => {
+		expect(shouldShowContextMenu("path/to/file", 5)).toBe(false)
+	})
+
+	it("should return false for slash command followed by space", () => {
+		expect(shouldShowContextMenu("/cmd ", 5)).toBe(false)
+		expect(shouldShowContextMenu("Hello /cmd ", 11)).toBe(false)
 	})
 })

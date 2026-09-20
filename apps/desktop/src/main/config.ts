@@ -5,6 +5,7 @@ import { createRequire } from "module"
 
 export interface DesktopConfig {
 	lastWorkspacePath?: string
+	recentWorkspaces?: string[]
 	theme?: string
 	windowBounds?: {
 		width: number
@@ -48,7 +49,11 @@ export function loadDesktopConfig(): DesktopConfig {
 		const configPath = getConfigFilePath()
 		if (fs.existsSync(configPath)) {
 			const content = fs.readFileSync(configPath, "utf-8")
-			return JSON.parse(content) as DesktopConfig
+			const parsed = JSON.parse(content) as DesktopConfig
+			if (parsed.lastWorkspacePath && (!parsed.recentWorkspaces || !Array.isArray(parsed.recentWorkspaces) || parsed.recentWorkspaces.length === 0)) {
+				parsed.recentWorkspaces = [parsed.lastWorkspacePath]
+			}
+			return parsed
 		}
 
 		// Fallback & automatic migration from legacy locations (e.g. %APPDATA%\@roo-code\desktop\desktop-config.json)
@@ -63,6 +68,9 @@ export function loadDesktopConfig(): DesktopConfig {
 				try {
 					const content = fs.readFileSync(legacyPath, "utf-8")
 					const parsed = JSON.parse(content) as DesktopConfig
+					if (parsed.lastWorkspacePath && (!parsed.recentWorkspaces || !Array.isArray(parsed.recentWorkspaces) || parsed.recentWorkspaces.length === 0)) {
+						parsed.recentWorkspaces = [parsed.lastWorkspacePath]
+					}
 					const dir = path.dirname(configPath)
 					if (!fs.existsSync(dir)) {
 						fs.mkdirSync(dir, { recursive: true })
@@ -81,6 +89,7 @@ export function loadDesktopConfig(): DesktopConfig {
 /**
  * Saves or updates the desktop configuration on disk.
  * Includes a Zero-State Guard to prevent erasing lastWorkspacePath with empty or undefined values.
+ * Automatically adds any selected or changed lastWorkspacePath to recentWorkspaces (max 25, no duplicates).
  */
 export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfig {
 	try {
@@ -93,10 +102,36 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 			finalWorkspacePath = updates.lastWorkspacePath.trim()
 		}
 
+		// Manage recentWorkspaces list (up to 25 items, no duplicates)
+		let recent: string[] = []
+		if (Array.isArray(updates.recentWorkspaces)) {
+			recent = [...updates.recentWorkspaces]
+		} else if (Array.isArray(current.recentWorkspaces)) {
+			recent = [...current.recentWorkspaces]
+		} else if (current.lastWorkspacePath) {
+			recent = [current.lastWorkspacePath]
+		}
+
+		if (finalWorkspacePath) {
+			const normFinal = path.normalize(path.resolve(finalWorkspacePath))
+			recent = [
+				finalWorkspacePath,
+				...recent.filter((p) => {
+					if (!p || typeof p !== "string" || !p.trim()) return false
+					try {
+						return path.normalize(path.resolve(p)) !== normFinal
+					} catch {
+						return p !== finalWorkspacePath
+					}
+				}),
+			].slice(0, 25)
+		}
+
 		const merged: DesktopConfig = {
 			...current,
 			...updates,
 			lastWorkspacePath: finalWorkspacePath,
+			recentWorkspaces: recent,
 			windowBounds: updates.windowBounds
 				? { ...current.windowBounds, ...updates.windowBounds }
 				: current.windowBounds,

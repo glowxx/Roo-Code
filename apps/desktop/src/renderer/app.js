@@ -126,6 +126,29 @@
 	const previewContentAreaEl = document.getElementById("preview-content-area")
 	const previewPlaceholderText = document.getElementById("preview-placeholder-text")
 
+	// Sidebar Elements & State
+	const sidebarEl = document.getElementById("app-sidebar")
+	const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn")
+	const sidebarCollapseBtn = document.getElementById("sidebar-collapse-btn")
+	const sidebarNewChatBtn = document.getElementById("sidebar-new-chat-btn")
+	const sidebarOpenFolderBtn = document.getElementById("sidebar-open-folder-btn")
+	const sidebarFilterInput = document.getElementById("sidebar-filter-input")
+	const sidebarProjectsListEl = document.getElementById("sidebar-projects-list")
+	const sidebarProjectsCountEl = document.getElementById("sidebar-projects-count")
+	const sidebarHeaderTitleEl = document.getElementById("sidebar-header-title")
+	const sidebarProjectsLabelEl = document.getElementById("sidebar-projects-label")
+	const sidebarHintTextEl = document.getElementById("sidebar-hint-text")
+
+	let sidebarData = {
+		recentWorkspaces: [],
+		currentWorkspace: "",
+		chats: {},
+	}
+	let isSidebarCollapsed = localStorage.getItem("roo-sidebar-collapsed") === "true"
+	let activeTaskId = null
+	const projectExpansions = new Set()
+	let sidebarFilterQuery = ""
+
 	// ==========================================
 	// Desktop Internationalization (i18n)
 	// ==========================================
@@ -193,6 +216,19 @@
 			terminalTitle: "Terminal & Agent Command Logs",
 			terminalClear: "Clear",
 			terminalEmpty: "Roo Code terminal command executions and logs will appear here.",
+
+			// Sidebar
+			workspaces: "Workspaces",
+			sidebarFilterPlaceholder: "Filter projects & chats...",
+			projectsSection: "PROJECTS",
+			noConversations: "No conversations",
+			newChat: "New Chat",
+			toggleSidebar: "Toggle Sidebar (Ctrl+B)",
+			activeProject: "Active",
+			removeRecent: "Remove from recent",
+			newChatInProject: "New chat in this project",
+			openWorkspaceFolder: "Open workspace folder",
+			toggleSidebarHint: "toggle sidebar",
 		},
 		pl: {
 			// Loading & Error States
@@ -257,6 +293,19 @@
 			terminalTitle: "Dziennik poleceń terminala i agenta",
 			terminalClear: "Wyczyść",
 			terminalEmpty: "Wyniki poleceń terminala i dzienniki wykonania Roo Code pojawią się tutaj.",
+
+			// Sidebar
+			workspaces: "Obszary robocze",
+			sidebarFilterPlaceholder: "Filtruj projekty i czaty...",
+			projectsSection: "PROJEKTY",
+			noConversations: "Brak konwersacji",
+			newChat: "Nowy czat",
+			toggleSidebar: "Zwiń/Rozwiń panel (Ctrl+B)",
+			activeProject: "Aktywny",
+			removeRecent: "Usuń z listy",
+			newChatInProject: "Nowy czat w tym projekcie",
+			openWorkspaceFolder: "Otwórz folder projektu",
+			toggleSidebarHint: "zwiń/rozwiń panel",
 		},
 	}
 
@@ -347,6 +396,16 @@
 		if (terminalTitleText) terminalTitleText.textContent = tDesktop("terminalTitle")
 		if (terminalClearText) terminalClearText.textContent = tDesktop("terminalClear")
 		if (terminalEmptyText) terminalEmptyText.textContent = tDesktop("terminalEmpty")
+
+		// 7. Sidebar elements
+		if (sidebarHeaderTitleEl) sidebarHeaderTitleEl.textContent = tDesktop("workspaces")
+		if (sidebarFilterInput) sidebarFilterInput.placeholder = tDesktop("sidebarFilterPlaceholder")
+		if (sidebarProjectsLabelEl) sidebarProjectsLabelEl.textContent = tDesktop("projectsSection")
+		if (sidebarHintTextEl) sidebarHintTextEl.textContent = tDesktop("toggleSidebarHint")
+		if (sidebarToggleBtn) sidebarToggleBtn.title = tDesktop("toggleSidebar")
+		if (sidebarCollapseBtn) sidebarCollapseBtn.title = tDesktop("toggleSidebar")
+		if (sidebarNewChatBtn) sidebarNewChatBtn.title = tDesktop("newChat")
+		if (sidebarOpenFolderBtn) sidebarOpenFolderBtn.title = tDesktop("openWorkspaceFolder")
 	}
 
 	// Apply initial desktop translations immediately
@@ -433,6 +492,357 @@
 	windowCloseBtn?.addEventListener("click", () => {
 		window.__desktopAPI?.close?.()
 	})
+
+	// ==========================================
+	// AntiGravity Sidebar (Projects & Chats)
+	// ==========================================
+	// Restore initial collapsed state
+	if (sidebarEl && isSidebarCollapsed) {
+		sidebarEl.classList.add("collapsed")
+	}
+
+	function toggleSidebar(forceState) {
+		if (!sidebarEl) return
+		if (typeof forceState === "boolean") {
+			isSidebarCollapsed = forceState
+		} else {
+			isSidebarCollapsed = !sidebarEl.classList.contains("collapsed")
+		}
+		sidebarEl.classList.toggle("collapsed", isSidebarCollapsed)
+		try {
+			localStorage.setItem("roo-sidebar-collapsed", isSidebarCollapsed ? "true" : "false")
+		} catch (e) {}
+	}
+
+	sidebarToggleBtn?.addEventListener("click", () => toggleSidebar())
+	sidebarCollapseBtn?.addEventListener("click", () => toggleSidebar(true))
+
+	// Global shortcut: Ctrl+B / Cmd+B
+	window.addEventListener("keydown", (e) => {
+		if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && !e.shiftKey && !e.altKey) {
+			e.preventDefault()
+			toggleSidebar()
+		}
+	})
+
+	// Open folder from sidebar button
+	sidebarOpenFolderBtn?.addEventListener("click", () => {
+		openFolderBtn?.click()
+	})
+
+	// New chat from sidebar button
+	sidebarNewChatBtn?.addEventListener("click", () => {
+		startNewChat()
+	})
+
+	function startNewChat(workspacePath) {
+		if (workspacePath && currentWorkspace?.path && pathNormalize(workspacePath) !== pathNormalize(currentWorkspace.path)) {
+			selectWorkspaceFolder(workspacePath).then(() => {
+				forwardToWebview({ type: "action", action: "chatButtonClicked" })
+				forwardToWebview({ type: "clearTask" })
+				switchDesktopTab("chat", "user")
+			})
+			return
+		}
+		forwardToWebview({ type: "action", action: "chatButtonClicked" })
+		forwardToWebview({ type: "clearTask" })
+		switchDesktopTab("chat", "user")
+	}
+
+	function pathNormalize(p) {
+		if (!p) return ""
+		return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+	}
+
+	function formatTimeAgo(ts) {
+		if (!ts || typeof ts !== "number") return ""
+		const diff = Date.now() - ts
+		if (diff < 60000) return "Just now"
+		const mins = Math.floor(diff / 60000)
+		if (mins < 60) return `${mins}m ago`
+		const hours = Math.floor(mins / 60)
+		if (hours < 24) return `${hours}h ago`
+		const days = Math.floor(hours / 24)
+		if (days === 1) return "Yesterday"
+		if (days < 7) return `${days}d ago`
+		const d = new Date(ts)
+		return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+	}
+
+	async function fetchSidebarData() {
+		try {
+			const res = await fetch("/api/sidebar-data")
+			if (res.ok) {
+				const data = await res.json()
+				updateSidebarData(data)
+			}
+		} catch (e) {
+			console.warn("[Sidebar] Failed to fetch sidebar data:", e)
+		}
+	}
+
+	function updateSidebarData(data) {
+		if (!data) return
+		sidebarData = {
+			recentWorkspaces: Array.isArray(data.recentWorkspaces) ? data.recentWorkspaces : [],
+			currentWorkspace: data.currentWorkspace || currentWorkspace?.path || "",
+			chats: data.chats || {},
+		}
+
+		// Auto-expand current workspace if nothing is expanded
+		if (sidebarData.currentWorkspace && projectExpansions.size === 0) {
+			projectExpansions.add(sidebarData.currentWorkspace)
+		}
+
+		renderSidebar()
+	}
+
+	async function switchChat(taskId, wsPath) {
+		if (!taskId) return
+		activeTaskId = taskId
+		renderSidebar()
+
+		switchDesktopTab("chat", "user")
+
+		try {
+			const resp = await fetch("/api/chat/switch", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ taskId, workspacePath: wsPath }),
+			})
+			if (!resp.ok) {
+				sendToServer({ type: "switchChat", taskId, workspacePath: wsPath })
+			}
+		} catch (err) {
+			console.warn("[Sidebar] Error calling switch chat endpoint, using WS:", err)
+			sendToServer({ type: "switchChat", taskId, workspacePath: wsPath })
+		}
+	}
+
+	async function selectWorkspaceFolder(wsPath) {
+		if (!wsPath) return
+		projectExpansions.add(wsPath)
+		try {
+			const resp = await fetch("/api/workspace", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ path: wsPath }),
+			})
+			if (resp.ok) {
+				const data = await resp.json()
+				renderWorkspaceInfo(data)
+			} else {
+				sendToServer({ type: "selectFolder", path: wsPath })
+			}
+		} catch (err) {
+			sendToServer({ type: "selectFolder", path: wsPath })
+		}
+	}
+
+	function removeRecentWorkspace(wsPath) {
+		sidebarData.recentWorkspaces = sidebarData.recentWorkspaces.filter(
+			(p) => pathNormalize(p) !== pathNormalize(wsPath)
+		)
+		renderSidebar()
+		sendToServer({ type: "removeRecentWorkspace", path: wsPath })
+	}
+
+	// Filter Input
+	let sidebarFilterDebounce = null
+	sidebarFilterInput?.addEventListener("input", (e) => {
+		clearTimeout(sidebarFilterDebounce)
+		sidebarFilterDebounce = setTimeout(() => {
+			sidebarFilterQuery = (e.target.value || "").trim().toLowerCase()
+			renderSidebar()
+		}, 100)
+	})
+
+	function renderSidebar() {
+		if (!sidebarProjectsListEl) return
+
+		const curWsNorm = pathNormalize(sidebarData.currentWorkspace || currentWorkspace?.path || "")
+		let workspaces = [...sidebarData.recentWorkspaces]
+
+		// Ensure current workspace is present
+		if (sidebarData.currentWorkspace && !workspaces.some((w) => pathNormalize(w) === curWsNorm)) {
+			workspaces.unshift(sidebarData.currentWorkspace)
+		}
+
+		// Also check if there are chats for workspaces not currently in recentWorkspaces
+		for (const wsKey of Object.keys(sidebarData.chats)) {
+			if (wsKey !== "__unassigned__" && !workspaces.some((w) => pathNormalize(w) === pathNormalize(wsKey))) {
+				workspaces.push(wsKey)
+			}
+		}
+
+		if (sidebarProjectsCountEl) {
+			sidebarProjectsCountEl.textContent = String(workspaces.length)
+		}
+
+		if (workspaces.length === 0) {
+			sidebarProjectsListEl.innerHTML = `
+				<div class="sidebar-empty-state">
+					<p>${escapeHtml(tDesktop("noWorkspaceOpen"))}</p>
+					<button class="btn-start-chat" id="sidebar-open-first-btn" style="margin-top:8px;">+ ${escapeHtml(tDesktop("openWorkspaceFolder"))}</button>
+				</div>
+			`
+			document.getElementById("sidebar-open-first-btn")?.addEventListener("click", () => {
+				openFolderBtn?.click()
+			})
+			return
+		}
+
+		let html = ""
+
+		workspaces.forEach((ws) => {
+			const wsNorm = pathNormalize(ws)
+			const isActive = wsNorm === curWsNorm
+			const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+			let chats = []
+
+			// Find chats matching this workspace
+			for (const [chatWs, chatList] of Object.entries(sidebarData.chats)) {
+				if (pathNormalize(chatWs) === wsNorm) {
+					chats = chatList
+					break
+				}
+			}
+
+			// Filter query matching
+			let matchingChats = chats
+			let projectMatches = true
+			if (sidebarFilterQuery) {
+				const nameMatch = wsName.toLowerCase().includes(sidebarFilterQuery)
+				const pathMatch = ws.toLowerCase().includes(sidebarFilterQuery)
+				matchingChats = chats.filter((c) => (c.title || "").toLowerCase().includes(sidebarFilterQuery))
+				projectMatches = nameMatch || pathMatch || matchingChats.length > 0
+			}
+
+			if (!projectMatches) return
+
+			// Auto expand if search is active or set has it or it's active
+			const isExpanded = sidebarFilterQuery ? true : (projectExpansions.has(ws) || (isActive && projectExpansions.size <= 1))
+
+			let chatsHtml = ""
+			if (matchingChats.length > 0) {
+				matchingChats.forEach((chat) => {
+					const isChatActive = activeTaskId === chat.id
+					chatsHtml += `
+						<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" data-task-id="${escapeHtml(chat.id)}" data-workspace="${escapeHtml(ws)}">
+							<svg class="chat-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+							</svg>
+							<div class="chat-meta">
+								<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
+								<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
+							</div>
+						</div>
+					`
+				})
+			} else {
+				chatsHtml = `
+					<div class="sidebar-no-chats">
+						<span>${escapeHtml(tDesktop("noConversations"))}</span>
+						<button class="btn-start-chat" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}">+ ${escapeHtml(tDesktop("newChat"))}</button>
+					</div>
+				`
+			}
+
+			html += `
+				<div class="sidebar-project-item ${isActive ? "active" : ""}" data-workspace="${escapeHtml(ws)}">
+					<div class="project-header" data-workspace="${escapeHtml(ws)}">
+						<button class="project-chevron-btn" data-action="toggle-project" data-workspace="${escapeHtml(ws)}" title="Toggle chats">
+							<svg class="chevron-icon ${isExpanded ? "expanded" : ""}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+								<polyline points="9 18 15 12 9 6"></polyline>
+							</svg>
+						</button>
+						<div class="project-icon-box" data-action="switch-workspace" data-workspace="${escapeHtml(ws)}">
+							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+							</svg>
+						</div>
+						<div class="project-meta" data-action="switch-workspace" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(ws)}">
+							<span class="project-name">${escapeHtml(wsName)}</span>
+							<span class="project-path">${escapeHtml(ws)}</span>
+						</div>
+						${isActive ? `<span class="project-active-badge">${escapeHtml(tDesktop("activeProject"))}</span>` : ""}
+						<div class="project-actions">
+							<button class="project-action-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}">
+								<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<line x1="12" y1="5" x2="12" y2="19"/>
+									<line x1="5" y1="12" x2="19" y2="12"/>
+								</svg>
+							</button>
+							${
+								!isActive
+									? `<button class="project-action-btn project-remove-btn" data-action="remove-project" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("removeRecent"))}">
+										<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+											<line x1="18" y1="6" x2="6" y2="18"/>
+											<line x1="6" y1="6" x2="18" y2="18"/>
+										</svg>
+									</button>`
+									: ""
+							}
+						</div>
+					</div>
+					<div class="project-chats-list ${isExpanded ? "expanded" : ""}">
+						${chatsHtml}
+					</div>
+				</div>
+			`
+		})
+
+		sidebarProjectsListEl.innerHTML = html
+
+		// Attach event delegations for dynamically generated items
+		sidebarProjectsListEl.querySelectorAll(".sidebar-chat-item").forEach((el) => {
+			el.addEventListener("click", () => {
+				const taskId = el.getAttribute("data-task-id")
+				const ws = el.getAttribute("data-workspace")
+				if (taskId) switchChat(taskId, ws)
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='toggle-project']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation()
+				const ws = btn.getAttribute("data-workspace")
+				if (ws) {
+					if (projectExpansions.has(ws)) {
+						projectExpansions.delete(ws)
+					} else {
+						projectExpansions.add(ws)
+					}
+					renderSidebar()
+				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='switch-workspace']").forEach((el) => {
+			el.addEventListener("click", () => {
+				const ws = el.getAttribute("data-workspace")
+				if (ws && pathNormalize(ws) !== curWsNorm) {
+					selectWorkspaceFolder(ws)
+				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='new-chat-in-ws']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation()
+				const ws = btn.getAttribute("data-workspace")
+				if (ws) startNewChat(ws)
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='remove-project']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation()
+				const ws = btn.getAttribute("data-workspace")
+				if (ws) removeRecentWorkspace(ws)
+			})
+		})
+	}
 
 	// Webview Loading & Cold Start Resilience with Healthcheck and Exponential Backoff Retry
 	let webviewRetryCount = 0
@@ -628,6 +1038,10 @@
 
 	// Setup Bidirectional Bridge with Iframe
 	window.addEventListener("message", (event) => {
+		if (event.data?.type === "toggleSidebar") {
+			toggleSidebar()
+			return
+		}
 		// Only listen to messages from the webview iframe
 		if (event.source === webviewFrame?.contentWindow) {
 			const data = event.data
@@ -764,6 +1178,10 @@
 
 	function handleServerMessage(msg) {
 		switch (msg.type) {
+			case "sidebarData":
+				updateSidebarData(msg.data)
+				break
+
 			case "extensionMessage":
 				forwardToWebview(msg.message)
 				if (msg.message?.type === "state" && msg.message.state) {
@@ -782,12 +1200,35 @@
 					if (msg.message.state.currentApiConfigName) {
 						currentApiProfileName = msg.message.state.currentApiConfigName
 					}
+					if (msg.message.state.currentTaskId) {
+						activeTaskId = msg.message.state.currentTaskId
+						renderSidebar()
+					}
+				}
+				if (
+					msg.message?.type === "taskHistoryUpdated" ||
+					msg.message?.type === "taskHistoryItemUpdated" ||
+					(msg.message?.type === "say" && msg.message?.say === "completion_result")
+				) {
+					fetchSidebarData()
+				}
+				if (msg.message?.type === "showTaskWithId" && msg.message.text) {
+					activeTaskId = msg.message.text
+					renderSidebar()
 				}
 				break
 
 			case "workspaceInfo":
 				currentWorkspace = msg.workspace
 				renderWorkspaceInfo(msg.workspace)
+				if (msg.workspace?.path) {
+					sidebarData.currentWorkspace = msg.workspace.path
+					if (!sidebarData.recentWorkspaces.some((w) => pathNormalize(w) === pathNormalize(msg.workspace.path))) {
+						sidebarData.recentWorkspaces.unshift(msg.workspace.path)
+					}
+					projectExpansions.add(msg.workspace.path)
+					renderSidebar()
+				}
 				break
 
 			case "agentStatus":
@@ -2040,4 +2481,5 @@
 	// Initialize
 	connectWebSocket()
 	loadWorkspaceFiles()
+	fetchSidebarData()
 })()

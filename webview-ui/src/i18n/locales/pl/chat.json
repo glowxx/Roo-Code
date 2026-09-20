@@ -39,8 +39,8 @@
 		"tooltip": "Spróbuj ponownie wykonać operację"
 	},
 	"startNewTask": {
-		"title": "Rozpocznij nowe zadanie",
-		"tooltip": "Rozpocznij nowe zadanie"
+		"title": "Nowy czat",
+		"tooltip": "Rozpocznij nowy czat"
 	},
 	"proceedAnyways": {
 		"title": "Kontynuuj mimo to",
@@ -76,8 +76,8 @@
 		"tooltip": "Kontynuuj bieżące zadanie"
 	},
 	"terminate": {
-		"title": "Zakończ",
-		"tooltip": "Zakończ bieżące zadanie"
+		"title": "Nowy czat",
+		"tooltip": "Rozpocznij nowy czat"
 	},
 	"stop": {
 		"title": "Zatrzymaj",

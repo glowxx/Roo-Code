@@ -32,9 +32,34 @@ export function insertMention(
 ): { newValue: string; mentionIndex: number } {
 	// Handle slash command selection (only when explicitly selecting a slash command)
 	if (isSlashCommand) {
+		const beforeCursor = text.slice(0, position)
+		const afterCursor = text.slice(position)
+		const slashMatch = beforeCursor.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/)
+
+		const formattedValue = value.startsWith("/") ? value : `/${value}`
+		const command = formattedValue.endsWith(" ") ? formattedValue : `${formattedValue} `
+
+		if (slashMatch) {
+			const slashIndex = beforeCursor.length - slashMatch[1].length - 1
+			const beforeSlash = text.slice(0, slashIndex)
+			return {
+				newValue: beforeSlash + command + afterCursor,
+				mentionIndex: slashIndex,
+			}
+		}
+
+		const lastSlashIndex = beforeCursor.lastIndexOf("/")
+		if (lastSlashIndex !== -1) {
+			const beforeSlash = text.slice(0, lastSlashIndex)
+			return {
+				newValue: beforeSlash + command + afterCursor,
+				mentionIndex: lastSlashIndex,
+			}
+		}
+
 		return {
-			newValue: value,
-			mentionIndex: 0,
+			newValue: beforeCursor + command + afterCursor,
+			mentionIndex: position,
 		}
 	}
 
@@ -367,8 +392,8 @@ export function getContextMenuOptions(
 export function shouldShowContextMenu(text: string, position: number): boolean {
 	const beforeCursor = text.slice(0, position)
 
-	// Check if we're in a slash command context (at the beginning and no space yet)
-	if (text.startsWith("/") && !text.includes(" ") && position <= text.length) {
+	// Check if we're in a slash command context
+	if (/(?:^|\s)\/([a-zA-Z0-9_-]*)$/.test(beforeCursor)) {
 		return true
 	}
 

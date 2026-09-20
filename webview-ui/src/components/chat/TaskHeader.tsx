@@ -9,7 +9,7 @@ import { getModelMaxOutputTokens } from "@roo/api"
 
 import { formatLargeNumber } from "@src/utils/format"
 import { cn } from "@src/lib/utils"
-import { StandardTooltip, Button, Table, TableBody, TableRow, TableCell, CircularProgress } from "@src/components/ui"
+import { StandardTooltip, Button } from "@src/components/ui"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { useSelectedModel } from "@/components/ui/hooks/useSelectedModel"
 import { vscode } from "@src/utils/vscode"
@@ -17,7 +17,6 @@ import { vscode } from "@src/utils/vscode"
 import Thumbnails from "../common/Thumbnails"
 
 import { TaskActions } from "./TaskActions"
-import { ContextWindowProgress } from "./ContextWindowProgress"
 import { Mention } from "./Mention"
 import { TodoListDisplay } from "./TodoListDisplay"
 import { LucideIconButton } from "./LucideIconButton"
@@ -197,71 +196,11 @@ const TaskHeader = ({
 						</div>
 					</div>
 				</div>
-				{!isTaskExpanded && contextWindow > 0 && (
+				{!isTaskExpanded && (
 					<div
 						className="flex items-center justify-between text-sm text-muted-foreground/70"
 						onClick={(e) => e.stopPropagation()}>
 						<div className="flex items-center gap-2">
-							<StandardTooltip
-								content={(() => {
-									const availableSpace = contextWindow - (contextTokens || 0) - reservedForOutput
-
-									return (
-										<Table className="text-base ml-1.5">
-											<TableBody>
-												<TableRow>
-													<TableCell className="font-medium whitespace-nowrap">
-														{t("chat:tokenProgress.tokensUsedLabel")}
-													</TableCell>
-													<TableCell className="text-right text-[0.9em] font-mono">
-														{formatLargeNumber(contextTokens || 0)} /{" "}
-														{formatLargeNumber(contextWindow)}
-													</TableCell>
-												</TableRow>
-												{reservedForOutput > 0 && (
-													<TableRow>
-														<TableCell className="font-medium whitespace-nowrap">
-															{t("chat:tokenProgress.reservedForResponseLabel")}
-														</TableCell>
-														<TableCell className="text-right text-[0.9em] font-mono">
-															{formatLargeNumber(reservedForOutput)}
-														</TableCell>
-													</TableRow>
-												)}
-												{availableSpace > 0 && (
-													<TableRow>
-														<TableCell className="font-medium whitespace-nowrap">
-															{t("chat:tokenProgress.availableSpaceLabel")}
-														</TableCell>
-														<TableCell className="text-right text-[0.9em] font-mono">
-															{formatLargeNumber(availableSpace)}
-														</TableCell>
-													</TableRow>
-												)}
-											</TableBody>
-										</Table>
-									)
-								})()}
-								side="top"
-								sideOffset={8}>
-								<span className="flex items-center gap-1.5">
-									{(() => {
-										// Calculate percentage of available input space used
-										// Available input space = context window - reserved for output
-										const availableInputSpace = contextWindow - reservedForOutput
-										const percentage =
-											availableInputSpace > 0
-												? Math.round(((contextTokens || 0) / availableInputSpace) * 100)
-												: 0
-										return (
-											<>
-												<CircularProgress percentage={percentage} />
-												<span>{percentage}%</span>
-											</>
-										)
-									})()}
-								</span>
-							</StandardTooltip>
 							{compactButton}
 							{!!totalCost && (
 								<>
@@ -329,25 +268,18 @@ const TaskHeader = ({
 						<div className="pt-3 mt-2 -mx-2.5 px-2.5 border-t border-vscode-sideBar-background">
 							<table className="w-full text-sm">
 								<tbody>
-									{contextWindow > 0 && (
-										<tr>
-											<th
-												className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]"
-												data-testid="context-window-label">
-												{t("chat:task.contextWindow")}
-											</th>
-											<td className="font-light align-top">
-												<div className={`max-w-md -mt-1.5 flex flex-nowrap gap-1 items-center`}>
-													<ContextWindowProgress
-														contextWindow={contextWindow}
-														contextTokens={contextTokens || 0}
-														maxTokens={maxTokens || undefined}
-													/>
-													{compactButton}
-												</div>
-											</td>
-										</tr>
-									)}
+									<tr>
+										<th
+											className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]"
+											data-testid="context-window-label">
+											{t("chat:task.contextWindow")}
+										</th>
+										<td className="font-light align-top">
+											<div className="flex items-center gap-1 -mt-1">
+												{compactButton}
+											</div>
+										</td>
+									</tr>
 
 									<tr>
 										<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">

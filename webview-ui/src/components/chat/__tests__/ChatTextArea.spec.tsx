@@ -1205,4 +1205,107 @@ describe("ChatTextArea", () => {
 			expect(sendButton).toHaveClass("pointer-events-auto")
 		})
 	})
+
+	describe("dynamic slash command triggering and selection", () => {
+		const mockCommands = [
+			{ name: "setup", source: "project", description: "Setup the project" },
+			{ name: "deploy", source: "global", description: "Deploy the application" },
+		]
+
+		beforeEach(() => {
+			vi.clearAllMocks()
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [],
+				openedTabs: [],
+				taskHistory: [],
+				cwd: "/test/workspace",
+				commands: mockCommands,
+			})
+		})
+
+		it("should trigger requestCommands when slash is typed mid-text after whitespace", () => {
+			const setInputValue = vi.fn()
+			const { container } = render(
+				<ChatTextArea {...defaultProps} setInputValue={setInputValue} inputValue="Please run " />,
+			)
+
+			const textarea = container.querySelector("textarea")!
+			fireEvent.change(textarea, { target: { value: "Please run /set", selectionStart: 15, selectionEnd: 15 } })
+
+			expect(mockPostMessage).toHaveBeenCalledWith({ type: "requestCommands" })
+		})
+
+		it("should preserve prior text when inserting slash command from menu", () => {
+			const setInputValue = vi.fn()
+			const { container } = render(
+				<ChatTextArea {...defaultProps} setInputValue={setInputValue} inputValue="Please run " />,
+			)
+
+			const textarea = container.querySelector("textarea")!
+			// Type slash command mid-text
+			fireEvent.change(textarea, { target: { value: "Please run /set", selectionStart: 15, selectionEnd: 15 } })
+
+			// Press Enter to select the command (selectedMenuIndex is 1, which points to "setup")
+			fireEvent.keyDown(textarea, { key: "Enter" })
+
+			// Prior text "Please run " must be preserved!
+			expect(setInputValue).toHaveBeenCalledWith("Please run /setup ")
+		})
+
+		it("should have box-border and matching styles on highlightLayerRef", () => {
+			const { getByTestId, container } = render(
+				<ChatTextArea {...defaultProps} inputValue="/setup the project" />,
+			)
+
+			const highlightLayer = getByTestId("highlight-layer")
+			const textarea = container.querySelector("textarea")!
+
+			expect(highlightLayer).toHaveClass("box-border")
+			expect(highlightLayer).toHaveClass("rounded-lg")
+			expect(textarea).toHaveClass("box-border")
+			expect(textarea).toHaveClass("rounded-lg")
+		})
+	})
+
+	describe("context window indicator relocation", () => {
+		it("should render ContextWindowProgress when contextWindow > 0 and not in edit mode", () => {
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [],
+				openedTabs: [],
+				taskHistory: [],
+				cwd: "/test/workspace",
+				commands: [],
+				apiConfiguration: {
+					apiProvider: "anthropic",
+					apiModelId: "claude-3-7-sonnet-20250219",
+				},
+			})
+
+			render(<ChatTextArea {...defaultProps} contextTokens={2500} />)
+
+			expect(screen.getByTestId("context-tokens-count")).toBeInTheDocument()
+			expect(screen.getByTestId("context-window-size")).toBeInTheDocument()
+			expect(screen.getByTestId("context-tokens-used")).toBeInTheDocument()
+		})
+
+		it("should not render ContextWindowProgress in edit mode", () => {
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [],
+				openedTabs: [],
+				taskHistory: [],
+				cwd: "/test/workspace",
+				commands: [],
+				apiConfiguration: {
+					apiProvider: "anthropic",
+					apiModelId: "claude-3-7-sonnet-20250219",
+				},
+			})
+
+			render(<ChatTextArea {...defaultProps} isEditMode={true} contextTokens={2500} />)
+
+			expect(screen.queryByTestId("context-tokens-count")).not.toBeInTheDocument()
+		})
+	})
 })
+
+

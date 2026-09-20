@@ -297,32 +297,17 @@ describe("TaskHeader", () => {
 			mockMaxOutputTokens = 0
 		})
 
-		it("should calculate percentage based on available input space, not total context window", () => {
-			// With the formula: contextTokens / (contextWindow - reservedForOutput) * 100
-			// If contextTokens = 200, contextWindow = 1000, reservedForOutput = 200
-			// Then available input space = 1000 - 200 = 800
-			// Percentage = 200 / 800 * 100 = 25%
-			//
-			// Old (incorrect) formula would have been: (200 + 200) / 1000 * 100 = 40%
-
+		it("should not render context window percentage in collapsed state, keeping header clean while preserving compactButton", () => {
 			renderTaskHeader({ contextTokens: 200 })
 
-			// The percentage should be rendered in the collapsed header state
-			// Verify that 25% is displayed (correct formula) and NOT 40% (old incorrect formula)
-			expect(screen.getByText("25%")).toBeInTheDocument()
+			// The percentage indicator has been relocated to ChatTextArea
+			expect(screen.queryByText("25%")).not.toBeInTheDocument()
 			expect(screen.queryByText("40%")).not.toBeInTheDocument()
-		})
 
-		it("should handle edge case when available input space is zero", () => {
-			// When contextWindow equals reservedForOutput, available space is 0
-			// The percentage should be 0 to avoid division by zero
-			mockModelInfo = { contextWindow: 200, maxTokens: 200 }
-			mockMaxOutputTokens = 200
-
-			renderTaskHeader({ contextTokens: 100 })
-
-			// Should show 0% when available input space is 0
-			expect(screen.getByText("0%")).toBeInTheDocument()
+			// Compact button remains preserved in the header
+			const buttons = screen.getAllByRole("button")
+			const compactButton = buttons.find((button) => button.querySelector("svg.lucide-fold-vertical"))
+			expect(compactButton).toBeDefined()
 		})
 	})
 })

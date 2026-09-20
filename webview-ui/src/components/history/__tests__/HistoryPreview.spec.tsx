@@ -264,7 +264,7 @@ describe("HistoryPreview", () => {
 		)
 	})
 
-	it("displays the header and view all button", () => {
+	it("displays the header", () => {
 		mockUseTaskSearch.mockReturnValue({
 			tasks: mockTasks,
 			searchQuery: "",
@@ -287,9 +287,9 @@ describe("HistoryPreview", () => {
 
 		render(<HistoryPreview />)
 
-		// Should show header and view all button
+		// Should show header and not view all button
 		expect(screen.getByText("history:recentTasks")).toBeInTheDocument()
-		expect(screen.getByText("history:viewAllHistory")).toBeInTheDocument()
+		expect(screen.queryByText("history:viewAllHistory")).not.toBeInTheDocument()
 	})
 
 	it("calls toggleExpand when onToggleExpand is called", () => {
