@@ -60,13 +60,26 @@ export async function getVercelAiGatewayModels(options?: ApiHandlerOptions): Pro
 	try {
 		const response = await axios.get<VercelAiGatewayModelsResponse>(`${baseURL}/models`)
 		const result = vercelAiGatewayModelsResponseSchema.safeParse(response.data)
-		const data = result.success ? result.data.data : response.data.data
+		const rawResponseData = response.data as any
+		const rawData = result.success ? result.data.data : (rawResponseData?.data ?? response.data)
 
 		if (!result.success) {
 			console.error(`Vercel AI Gateway models response is invalid ${JSON.stringify(result.error.format())}`)
 		}
 
-		for (const model of data) {
+		const modelsArray = Array.isArray(rawData)
+			? rawData
+			: Array.isArray(rawResponseData?.data)
+				? rawResponseData.data
+				: Array.isArray(rawResponseData?.models)
+					? rawResponseData.models
+					: []
+
+		for (const model of modelsArray) {
+			if (!model || typeof model !== "object" || !model.id) {
+				continue
+			}
+
 			const { id } = model
 
 			// Only include language models for chat inference.

@@ -36,10 +36,10 @@ describe("CrashBoundary", () => {
 			</CrashBoundary>,
 		)
 
-		expect(screen.getByText("Wystąpił błąd podczas inicjalizacji widoku")).toBeInTheDocument()
+		expect(screen.getByText("An error occurred while initializing the view")).toBeInTheDocument()
 		expect(screen.getByText("Failed to parse initialState")).toBeInTheDocument()
-		expect(screen.getByRole("button", { name: /Przeładuj widok/i })).toBeInTheDocument()
-		expect(screen.getByRole("button", { name: /Wyczyść stan i odśwież/i })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /Reload view/i })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /Clear state & refresh/i })).toBeInTheDocument()
 	})
 
 	it("toggles technical details when button is clicked", () => {
@@ -49,15 +49,29 @@ describe("CrashBoundary", () => {
 			</CrashBoundary>,
 		)
 
-		const toggleBtn = screen.getByRole("button", { name: /Pokaż szczegóły techniczne/i })
+		const toggleBtn = screen.getByRole("button", { name: /Show technical details/i })
 		expect(toggleBtn).toBeInTheDocument()
 
 		// Click to expand
 		fireEvent.click(toggleBtn)
-		expect(screen.getByText(/Ukryj szczegóły techniczne/i)).toBeInTheDocument()
+		expect(screen.getByText(/Hide technical details/i)).toBeInTheDocument()
 
 		// Click to collapse
-		fireEvent.click(screen.getByRole("button", { name: /Ukryj szczegóły techniczne/i }))
-		expect(screen.getByText(/Pokaż szczegóły techniczne/i)).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /Hide technical details/i }))
+		expect(screen.getByText(/Show technical details/i)).toBeInTheDocument()
+	})
+
+	it("renders Polish localization when Polish language is configured", () => {
+		render(
+			<CrashBoundary language="pl">
+				<CrashingComponent shouldCrash={true} message="Błąd montowania" />
+			</CrashBoundary>,
+		)
+
+		expect(screen.getByText("Wystąpił błąd podczas inicjalizacji widoku")).toBeInTheDocument()
+		expect(screen.getByText("Błąd montowania")).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /Przeładuj widok/i })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /Wyczyść stan i odśwież/i })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /Pokaż szczegóły techniczne/i })).toBeInTheDocument()
 	})
 })

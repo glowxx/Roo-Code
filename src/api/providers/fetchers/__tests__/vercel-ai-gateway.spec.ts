@@ -112,6 +112,20 @@ describe("Vercel AI Gateway Fetchers", () => {
 			consoleErrorSpy.mockRestore()
 		})
 
+		it("handles error response { error: string } gracefully without throwing", async () => {
+			const consoleErrorSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
+			mockedAxios.get.mockResolvedValueOnce({
+				data: {
+					error: "Unauthorized",
+				},
+			})
+
+			const models = await getVercelAiGatewayModels()
+
+			expect(models).toEqual({})
+			consoleErrorSpy.mockRestore()
+		})
+
 		it("continues processing with partially valid schema", async () => {
 			const consoleErrorSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
 			const invalidResponse = {

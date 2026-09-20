@@ -76,9 +76,37 @@ describe("OpenRouter API", () => {
 
 			nockDone()
 		})
+
+		it("handles non-iterable or error response gracefully without throwing", async () => {
+			const axios = await import("axios")
+			const getSpy = vi.spyOn(axios.default, "get").mockResolvedValue({
+				data: { error: "unauthorized" },
+			})
+			const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+			const models = await getOpenRouterModels()
+			expect(models).toEqual({})
+
+			getSpy.mockRestore()
+			consoleErrorSpy.mockRestore()
+		})
 	})
 
 	describe("getOpenRouterModelEndpoints", () => {
+		it("handles non-iterable or invalid response gracefully without throwing", async () => {
+			const axios = await import("axios")
+			const getSpy = vi.spyOn(axios.default, "get").mockResolvedValue({
+				data: { error: "not found" },
+			})
+			const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+			const endpoints = await getOpenRouterModelEndpoints("some-model")
+			expect(endpoints).toEqual({})
+
+			getSpy.mockRestore()
+			consoleErrorSpy.mockRestore()
+		})
+
 		it("fetches model endpoints and validates schema", async () => {
 			const mockEndpointsResponse = {
 				data: {

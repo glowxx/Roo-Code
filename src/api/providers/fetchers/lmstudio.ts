@@ -73,7 +73,11 @@ export async function getLMStudioModels(baseUrl = "http://localhost:1234"): Prom
 		// First, try to get all downloaded models
 		try {
 			const downloadedModels = await client.system.listDownloadedModels("llm")
-			for (const model of downloadedModels) {
+			const downloadedArray = Array.isArray(downloadedModels) ? downloadedModels : []
+			for (const model of downloadedArray) {
+				if (!model || typeof model !== "object" || !model.path) {
+					continue
+				}
 				// Use the model path as the key since that's what users select
 				models[model.path] = parseLMStudioModel(model)
 			}
@@ -83,13 +87,18 @@ export async function getLMStudioModels(baseUrl = "http://localhost:1234"): Prom
 
 		// Get loaded models for their runtime info (context size)
 		const loadedModels = (await client.llm.listLoaded().then((models: LLM[]) => {
-			return Promise.all(models.map((m) => m.getModelInfo()))
+			const modelsArray = Array.isArray(models) ? models : []
+			return Promise.all(modelsArray.map((m) => m.getModelInfo()))
 		})) as Array<LLMInstanceInfo>
+		const loadedModelsArray = Array.isArray(loadedModels) ? loadedModels : []
 
 		// Deduplicate: For each loaded model, check if any downloaded model path contains the loaded model's key
 		// This handles cases like loaded "llama-3.1" matching downloaded "Meta/Llama-3.1/Something"
 		// If found, remove the downloaded version and add the loaded model (prefer loaded over downloaded for accurate runtime info)
-		for (const lmstudioModel of loadedModels) {
+		for (const lmstudioModel of loadedModelsArray) {
+			if (!lmstudioModel || typeof lmstudioModel !== "object" || !lmstudioModel.modelKey) {
+				continue
+			}
 			const loadedModelId = lmstudioModel.modelKey.toLowerCase()
 
 			// Find if any downloaded model path contains the loaded model's key as a path segment

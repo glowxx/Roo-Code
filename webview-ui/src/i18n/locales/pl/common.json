@@ -111,6 +111,22 @@
 		"own": "Własne",
 		"subtasks": "Podzadania"
 	},
+	"loading": {
+		"initializing": "Inicjalizacja widoku Roo Code...",
+		"slowResponse": "Oczekiwanie na odpowiedź z silnika trwa dłużej niż zwykle...",
+		"sendReadySignal": "Wyślij sygnał gotowości",
+		"refresh": "Odśwież"
+	},
+	"crashBoundary": {
+		"title": "Wystąpił błąd podczas inicjalizacji widoku",
+		"description": "Aplikacja napotkała nieoczekiwany problem podczas hydratacji lub renderowania widoku. Nie pozostawiamy Cię z czarnym ekranem — możesz bezpiecznie przeładować widok lub zresetować stan.",
+		"errorMessage": "Komunikat błędu",
+		"unknownError": "Nieznany błąd podczas montowania komponentu.",
+		"reloadView": "Przeładuj widok",
+		"clearAndReload": "Wyczyść stan i odśwież",
+		"showDetails": "Pokaż szczegóły techniczne ▼",
+		"hideDetails": "Ukryj szczegóły techniczne ▲"
+	},
 	"footer": {
 		"unsavedChanges": "Niezapisane zmiany",
 		"allChangesSaved": "Wszystkie zmiany zapisane",
@@ -123,3 +139,4 @@
 		}
 	}
 }
+

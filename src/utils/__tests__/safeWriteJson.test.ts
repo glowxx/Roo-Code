@@ -29,6 +29,7 @@ vi.mock("fs/promises", async () => {
 	mockedFs.rm = vi.fn(actual.rm) as any
 	mockedFs.readdir = vi.fn(actual.readdir) as any
 	mockedFs.mkdir = vi.fn(actual.mkdir) as any
+	mockedFs.chmod = vi.fn(actual.chmod) as any
 	// fs.stat and fs.lstat will be available via { ...actual }
 
 	return mockedFs
@@ -476,5 +477,24 @@ describe("safeWriteJson", () => {
 		)
 
 		consoleErrorSpy.mockRestore()
+	})
+
+	test("should use secure permissions (mode 0o700 for mkdir, mode 0o600 for createWriteStream and chmod)", async () => {
+		const mkdirSpy = vi.spyOn(fs, "mkdir")
+		const chmodSpy = vi.spyOn(fs, "chmod")
+		const createWriteStreamSpy = vi.spyOn(fsSyncActual, "createWriteStream")
+
+		const targetDir = path.join(tempDir, "secure-dir")
+		const targetFile = path.join(targetDir, "secure-file.json")
+		const data = { secure: true }
+
+		await safeWriteJson(targetFile, data)
+
+		expect(mkdirSpy).toHaveBeenCalledWith(targetDir, { recursive: true, mode: 0o700 })
+		expect(createWriteStreamSpy).toHaveBeenCalledWith(
+			expect.stringContaining(".secure-file.json.new_"),
+			expect.objectContaining({ mode: 0o600 }),
+		)
+		expect(chmodSpy).toHaveBeenCalledWith(expect.stringContaining(".secure-file.json.new_"), 0o600)
 	})
 })

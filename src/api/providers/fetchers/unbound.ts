@@ -15,9 +15,28 @@ export async function getUnboundModels(apiKey?: string | null): Promise<Record<s
 		}
 
 		const response = await axios.get("https://api.getunbound.ai/models", { headers })
-		const rawModels = response.data?.data ?? response.data
 
-		for (const rawModel of rawModels) {
+		if (response.data?.error) {
+			const errorMsg =
+				typeof response.data.error === "string" ? response.data.error : JSON.stringify(response.data.error)
+			console.error(`Error fetching Unbound models: ${errorMsg}`)
+			return models
+		}
+
+		const rawModels = response.data?.data ?? response.data
+		const modelsArray = Array.isArray(rawModels)
+			? rawModels
+			: Array.isArray(response.data?.data)
+				? response.data.data
+				: Array.isArray(response.data?.models)
+					? response.data.models
+					: []
+
+		for (const rawModel of modelsArray) {
+			if (!rawModel || typeof rawModel !== "object" || !rawModel.id) {
+				continue
+			}
+
 			const modelInfo: ModelInfo = {
 				maxTokens: rawModel.max_output_tokens ?? 8192,
 				contextWindow: rawModel.context_window ?? 200_000,

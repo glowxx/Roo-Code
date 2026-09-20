@@ -101,13 +101,26 @@ export async function getOpenRouterModels(options?: ApiHandlerOptions): Promise<
 	try {
 		const response = await axios.get<OpenRouterModelsResponse>(`${baseURL}/models`)
 		const result = openRouterModelsResponseSchema.safeParse(response.data)
-		const data = result.success ? result.data.data : response.data.data
+		const rawResponseData = response.data as any
+		const rawData = result.success ? result.data.data : (rawResponseData?.data ?? response.data)
 
 		if (!result.success) {
 			console.error("OpenRouter models response is invalid", result.error.format())
 		}
 
-		for (const model of data) {
+		const modelsArray = Array.isArray(rawData)
+			? rawData
+			: Array.isArray(rawResponseData?.data)
+				? rawResponseData.data
+				: Array.isArray(rawResponseData?.models)
+					? rawResponseData.models
+					: []
+
+		for (const model of modelsArray) {
+			if (!model || typeof model !== "object" || !model.id) {
+				continue
+			}
+
 			const { id, architecture, top_provider, supported_parameters = [] } = model
 
 			// Skip image generation models (models that output images)
@@ -149,10 +162,14 @@ export async function getOpenRouterModelEndpoints(
 	try {
 		const response = await axios.get<OpenRouterModelEndpointsResponse>(`${baseURL}/models/${modelId}/endpoints`)
 		const result = openRouterModelEndpointsResponseSchema.safeParse(response.data)
-		const data = result.success ? result.data.data : response.data.data
+		const data = result.success ? result.data.data : (response.data?.data ?? response.data)
 
 		if (!result.success) {
 			console.error("OpenRouter model endpoints response is invalid", result.error.format())
+		}
+
+		if (!data || typeof data !== "object") {
+			return models
 		}
 
 		const { id, architecture, endpoints } = data
@@ -162,7 +179,16 @@ export async function getOpenRouterModelEndpoints(
 			return models
 		}
 
-		for (const endpoint of endpoints) {
+		const endpointsArray = Array.isArray(endpoints)
+			? endpoints
+			: Array.isArray(data?.endpoints)
+				? data.endpoints
+				: []
+
+		for (const endpoint of endpointsArray) {
+			if (!endpoint || typeof endpoint !== "object") {
+				continue
+			}
 			models[endpoint.tag ?? endpoint.provider_name] = parseOpenRouterModel({
 				id,
 				model: endpoint,

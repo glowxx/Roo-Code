@@ -1,8 +1,81 @@
 import React, { Component, type ReactNode, type ErrorInfo } from "react"
 
+export const CRASH_DICTIONARY = {
+	en: {
+		title: "An error occurred while initializing the view",
+		unknownError: "Unknown error occurred while mounting component.",
+		description:
+			"The application encountered an unexpected problem during view hydration or rendering. We don't leave you with a blank screen — you can safely reload the view or reset state.",
+		errorMessage: "Error message",
+		reloadView: "Reload view",
+		clearAndReload: "Clear state & refresh",
+		hideDetails: "Hide technical details ▲",
+		showDetails: "Show technical details ▼",
+	},
+	pl: {
+		title: "Wystąpił błąd podczas inicjalizacji widoku",
+		unknownError: "Nieznany błąd podczas montowania komponentu.",
+		description:
+			"Aplikacja napotkała nieoczekiwany problem podczas hydratacji lub renderowania widoku. Nie pozostawiamy Cię z czarnym ekranem — możesz bezpiecznie przeładować widok lub zresetować stan.",
+		errorMessage: "Komunikat błędu",
+		reloadView: "Przeładuj widok",
+		clearAndReload: "Wyczyść stan i odśwież",
+		hideDetails: "Ukryj szczegóły techniczne ▲",
+		showDetails: "Pokaż szczegóły techniczne ▼",
+	},
+} as const
+
+export type CrashLanguage = keyof typeof CRASH_DICTIONARY
+
+export function resolveCrashLanguage(explicitLanguage?: string): CrashLanguage {
+	if (explicitLanguage) {
+		const norm = explicitLanguage.toLowerCase()
+		if (norm.startsWith("pl")) return "pl"
+		if (norm.startsWith("en")) return "en"
+	}
+
+	try {
+		const vscodeStateStr = localStorage.getItem("vscodeState")
+		if (vscodeStateStr) {
+			const parsed = JSON.parse(vscodeStateStr)
+			if (typeof parsed?.language === "string") {
+				const lang = parsed.language.toLowerCase()
+				if (lang.startsWith("pl")) return "pl"
+				if (lang.startsWith("en")) return "en"
+			}
+		}
+	} catch {
+		// Ignore storage errors
+	}
+
+	try {
+		const rooLang = localStorage.getItem("roo-language")
+		if (rooLang) {
+			const lang = rooLang.toLowerCase()
+			if (lang.startsWith("pl")) return "pl"
+			if (lang.startsWith("en")) return "en"
+		}
+	} catch {
+		// Ignore storage errors
+	}
+
+	try {
+		if (typeof navigator !== "undefined" && typeof navigator.language === "string") {
+			if (navigator.language.toLowerCase().startsWith("pl")) {
+				return "pl"
+			}
+		}
+	} catch {
+		// Ignore navigator errors
+	}
+
+	return "en"
+}
+
 interface CrashBoundaryProps {
 	children: ReactNode
 	fallbackTitle?: string
+	language?: string
 }
 
 interface CrashBoundaryState {
@@ -68,8 +141,11 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 		}
 
 		const { error, errorInfo, showDetails } = this.state
-		const title = this.props.fallbackTitle || "Wystąpił błąd podczas inicjalizacji widoku"
-		const errorMessage = error?.message || (error ? String(error) : "Nieznany błąd podczas montowania komponentu.")
+		const lang = resolveCrashLanguage(this.props.language)
+		const dict = CRASH_DICTIONARY[lang] || CRASH_DICTIONARY.en
+
+		const title = this.props.fallbackTitle || dict.title
+		const errorMessage = error?.message || (error ? String(error) : dict.unknownError)
 		const errorStack = error?.stack || ""
 		const componentStack = errorInfo?.componentStack || ""
 
@@ -153,8 +229,7 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 							margin: "0 0 20px 0",
 							lineHeight: "1.5",
 						}}>
-						Aplikacja napotkała nieoczekiwany problem podczas hydratacji lub renderowania widoku. Nie
-						pozostawiamy Cię z czarnym ekranem — możesz bezpiecznie przeładować widok lub zresetować stan.
+						{dict.description}
 					</p>
 
 					{/* Error snippet */}
@@ -177,7 +252,7 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 								color: "var(--vscode-errorForeground, #f04438)",
 								marginBottom: "4px",
 							}}>
-							Komunikat błędu
+							{dict.errorMessage}
 						</div>
 						<div
 							style={{
@@ -232,7 +307,7 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 								<polyline points="1 20 1 14 7 14" />
 								<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
 							</svg>
-							<span>Przeładuj widok</span>
+							<span>{dict.reloadView}</span>
 						</button>
 
 						<button
@@ -250,7 +325,7 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 								cursor: "pointer",
 								transition: "background 0.15s ease",
 							}}>
-							Wyczyść stan i odśwież
+							{dict.clearAndReload}
 						</button>
 					</div>
 
@@ -269,7 +344,7 @@ export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundarySt
 									textDecoration: "underline",
 									padding: "4px",
 								}}>
-								{showDetails ? "Ukryj szczegóły techniczne ▲" : "Pokaż szczegóły techniczne ▼"}
+								{showDetails ? dict.hideDetails : dict.showDetails}
 							</button>
 
 							{showDetails && (

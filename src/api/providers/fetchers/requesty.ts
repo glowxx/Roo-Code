@@ -19,9 +19,27 @@ export async function getRequestyModels(baseUrl?: string, apiKey?: string): Prom
 		const modelsUrl = new URL("v1/models", resolvedBaseUrl)
 
 		const response = await axios.get(modelsUrl.toString(), { headers })
-		const rawModels = response.data.data
 
-		for (const rawModel of rawModels) {
+		if (response.data?.error) {
+			const errorMsg =
+				typeof response.data.error === "string" ? response.data.error : JSON.stringify(response.data.error)
+			console.error(`Error fetching Requesty models: ${errorMsg}`)
+			return models
+		}
+
+		const rawModels = response.data?.data ?? response.data
+		const modelsArray = Array.isArray(rawModels)
+			? rawModels
+			: Array.isArray(response.data?.data)
+				? response.data.data
+				: Array.isArray(response.data?.models)
+					? response.data.models
+					: []
+
+		for (const rawModel of modelsArray) {
+			if (!rawModel || typeof rawModel !== "object" || !rawModel.id) {
+				continue
+			}
 			const reasoningBudget =
 				rawModel.supports_reasoning &&
 				(rawModel.id.includes("claude") ||

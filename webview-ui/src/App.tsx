@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { type ExtensionMessage } from "@roo-code/types"
 
-import TranslationProvider from "./i18n/TranslationContext"
+import TranslationProvider, { useAppTranslation } from "./i18n/TranslationContext"
 import { vscode } from "./utils/vscode"
 import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sourceMapInitializer"
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
@@ -46,6 +46,7 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 }
 
 const App = () => {
+	const { t } = useAppTranslation()
 	const { didHydrateState, showWelcome, shouldShowAnnouncement, renderContext, theme } = useExtensionState()
 
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
@@ -254,7 +255,7 @@ const App = () => {
 					}}
 				/>
 				<div style={{ fontSize: "14px", fontWeight: 500, marginBottom: "6px" }}>
-					Inicjalizacja widoku Roo Code...
+					{t("common:loading.initializing", "Initializing Roo Code view...")}
 				</div>
 				{hydrationTimeout && (
 					<div
@@ -273,7 +274,10 @@ const App = () => {
 								maxWidth: "360px",
 								lineHeight: "1.4",
 							}}>
-							Oczekiwanie na odpowiedź z silnika trwa dłużej niż zwykle...
+							{t(
+								"common:loading.slowResponse",
+								"Waiting for engine response is taking longer than usual...",
+							)}
 						</p>
 						<div style={{ display: "flex", gap: "8px" }}>
 							<button
@@ -289,7 +293,7 @@ const App = () => {
 									borderRadius: "6px",
 									cursor: "pointer",
 								}}>
-								Wyślij sygnał gotowości
+								{t("common:loading.sendReadySignal", "Send ready signal")}
 							</button>
 							<button
 								type="button"
@@ -304,7 +308,7 @@ const App = () => {
 									borderRadius: "6px",
 									cursor: "pointer",
 								}}>
-								Odśwież
+								{t("common:loading.refresh", "Refresh")}
 							</button>
 						</div>
 					</div>

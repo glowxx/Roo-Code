@@ -84,7 +84,11 @@ export async function getOllamaModels(
 		let modelInfoPromises = []
 
 		if (parsedResponse.success) {
-			for (const ollamaModel of parsedResponse.data.models) {
+			const modelsArray = Array.isArray(parsedResponse.data.models) ? parsedResponse.data.models : []
+			for (const ollamaModel of modelsArray) {
+				if (!ollamaModel || typeof ollamaModel !== "object" || !ollamaModel.model) {
+					continue
+				}
 				modelInfoPromises.push(
 					axios
 						.post<OllamaModelInfoResponse>(

@@ -128,4 +128,13 @@ describe("getPoeModels", () => {
 
 		expect(models["openai/o3"].supportsReasoningEffort).toEqual(["low", "medium", "high"])
 	})
+
+	it("handles non-array or undefined return from getModels gracefully", async () => {
+		mockFetchPoeModels.mockResolvedValue([])
+		mockGetModels.mockReturnValue(undefined as any)
+
+		const models = await getPoeModels("key")
+
+		expect(models).toEqual({})
+	})
 })

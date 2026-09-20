@@ -8,8 +8,12 @@ export async function getPoeModels(apiKey?: string, baseURL?: string): Promise<M
 		await fetchPoeModels({ apiKey, baseURL })
 		const poeModels = getModels()
 		const models: ModelRecord = {}
+		const modelsArray = Array.isArray(poeModels) ? poeModels : []
 
-		for (const m of poeModels) {
+		for (const m of modelsArray) {
+			if (!m || typeof m !== "object" || !m.id) {
+				continue
+			}
 			// The library's applyReasoningFallbacks workaround sets
 			// supportsReasoningEffort to boolean `true` for any model that
 			// supports /v1/responses, even when the model has no actual

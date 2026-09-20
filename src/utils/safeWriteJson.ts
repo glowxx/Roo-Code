@@ -42,7 +42,7 @@ async function safeWriteJson(filePath: string, data: any, options?: SafeWriteJso
 	// Ensure directory structure exists with improved reliability
 	try {
 		// Create directory with recursive option
-		await fs.mkdir(dirPath, { recursive: true })
+		await fs.mkdir(dirPath, { recursive: true, mode: 0o700 })
 
 		// Verify directory exists after creation attempt
 		await fs.access(dirPath)
@@ -90,6 +90,11 @@ async function safeWriteJson(filePath: string, data: any, options?: SafeWriteJso
 		)
 
 		await _streamDataToFile(actualTempNewFilePath, data, options?.prettyPrint)
+		try {
+			await fs.chmod(actualTempNewFilePath, 0o600)
+		} catch {
+			// Ignore chmod errors on systems that don't support POSIX permissions
+		}
 
 		// Step 2: Check if the target file exists. If so, rename it to a backup path.
 		try {
@@ -101,6 +106,11 @@ async function safeWriteJson(filePath: string, data: any, options?: SafeWriteJso
 				`.${path.basename(absoluteFilePath)}.bak_${Date.now()}_${Math.random().toString(36).substring(2)}.tmp`,
 			)
 			await fs.rename(absoluteFilePath, actualTempBackupFilePath)
+			try {
+				await fs.chmod(actualTempBackupFilePath, 0o600)
+			} catch {
+				// Ignore chmod errors on systems that don't support POSIX permissions
+			}
 		} catch (accessError: any) {
 			// Explicitly type accessError
 			if (accessError.code !== "ENOENT") {
@@ -201,7 +211,7 @@ async function safeWriteJson(filePath: string, data: any, options?: SafeWriteJso
  */
 async function _streamDataToFile(targetPath: string, data: any, prettyPrint = false): Promise<void> {
 	// Stream data to avoid high memory usage for large JSON objects.
-	const fileWriteStream = fsSync.createWriteStream(targetPath, { encoding: "utf8" })
+	const fileWriteStream = fsSync.createWriteStream(targetPath, { encoding: "utf8", mode: 0o600 })
 
 	// JsonStreamStringify traverses the object and streams tokens directly
 	// The 'spaces' parameter adds indentation during streaming, not via a separate pass

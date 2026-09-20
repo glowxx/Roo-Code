@@ -53,7 +53,7 @@ export async function getStorageBasePath(defaultPath: string): Promise<string> {
 export async function getTaskDirectoryPath(globalStoragePath: string, taskId: string): Promise<string> {
 	const basePath = await getStorageBasePath(globalStoragePath)
 	const taskDir = path.join(basePath, "tasks", taskId)
-	await fs.mkdir(taskDir, { recursive: true })
+	await fs.mkdir(taskDir, { recursive: true, mode: 0o700 })
 	return taskDir
 }
 
@@ -63,7 +63,7 @@ export async function getTaskDirectoryPath(globalStoragePath: string, taskId: st
 export async function getSettingsDirectoryPath(globalStoragePath: string): Promise<string> {
 	const basePath = await getStorageBasePath(globalStoragePath)
 	const settingsDir = path.join(basePath, "settings")
-	await fs.mkdir(settingsDir, { recursive: true })
+	await fs.mkdir(settingsDir, { recursive: true, mode: 0o700 })
 	return settingsDir
 }
 
@@ -73,7 +73,7 @@ export async function getSettingsDirectoryPath(globalStoragePath: string): Promi
 export async function getCacheDirectoryPath(globalStoragePath: string): Promise<string> {
 	const basePath = await getStorageBasePath(globalStoragePath)
 	const cacheDir = path.join(basePath, "cache")
-	await fs.mkdir(cacheDir, { recursive: true })
+	await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 })
 	return cacheDir
 }
 
