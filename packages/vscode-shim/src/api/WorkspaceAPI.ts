@@ -44,21 +44,26 @@ export class WorkspaceAPI {
 
 	constructor(workspacePath: string, context: ExtensionContextImpl) {
 		this.context = context
-		this.workspaceFolders = [
-			{
-				uri: Uri.file(workspacePath),
-				name: path.basename(workspacePath),
-				index: 0,
-			},
-		]
-		this.name = path.basename(workspacePath)
+		if (workspacePath && workspacePath.trim()) {
+			this.workspaceFolders = [
+				{
+					uri: Uri.file(workspacePath),
+					name: path.basename(workspacePath),
+					index: 0,
+				},
+			]
+			this.name = path.basename(workspacePath)
+		} else {
+			this.workspaceFolders = undefined
+			this.name = undefined
+		}
 		this.fs = new FileSystemAPI()
 	}
 
 	public setWorkspaceFolders(folders: WorkspaceFolder[] | string): void {
 		const prevFolders = this.workspaceFolders || []
-		const newPath = typeof folders === "string" ? folders : folders[0]?.uri.fsPath
-		if (newPath) {
+		const newPath = typeof folders === "string" ? folders : folders[0]?.uri?.fsPath
+		if (newPath && newPath.trim()) {
 			const newFolder: WorkspaceFolder = {
 				uri: Uri.file(newPath),
 				name: path.basename(newPath),
@@ -69,6 +74,13 @@ export class WorkspaceAPI {
 			this.context?.updateWorkspace(newPath)
 			this._onDidChangeWorkspaceFolders.fire({
 				added: [newFolder],
+				removed: prevFolders,
+			})
+		} else {
+			this.workspaceFolders = undefined
+			this.name = undefined
+			this._onDidChangeWorkspaceFolders.fire({
+				added: [],
 				removed: prevFolders,
 			})
 		}

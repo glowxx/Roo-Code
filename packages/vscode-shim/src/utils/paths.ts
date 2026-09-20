@@ -21,7 +21,10 @@ function getBaseStorageDir(): string {
  * @param workspacePath - The workspace path to hash
  * @returns A hexadecimal hash string
  */
-export function hashWorkspacePath(workspacePath: string): string {
+export function hashWorkspacePath(workspacePath?: string): string {
+	if (!workspacePath || typeof workspacePath !== "string" || !workspacePath.trim()) {
+		return "empty-workspace"
+	}
 	const normalized = path.normalize(workspacePath).toLowerCase().replace(/\\/g, "/")
 	let hash = 0
 	for (let i = 0; i < normalized.length; i++) {

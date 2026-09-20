@@ -1,5 +1,10 @@
-process.on("uncaughtException", (err) => console.error("[FATAL CRASH]", err))
-process.on("unhandledRejection", (reason) => console.error("[UNHANDLED REJECTION]", reason))
+import { logStartupDebug, setupGlobalCrashHandlers } from "./logger.js"
+
+setupGlobalCrashHandlers("DesktopMain")
+logStartupDebug("=== Roo Code Desktop Starting ===")
+logStartupDebug(`Versions: ${JSON.stringify(process.versions)}`)
+logStartupDebug(`Process argv: ${JSON.stringify(process.argv)}`)
+logStartupDebug(`Cwd: ${process.cwd()}`)
 
 import path from "path"
 import fs from "fs"
@@ -23,6 +28,7 @@ export interface DesktopRunOptions {
 }
 
 export async function startDesktopApp(options: DesktopRunOptions = {}) {
+	logStartupDebug(`startDesktopApp called with options: ${JSON.stringify(options)}`)
 	let workspacePath = options.workspacePath
 
 	// Check if -w / --workspace was explicitly provided in CLI arguments
@@ -50,7 +56,8 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		}
 	}
 
-	workspacePath = path.resolve(workspacePath || process.cwd())
+	// Zero-state resilience: do not force process.cwd() when no workspace is selected!
+	workspacePath = workspacePath && workspacePath.trim() ? path.resolve(workspacePath) : ""
 	const port = options.port || 4500
 	const storageDir = options.storageDir || path.join(os.homedir(), ".roo-desktop-data")
 	if (!fs.existsSync(storageDir)) {
@@ -60,6 +67,8 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	// Locate extension bundle
 	let extensionPath = ""
 	const candidateEnginePaths = [
+		process.resourcesPath ? path.join(process.resourcesPath, "app.asar.unpacked", "dist", "engine") : "",
+		process.resourcesPath ? path.join(process.resourcesPath, "app.asar", "dist", "engine") : "",
 		process.resourcesPath ? path.join(process.resourcesPath, "engine") : "",
 		path.join(__dirname, "..", "engine"),
 		path.join(__dirname, "engine"),
@@ -83,18 +92,27 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		}
 	}
 
-	let staticDir = path.join(__dirname, "renderer")
-	if (!fs.existsSync(staticDir)) {
-		staticDir = path.join(__dirname, "..", "renderer")
-	}
-	if (!fs.existsSync(staticDir) && process.resourcesPath) {
-		staticDir = path.join(process.resourcesPath, "renderer")
+	let staticDir = ""
+	const candidateStaticDirs = [
+		process.resourcesPath ? path.join(process.resourcesPath, "app.asar.unpacked", "dist", "renderer") : "",
+		process.resourcesPath ? path.join(process.resourcesPath, "app.asar", "dist", "renderer") : "",
+		path.join(__dirname, "renderer"),
+		path.join(__dirname, "..", "renderer"),
+		process.resourcesPath ? path.join(process.resourcesPath, "renderer") : "",
+	].filter(Boolean)
+
+	for (const candidate of candidateStaticDirs) {
+		if (fs.existsSync(path.join(candidate, "index.html"))) {
+			staticDir = candidate
+			break
+		}
 	}
 
-	console.log("⚡ Starting Roo Code Desktop...")
-	console.log(`📁 Workspace: ${workspacePath}`)
-	console.log(`📦 Core Engine: ${extensionPath}`)
-	console.log(`💾 Storage: ${storageDir}`)
+	logStartupDebug("⚡ Starting Roo Code Desktop...")
+	logStartupDebug(`📁 Workspace: ${workspacePath || "(none - zero-state)"}`)
+	logStartupDebug(`📦 Core Engine: ${extensionPath}`)
+	logStartupDebug(`💾 Storage: ${storageDir}`)
+	logStartupDebug(`🌐 Static Dir: ${staticDir}`)
 
 	const agentHost = new DesktopAgentHost({
 		workspacePath,
@@ -102,7 +120,9 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		storageDir,
 	})
 
+	logStartupDebug("Initializing DesktopAgentHost...")
 	await agentHost.init()
+	logStartupDebug("🤖 Agent Engine initialized successfully.")
 	console.log("🤖 Agent Engine initialized successfully.")
 
 	const desktopServer = createDesktopServer({
@@ -112,16 +132,22 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		staticDir,
 	})
 
+	logStartupDebug(`Starting DesktopServer on port ${port}...`)
 	const actualPort = await desktopServer.start()
-	const appUrl = `http://localhost:${actualPort}`
+	const appUrl = `http://127.0.0.1:${actualPort}`
+	logStartupDebug(`🚀 Roo Code Desktop running at: ${appUrl}`)
 	console.log(`🚀 Roo Code Desktop running at: ${appUrl}`)
 
 	if (options.isElectron && process.versions.electron) {
 		try {
+			logStartupDebug("Electron detected, importing electron module...")
 			const electron = await import("electron")
-			const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen } = electron
+			const electronObj = (electron as any).app ? electron : ((electron as any).default || electron)
+			const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen } = electronObj
 
+			logStartupDebug("Waiting for app.whenReady()...")
 			await app.whenReady()
+			logStartupDebug("app.whenReady() resolved successfully")
 
 			const config = loadDesktopConfig()
 			const windowBounds = config.windowBounds
@@ -130,7 +156,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			let windowY = windowBounds?.y
 			if (typeof windowX === "number" && typeof windowY === "number") {
 				const displays = screen.getAllDisplays()
-				const isVisible = displays.some((d) => {
+				const isVisible = displays.some((d: any) => {
 					const { x, y, width, height } = d.bounds
 					return (
 						windowX! >= x - 50 &&
@@ -145,7 +171,23 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				}
 			}
 
+			let preloadPath = path.join(__dirname, "..", "preload", "index.js")
+			const candidatePreloadPaths = [
+				process.resourcesPath ? path.join(process.resourcesPath, "app.asar.unpacked", "dist", "preload", "index.js") : "",
+				process.resourcesPath ? path.join(process.resourcesPath, "app.asar", "dist", "preload", "index.js") : "",
+				preloadPath,
+				path.join(__dirname, "preload", "index.js"),
+			].filter(Boolean)
+			for (const cp of candidatePreloadPaths) {
+				if (fs.existsSync(cp)) {
+					preloadPath = cp
+					break
+				}
+			}
+			logStartupDebug(`Resolved preload script: ${preloadPath}`)
+
 			const iconCandidate = path.join(staticDir, "icon.png")
+			logStartupDebug(`Creating BrowserWindow (icon: ${iconCandidate})...`)
 			const win = new BrowserWindow({
 				width: windowBounds?.width ?? 1300,
 				height: windowBounds?.height ?? 880,
@@ -160,11 +202,12 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				titleBarStyle: "hidden",
 				titleBarOverlay: false,
 				webPreferences: {
-					preload: path.join(__dirname, "..", "preload", "index.js"),
+					preload: preloadPath,
 					contextIsolation: true,
 					nodeIntegration: false,
 				},
 			})
+			logStartupDebug(`BrowserWindow created (id: ${win.id})`)
 
 			if (windowBounds?.isMaximized) {
 				win.maximize()
@@ -234,7 +277,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			const handleSelectFolder = async () => {
 				const result = await dialog.showOpenDialog(win, {
 					properties: ["openDirectory"],
-					defaultPath: agentHost.getWorkspace(),
+					defaultPath: agentHost.getWorkspace() || undefined,
 				})
 				if (!result.canceled && result.filePaths.length > 0) {
 					const selectedPath = result.filePaths[0]
@@ -266,7 +309,9 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			ipcMain.handle("desktop:show-item", async (_event, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
-					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const rawWs = agentHost.getWorkspace()
+					if (!rawWs || !rawWs.trim()) return false
+					const wsRoot = path.normalize(path.resolve(rawWs))
 					const validation = validatePathWithinRoot(filePath, wsRoot)
 					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
 						shell.showItemInFolder(validation.resolvedPath)
@@ -278,7 +323,9 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 			ipcMain.handle("desktop:open-path", async (_event, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
-					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const rawWs = agentHost.getWorkspace()
+					if (!rawWs || !rawWs.trim()) return false
+					const wsRoot = path.normalize(path.resolve(rawWs))
 					const validation = validatePathWithinRoot(filePath, wsRoot)
 					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
 						await shell.openPath(validation.resolvedPath)
@@ -336,13 +383,15 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			Menu.setApplicationMenu(menu)
 
 			win.webContents.on("did-finish-load", () => {
+				logStartupDebug("BrowserWindow webContents 'did-finish-load' fired")
 				if (!win.isDestroyed()) {
-					const curWs = path.normalize(path.resolve(agentHost.getWorkspace()))
-					const scan = scanWorkspace(curWs)
+					const rawWs = agentHost.getWorkspace()
+					const curWs = rawWs && rawWs.trim() ? path.normalize(path.resolve(rawWs)) : ""
+					const scan = curWs ? scanWorkspace(curWs) : { files: [], directories: [] }
 					const newWs: WorkspaceInfo = {
 						path: curWs,
-						name: path.basename(curWs),
-						branch: getGitBranch(curWs),
+						name: curWs ? path.basename(curWs) : "",
+						branch: curWs ? getGitBranch(curWs) : undefined,
 						files: scan.files,
 						directories: scan.directories,
 					}
@@ -351,20 +400,34 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				}
 			})
 
+			win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+				logStartupDebug(`BrowserWindow did-fail-load: ${errorCode} - ${errorDescription} (${validatedURL})`)
+			})
+
+			win.webContents.on("render-process-gone", (_event, details) => {
+				logStartupDebug(`BrowserWindow render-process-gone: ${JSON.stringify(details)}`)
+			})
+
+			logStartupDebug(`Loading appUrl in BrowserWindow: ${appUrl}`)
 			await win.loadURL(appUrl)
+			logStartupDebug("win.loadURL completed successfully")
 
 			win.on("closed", () => {
+				logStartupDebug("BrowserWindow closed")
 				desktopServer.stop().finally(() => app.quit())
 			})
 
 			app.on("window-all-closed", () => {
+				logStartupDebug("app window-all-closed")
 				if (process.platform !== "darwin") {
 					app.quit()
 				}
 			})
 			return
 		} catch (err) {
-			console.warn("Electron GUI could not be initialized, falling back to Web Desktop:", err)
+			const msg = `Electron GUI could not be initialized, falling back to Web Desktop: ${err instanceof Error ? err.stack : String(err)}`
+			logStartupDebug(msg)
+			console.warn(msg)
 		}
 	}
 
@@ -405,10 +468,13 @@ if (process.versions.electron && !process.env.ELECTRON_RUN_AS_NODE) {
 		}
 	}
 
+	logStartupDebug(`Electron auto-start resolved workspacePath: ${workspacePath || "(none)"}`)
 	startDesktopApp({
-		workspacePath: workspacePath || process.cwd(),
+		workspacePath: workspacePath || "",
 		isElectron: true,
 	}).catch((err) => {
-		console.error("Failed to start Roo Code Desktop in Electron:", err)
+		const msg = `Failed to start Roo Code Desktop in Electron: ${err?.stack || err}`
+		logStartupDebug(msg)
+		console.error(msg)
 	})
 }

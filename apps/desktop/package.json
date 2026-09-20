@@ -62,7 +62,10 @@
 		],
 		"asarUnpack": [
 			"dist/node_modules/@vscode/ripgrep/**/*",
-			"dist/engine/bin/*",
+			"dist/engine/**/*",
+			"dist/webview/**/*",
+			"dist/renderer/**/*",
+			"dist/preload/**/*",
 			"**/*.wasm",
 			"**/*.node"
 		],

@@ -1,5 +1,6 @@
-process.on("uncaughtException", (err) => console.error("[FATAL CRASH]", err))
-process.on("unhandledRejection", (reason) => console.error("[UNHANDLED REJECTION]", reason))
+import { logStartupDebug, setupGlobalCrashHandlers } from "./logger.js"
+
+setupGlobalCrashHandlers("DesktopServer")
 
 import http from "http"
 import fs from "fs"
@@ -46,6 +47,7 @@ function normalizeFsPath(p: string): string {
  * - Resolves symlinks using realpath to prevent symlink traversal
  * - Ensures path boundary matching (prevents /parent-other starting with /parent)
  * - Handles Windows case-insensitivity, drive letter variations, and leading slash quirks
+ * - Safe against asar archives where realpathSync throws
  */
 export function validatePathWithinRoot(
 	targetPath: string,
@@ -55,6 +57,9 @@ export function validatePathWithinRoot(
 	if (!targetPath || typeof targetPath !== "string") {
 		return { safe: false, error: "Path must be a non-empty string" }
 	}
+	if (!allowedRoot || typeof allowedRoot !== "string" || !allowedRoot.trim()) {
+		return { safe: false, error: "No root directory specified" }
+	}
 
 	// Guard against null bytes
 	if (targetPath.includes("\0")) {
@@ -63,7 +68,14 @@ export function validatePathWithinRoot(
 
 	try {
 		const resolvedRoot = normalizeFsPath(allowedRoot)
-		const realRoot = normalizeFsPath(fs.existsSync(resolvedRoot) ? fs.realpathSync(resolvedRoot) : resolvedRoot)
+		let realRoot = resolvedRoot
+		try {
+			if (fs.existsSync(resolvedRoot)) {
+				realRoot = normalizeFsPath(fs.realpathSync(resolvedRoot))
+			}
+		} catch {
+			realRoot = resolvedRoot
+		}
 
 		let cleanTarget = targetPath.trim()
 		if (process.platform === "win32") {
@@ -86,7 +98,7 @@ export function validatePathWithinRoot(
 			try {
 				realTarget = normalizeFsPath(fs.realpathSync(absoluteTarget))
 			} catch {
-				return { safe: false, error: "Failed to resolve real path" }
+				realTarget = absoluteTarget
 			}
 		} else {
 			// If file does not exist, verify nearest existing ancestor directory
@@ -95,7 +107,12 @@ export function validatePathWithinRoot(
 				checkDir = path.dirname(checkDir)
 			}
 			if (fs.existsSync(checkDir)) {
-				const realAncestor = normalizeFsPath(fs.realpathSync(checkDir))
+				let realAncestor = checkDir
+				try {
+					realAncestor = normalizeFsPath(fs.realpathSync(checkDir))
+				} catch {
+					realAncestor = checkDir
+				}
 				// Reconstruct target path using realAncestor and path.relative
 				const relFromAncestor = path.relative(checkDir, absoluteTarget)
 				realTarget = normalizeFsPath(path.resolve(realAncestor, relFromAncestor))
@@ -146,6 +163,9 @@ export function validatePathWithinRoot(
 }
 
 export function getGitBranch(workspacePath: string): string | undefined {
+	if (!workspacePath || typeof workspacePath !== "string" || !workspacePath.trim()) {
+		return undefined
+	}
 	try {
 		const branch = execSync("git rev-parse --abbrev-ref HEAD", {
 			cwd: workspacePath,
@@ -168,7 +188,7 @@ export function scanWorkspace(
 	dir: string,
 	maxFiles = 25000
 ): { files: string[]; directories: string[] } {
-	if (!dir || typeof dir !== "string") return { files: [], directories: [] }
+	if (!dir || typeof dir !== "string" || !dir.trim()) return { files: [], directories: [] }
 
 	let normalizedDir = ""
 	try {
@@ -376,12 +396,12 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		broadcast({ type: "diffsUpdated", diffs })
 	})
 	agentHost.on("workspaceChanged", (wsPath) => {
-		const normalized = path.normalize(path.resolve(wsPath))
-		const scan = scanWorkspace(normalized)
+		const normalized = wsPath && wsPath.trim() ? path.normalize(path.resolve(wsPath)) : ""
+		const scan = normalized ? scanWorkspace(normalized) : { files: [], directories: [] }
 		const newWs: WorkspaceInfo = {
 			path: normalized,
-			name: path.basename(normalized),
-			branch: getGitBranch(normalized),
+			name: normalized ? path.basename(normalized) : "",
+			branch: normalized ? getGitBranch(normalized) : undefined,
 			files: scan.files,
 			directories: scan.directories,
 		}
@@ -426,7 +446,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			let wsPath = ""
 			try {
 				const ws = agentHost.getWorkspace()
-				if (ws) {
+				if (ws && ws.trim()) {
 					wsPath = path.normalize(path.resolve(ws))
 				}
 			} catch {
@@ -449,7 +469,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			let scan = { files: [] as string[], directories: [] as string[] }
 			try {
 				const ws = agentHost.getWorkspace()
-				if (ws) {
+				if (ws && ws.trim()) {
 					const wsPath = path.normalize(path.resolve(ws))
 					scan = scanWorkspace(wsPath)
 				}
@@ -468,7 +488,13 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				res.end(JSON.stringify({ error: "Missing path parameter" }))
 				return
 			}
-			const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+			const rawWs = agentHost.getWorkspace()
+			if (!rawWs || !rawWs.trim()) {
+				res.writeHead(400, { "Content-Type": "application/json" })
+				res.end(JSON.stringify({ error: "No workspace open" }))
+				return
+			}
+			const wsRoot = path.normalize(path.resolve(rawWs))
 			const validation = validatePathWithinRoot(filePath, wsRoot)
 
 			// Path traversal check
@@ -542,6 +568,8 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		if (pathname.startsWith("/webview") || pathname.startsWith("/assets/")) {
 			let webviewBuildDir = ""
 			const candidateWebviewPaths = [
+				process.resourcesPath ? path.join(process.resourcesPath, "app.asar.unpacked", "dist", "webview") : "",
+				process.resourcesPath ? path.join(process.resourcesPath, "app.asar", "dist", "webview") : "",
 				process.resourcesPath ? path.join(process.resourcesPath, "webview") : "",
 				path.join(__dirname, "..", "webview"),
 				path.join(__dirname, "webview"),
@@ -1102,7 +1130,7 @@ window.addEventListener("message", function(e) {
 		let wsPath = ""
 		try {
 			const rawWs = agentHost.getWorkspace()
-			if (rawWs) {
+			if (rawWs && rawWs.trim()) {
 				wsPath = path.normalize(path.resolve(rawWs))
 			}
 		} catch {
@@ -1129,7 +1157,7 @@ window.addEventListener("message", function(e) {
 					let curPath = ""
 					try {
 						const rawWs = agentHost.getWorkspace()
-						if (rawWs) {
+						if (rawWs && rawWs.trim()) {
 							curPath = path.normalize(path.resolve(rawWs))
 						}
 					} catch {
@@ -1154,12 +1182,13 @@ window.addEventListener("message", function(e) {
 							const normalized = path.normalize(path.resolve(clientMsg.path))
 							await agentHost.setWorkspace(normalized)
 							saveDesktopConfig({ lastWorkspacePath: normalized })
-							const curPath = path.normalize(path.resolve(agentHost.getWorkspace()))
-							const folderScan = scanWorkspace(curPath)
+							const rawWs = agentHost.getWorkspace()
+							const curPath = rawWs && rawWs.trim() ? path.normalize(path.resolve(rawWs)) : ""
+							const folderScan = curPath ? scanWorkspace(curPath) : { files: [], directories: [] }
 							const newWs: WorkspaceInfo = {
 								path: curPath,
-								name: path.basename(curPath),
-								branch: getGitBranch(curPath),
+								name: curPath ? path.basename(curPath) : "",
+								branch: curPath ? getGitBranch(curPath) : undefined,
 								files: folderScan.files,
 								directories: folderScan.directories,
 							}
@@ -1172,7 +1201,12 @@ window.addEventListener("message", function(e) {
 						ws.send(JSON.stringify({ type: "error", message: `Folder does not exist: ${clientMsg.path}` }))
 					}
 				} else if (clientMsg.type === "readFile") {
-					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const rawWs = agentHost.getWorkspace()
+					if (!rawWs || !rawWs.trim()) {
+						ws.send(JSON.stringify({ type: "error", message: "No workspace open" }))
+						return
+					}
+					const wsRoot = path.normalize(path.resolve(rawWs))
 					const validation = validatePathWithinRoot(clientMsg.filePath, wsRoot)
 					if (!validation.safe || !validation.resolvedPath) {
 						ws.send(JSON.stringify({ type: "error", message: validation.error || "Access outside workspace forbidden" }))
@@ -1294,7 +1328,12 @@ window.addEventListener("message", function(e) {
 						ws.send(JSON.stringify({ type: "error", message: "File not found or outside workspace" }))
 					}
 				} else if (clientMsg.type === "showItem" || clientMsg.type === "openFile") {
-					const wsRoot = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const rawWs = agentHost.getWorkspace()
+					if (!rawWs || !rawWs.trim()) {
+						ws.send(JSON.stringify({ type: "error", message: "No workspace open" }))
+						return
+					}
+					const wsRoot = path.normalize(path.resolve(rawWs))
 					const validation = validatePathWithinRoot(clientMsg.filePath, wsRoot)
 					if (validation.safe && validation.resolvedPath && fs.existsSync(validation.resolvedPath)) {
 						const abs = validation.resolvedPath
@@ -1352,10 +1391,16 @@ window.addEventListener("message", function(e) {
 		server,
 		wss,
 		start: () =>
-			new Promise((resolve) => {
+			new Promise((resolve, reject) => {
+				logStartupDebug(`desktopServer.start() attempting to listen on ${host}:${port}...`)
+				server.once("error", (err) => {
+					logStartupDebug(`HTTP server error during listen: ${err?.stack || err}`)
+					reject(err)
+				})
 				server.listen(port, host, () => {
 					const addr = server.address()
 					const actualPort = typeof addr === "object" && addr ? addr.port : port
+					logStartupDebug(`HTTP server successfully listening on ${host}:${actualPort}`)
 					resolve(actualPort)
 				})
 			}),

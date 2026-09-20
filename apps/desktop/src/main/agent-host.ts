@@ -37,7 +37,7 @@ export class DesktopAgentHost extends EventEmitter {
 
 	constructor(options: AgentHostOptions) {
 		super()
-		this.currentWorkspace = path.normalize(path.resolve(options.workspacePath))
+		this.currentWorkspace = options.workspacePath && options.workspacePath.trim() ? path.normalize(path.resolve(options.workspacePath)) : ""
 		this.extensionPath = path.normalize(path.resolve(options.extensionPath))
 		this.storageDir = options.storageDir ? path.normalize(path.resolve(options.storageDir)) : undefined
 	}
@@ -46,12 +46,7 @@ export class DesktopAgentHost extends EventEmitter {
 		return this.currentWorkspace
 	}
 
-	public async setWorkspace(newWorkspace: string): Promise<void> {
-		const normalized = path.normalize(path.resolve(newWorkspace))
-		if (!fs.existsSync(normalized)) {
-			throw new Error(`Directory does not exist: ${normalized}`)
-		}
-
+	public async setWorkspace(newWorkspace?: string): Promise<void> {
 		this.currentWorkspaceEpoch++
 		const epoch = this.currentWorkspaceEpoch
 
@@ -59,6 +54,32 @@ export class DesktopAgentHost extends EventEmitter {
 			this.pendingWorkspaceChangeAbortController.abort()
 		}
 		this.pendingWorkspaceChangeAbortController = new AbortController()
+
+		if (!newWorkspace || typeof newWorkspace !== "string" || !newWorkspace.trim()) {
+			this.currentWorkspace = ""
+			this.diffFiles.clear()
+			this.terminalLogs = []
+			if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
+				const ws = (this.vscode as Record<string, unknown>).workspace as any
+				if (typeof ws.setWorkspaceFolders === "function") {
+					ws.setWorkspaceFolders([])
+				} else {
+					ws.workspaceFolders = undefined
+					ws.name = undefined
+				}
+			}
+			await this.provider?.handleWorkspaceChanged?.("", this.currentWorkspaceEpoch)
+			if (this.currentWorkspaceEpoch === epoch) {
+				this.emit("workspaceChanged", "")
+			}
+			return
+		}
+
+		const normalized = path.normalize(path.resolve(newWorkspace))
+		if (!fs.existsSync(normalized)) {
+			console.warn(`Directory does not exist: ${normalized}`)
+			return
+		}
 
 		this.currentWorkspace = normalized
 		this.diffFiles.clear()
@@ -124,6 +145,7 @@ export class DesktopAgentHost extends EventEmitter {
 		// Find appRoot for VSCode API (needs node_modules/@vscode/ripgrep/bin/rg)
 		const binName = process.platform === "win32" ? "rg.exe" : "rg"
 		const candidateAppRoots = [
+			process.resourcesPath ? path.join(process.resourcesPath, "app.asar.unpacked", "dist") : "",
 			process.resourcesPath || "",
 			path.join(__dirname, ".."), // dist/
 			path.join(__dirname, "../.."), // apps/desktop
@@ -172,7 +194,7 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 
 		// Initialize VSCode API mock
-		this.vscode = createVSCodeAPI(this.extensionPath, this.currentWorkspace, undefined, {
+		this.vscode = createVSCodeAPI(this.extensionPath, this.currentWorkspace || "", undefined, {
 			appRoot,
 			storageDir: this.storageDir,
 		})
