@@ -125,11 +125,32 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	logStartupDebug("🤖 Agent Engine initialized successfully.")
 	console.log("🤖 Agent Engine initialized successfully.")
 
+	let onQuitHandler: (() => void) | undefined = async () => {
+		logStartupDebug("[EXIT] Default onQuitHandler triggered. Stopping desktopServer...")
+		try {
+			await desktopServer.stop()
+		} catch {}
+		process.exit(0)
+	}
+
 	const desktopServer = createDesktopServer({
 		port,
 		host: "127.0.0.1",
 		agentHost,
 		staticDir,
+		onQuit: () => {
+			logStartupDebug("[SERVER] onQuit callback triggered")
+			onQuitHandler?.()
+		},
+	})
+
+	process.on("SIGINT", () => {
+		logStartupDebug("[PROCESS] SIGINT signal received")
+		onQuitHandler?.()
+	})
+	process.on("SIGTERM", () => {
+		logStartupDebug("[PROCESS] SIGTERM signal received")
+		onQuitHandler?.()
 	})
 
 	logStartupDebug(`Starting DesktopServer on port ${port}...`)
@@ -148,6 +169,13 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			logStartupDebug("Waiting for app.whenReady()...")
 			await app.whenReady()
 			logStartupDebug("app.whenReady() resolved successfully")
+
+			const gotTheLock = app.requestSingleInstanceLock()
+			if (!gotTheLock) {
+				logStartupDebug("Another instance of Roo Code Desktop is already running. Quitting.")
+				app.quit()
+				process.exit(0)
+			}
 
 			const config = loadDesktopConfig()
 			const windowBounds = config.windowBounds
@@ -253,15 +281,17 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			})
 
 			// IPC Handlers for communication with renderer
-			ipcMain.on("desktop:message-to-extension", (_event, message) => {
+			ipcMain.on("desktop:message-to-extension", (_event: any, message: any) => {
 				agentHost.sendToExtension(message as any)
 			})
 
 			// Window control IPC handlers
 			ipcMain.on("desktop:window-minimize", () => {
+				logStartupDebug("IPC received: desktop:window-minimize")
 				if (!win.isDestroyed()) win.minimize()
 			})
 			ipcMain.on("desktop:window-maximize", () => {
+				logStartupDebug("IPC received: desktop:window-maximize")
 				if (!win.isDestroyed()) {
 					if (win.isMaximized()) {
 						win.unmaximize()
@@ -271,6 +301,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				}
 			})
 			ipcMain.on("desktop:window-close", () => {
+				logStartupDebug("IPC received: desktop:window-close")
 				if (!win.isDestroyed()) win.close()
 			})
 
@@ -307,7 +338,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			ipcMain.handle("desktop:select-folder", handleSelectFolder)
 			ipcMain.handle("desktop:select-workspace", handleSelectFolder)
 
-			ipcMain.handle("desktop:show-item", async (_event, filePath: string) => {
+			ipcMain.handle("desktop:show-item", async (_event: any, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
 					const rawWs = agentHost.getWorkspace()
 					if (!rawWs || !rawWs.trim()) return false
@@ -321,7 +352,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				return false
 			})
 
-			ipcMain.handle("desktop:open-path", async (_event, filePath: string) => {
+			ipcMain.handle("desktop:open-path", async (_event: any, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
 					const rawWs = agentHost.getWorkspace()
 					if (!rawWs || !rawWs.trim()) return false
@@ -382,6 +413,10 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			const menu = Menu.buildFromTemplate(menuTemplate)
 			Menu.setApplicationMenu(menu)
 
+			win.webContents.on("console-message", (_event: any, level: number, message: string, line: number, sourceId: string) => {
+				logStartupDebug(`[RENDERER CONSOLE lvl:${level}] ${message} (${sourceId}:${line})`)
+			})
+
 			win.webContents.on("did-finish-load", () => {
 				logStartupDebug("BrowserWindow webContents 'did-finish-load' fired")
 				if (!win.isDestroyed()) {
@@ -400,28 +435,64 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				}
 			})
 
-			win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+			win.webContents.on("did-fail-load", (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
 				logStartupDebug(`BrowserWindow did-fail-load: ${errorCode} - ${errorDescription} (${validatedURL})`)
 			})
 
-			win.webContents.on("render-process-gone", (_event, details) => {
+			win.webContents.on("render-process-gone", (_event: any, details: any) => {
 				logStartupDebug(`BrowserWindow render-process-gone: ${JSON.stringify(details)}`)
+			})
+
+			app.on("second-instance", () => {
+				logStartupDebug("app 'second-instance' event fired - restoring window")
+				if (win && !win.isDestroyed()) {
+					if (win.isMinimized()) win.restore()
+					win.focus()
+				}
 			})
 
 			logStartupDebug(`Loading appUrl in BrowserWindow: ${appUrl}`)
 			await win.loadURL(appUrl)
 			logStartupDebug("win.loadURL completed successfully")
 
+			let isShuttingDown = false
+			const terminateApp = async (reason: string) => {
+				if (isShuttingDown) return
+				isShuttingDown = true
+				logStartupDebug(`[EXIT] Terminating application (trigger: ${reason}). Stopping servers...`)
+				try {
+					if (desktopServer) {
+						await desktopServer.stop()
+						logStartupDebug("[EXIT] desktopServer.stop() completed successfully.")
+					}
+				} catch (e) {
+					logStartupDebug(`[EXIT] Error stopping desktopServer: ${e}`)
+				}
+				logStartupDebug("[EXIT] Calling app.quit() and scheduling force exit...")
+				try {
+					app.quit()
+				} catch {}
+				setTimeout(() => {
+					logStartupDebug("[EXIT] Forcing process.exit(0)")
+					process.exit(0)
+				}, 300).unref()
+			}
+
+			onQuitHandler = () => terminateApp("onQuitHandler")
+
 			win.on("closed", () => {
 				logStartupDebug("BrowserWindow closed")
-				desktopServer.stop().finally(() => app.quit())
+				terminateApp("win.on('closed')")
 			})
 
 			app.on("window-all-closed", () => {
 				logStartupDebug("app window-all-closed")
-				if (process.platform !== "darwin") {
-					app.quit()
-				}
+				terminateApp("app.on('window-all-closed')")
+			})
+
+			app.on("before-quit", () => {
+				logStartupDebug("app before-quit")
+				terminateApp("app.on('before-quit')")
 			})
 			return
 		} catch (err) {

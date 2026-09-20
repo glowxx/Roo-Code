@@ -11,6 +11,10 @@
 	let currentAgentStatus = null
 	let currentApiConfig = null
 	let currentApiProfileName = "default"
+	let currentPreviewMsg = null
+	let isCodeWrapped = false
+	let isSvgSourceView = false
+	let currentDesktopTab = "chat"
 	try {
 		const saved = localStorage.getItem("roo-quick-api-config")
 		if (saved) currentApiConfig = JSON.parse(saved)
@@ -347,11 +351,6 @@
 
 	// Apply initial desktop translations immediately
 	applyDesktopTranslations(currentLanguage)
-
-	let currentPreviewMsg = null
-	let isCodeWrapped = false
-	let isSvgSourceView = false
-	let currentDesktopTab = "chat"
 
 	function switchDesktopTab(targetTab, origin = "user", values = null) {
 		if (!targetTab) return
@@ -692,12 +691,21 @@
 
 	// WebSocket connection to Agent Engine
 	function connectWebSocket() {
-		const protocol = location.protocol === "https:" ? "wss:" : "ws:"
-		const wsUrl = `${protocol}//${location.host}/ws`
+		const protocol = window.location.protocol === "https:" ? "wss://" : "ws://"
+		const host = window.location.host || "127.0.0.1:4500"
+		const wsUrl = `${protocol}${host}/ws`
+		console.log("[WS] Connecting to:", wsUrl)
 
-		socket = new WebSocket(wsUrl)
+		try {
+			socket = new WebSocket(wsUrl)
+		} catch (err) {
+			console.error("[WS ERROR] Failed to create WebSocket:", err)
+			setTimeout(connectWebSocket, 2000)
+			return
+		}
 
 		socket.onopen = () => {
+			console.log("[WS] Connected successfully to:", wsUrl)
 			isConnected = true
 			if (connectionStatusEl) {
 				connectionStatusEl.textContent = tDesktop("connectedToEngine")
@@ -719,11 +727,12 @@
 				const serverMsg = JSON.parse(event.data)
 				handleServerMessage(serverMsg)
 			} catch (err) {
-				console.error("Error parsing server message:", err)
+				console.error("[WS ERROR] Error parsing server message:", err)
 			}
 		}
 
-		socket.onclose = () => {
+		socket.onclose = (event) => {
+			console.warn(`[WS] Connection closed (code: ${event.code}, reason: ${event.reason || "none"}). Reconnecting...`)
 			isConnected = false
 			if (connectionStatusEl) {
 				connectionStatusEl.textContent = tDesktop("statusDisconnected")
@@ -739,7 +748,7 @@
 		}
 
 		socket.onerror = (err) => {
-			console.error("WebSocket error:", err)
+			console.error("[WS ERROR]", err)
 		}
 	}
 

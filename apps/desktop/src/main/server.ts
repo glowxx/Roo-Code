@@ -20,6 +20,7 @@ export interface DesktopServerOptions {
 	host?: string
 	agentHost: DesktopAgentHost
 	staticDir?: string
+	onQuit?: () => void
 }
 
 export interface PathValidationResult {
@@ -369,6 +370,16 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	const { port, host = "127.0.0.1", agentHost, staticDir } = options
 	const clients = new Set<WebSocket>()
 
+	function safeSend(ws: WebSocket, msg: unknown) {
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			try {
+				ws.send(typeof msg === "string" ? msg : JSON.stringify(msg))
+			} catch (err) {
+				logStartupDebug(`[WS] Error in safeSend: ${err}`)
+			}
+		}
+	}
+
 	function broadcast(msg: DesktopServerMessage) {
 		const payload = JSON.stringify(msg)
 		for (const client of clients) {
@@ -438,6 +449,16 @@ export function createDesktopServer(options: DesktopServerOptions): {
 					timestamp: Date.now(),
 				})
 			)
+			return
+		}
+
+		// Graceful exit endpoint for clean teardown and automation
+		if (pathname === "/api/quit") {
+			res.writeHead(200, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ status: "quitting" }))
+			if (typeof options.onQuit === "function") {
+				setTimeout(() => options.onQuit!(), 50).unref()
+			}
 			return
 		}
 
@@ -1123,30 +1144,44 @@ window.addEventListener("message", function(e) {
 
 	const wss = new WebSocketServer({ server, path: "/ws" })
 
-	wss.on("connection", (ws) => {
-		clients.add(ws)
+	wss.on("error", (err) => {
+		logStartupDebug(`[WSS ERROR] ${err?.stack || err}`)
+	})
 
-		// Send initial state to newly connected client
-		let wsPath = ""
+	wss.on("connection", (ws, req) => {
+		clients.add(ws)
+		logStartupDebug(`[WS] Client connected from ${req?.socket?.remoteAddress || "unknown"}. Total clients: ${clients.size}`)
+
+		ws.on("error", (err) => {
+			logStartupDebug(`[WS CLIENT ERROR] ${err?.stack || err}`)
+		})
+
 		try {
-			const rawWs = agentHost.getWorkspace()
-			if (rawWs && rawWs.trim()) {
-				wsPath = path.normalize(path.resolve(rawWs))
+			// Send initial state to newly connected client
+			let wsPath = ""
+			try {
+				const rawWs = agentHost.getWorkspace()
+				if (rawWs && rawWs.trim()) {
+					wsPath = path.normalize(path.resolve(rawWs))
+				}
+			} catch {
+				wsPath = ""
 			}
-		} catch {
-			wsPath = ""
+			const scan = wsPath ? scanWorkspace(wsPath) : { files: [], directories: [] }
+			const initialWorkspace: WorkspaceInfo = {
+				path: wsPath,
+				name: wsPath ? path.basename(wsPath) : "",
+				branch: wsPath ? getGitBranch(wsPath) : undefined,
+				files: scan.files,
+				directories: scan.directories,
+			}
+			safeSend(ws, { type: "workspaceInfo", workspace: initialWorkspace })
+			safeSend(ws, { type: "agentStatus", status: agentHost.getStatus() })
+			safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+			logStartupDebug("[WS] Initial state dispatched successfully.")
+		} catch (err) {
+			logStartupDebug(`[WS] Error during initial connection state dispatch: ${err}`)
 		}
-		const scan = wsPath ? scanWorkspace(wsPath) : { files: [], directories: [] }
-		const initialWorkspace: WorkspaceInfo = {
-			path: wsPath,
-			name: wsPath ? path.basename(wsPath) : "",
-			branch: wsPath ? getGitBranch(wsPath) : undefined,
-			files: scan.files,
-			directories: scan.directories,
-		}
-		ws.send(JSON.stringify({ type: "workspaceInfo", workspace: initialWorkspace }))
-		ws.send(JSON.stringify({ type: "agentStatus", status: agentHost.getStatus() }))
-		ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
 
 		ws.on("message", async (raw) => {
 			try {
@@ -1164,18 +1199,16 @@ window.addEventListener("message", function(e) {
 						curPath = ""
 					}
 					const curScan = curPath ? scanWorkspace(curPath) : { files: [], directories: [] }
-					ws.send(
-						JSON.stringify({
-							type: "workspaceInfo",
-							workspace: {
-								path: curPath,
-								name: curPath ? path.basename(curPath) : "",
-								branch: curPath ? getGitBranch(curPath) : undefined,
-								files: curScan.files,
-								directories: curScan.directories,
-							},
-						}),
-					)
+					safeSend(ws, {
+						type: "workspaceInfo",
+						workspace: {
+							path: curPath,
+							name: curPath ? path.basename(curPath) : "",
+							branch: curPath ? getGitBranch(curPath) : undefined,
+							files: curScan.files,
+							directories: curScan.directories,
+						},
+					})
 				} else if (clientMsg.type === "selectFolder") {
 					if (clientMsg.path && fs.existsSync(clientMsg.path)) {
 						try {
@@ -1195,21 +1228,21 @@ window.addEventListener("message", function(e) {
 							broadcast({ type: "workspaceInfo", workspace: newWs })
 							broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 						} catch (err) {
-							ws.send(JSON.stringify({ type: "error", message: String(err) }))
+							safeSend(ws, { type: "error", message: String(err) })
 						}
 					} else {
-						ws.send(JSON.stringify({ type: "error", message: `Folder does not exist: ${clientMsg.path}` }))
+						safeSend(ws, { type: "error", message: `Folder does not exist: ${clientMsg.path}` })
 					}
 				} else if (clientMsg.type === "readFile") {
 					const rawWs = agentHost.getWorkspace()
 					if (!rawWs || !rawWs.trim()) {
-						ws.send(JSON.stringify({ type: "error", message: "No workspace open" }))
+						safeSend(ws, { type: "error", message: "No workspace open" })
 						return
 					}
 					const wsRoot = path.normalize(path.resolve(rawWs))
 					const validation = validatePathWithinRoot(clientMsg.filePath, wsRoot)
 					if (!validation.safe || !validation.resolvedPath) {
-						ws.send(JSON.stringify({ type: "error", message: validation.error || "Access outside workspace forbidden" }))
+						safeSend(ws, { type: "error", message: validation.error || "Access outside workspace forbidden" })
 						return
 					}
 					const abs = validation.resolvedPath
@@ -1243,35 +1276,31 @@ window.addEventListener("message", function(e) {
 								const buf = fs.readFileSync(abs)
 								const mime = mimeTypes[ext] || "application/octet-stream"
 								const dataUrl = `data:${mime};base64,${buf.toString("base64")}`
-								ws.send(
-									JSON.stringify({
-										type: "fileContent",
-										filePath: clientMsg.filePath,
-										fileType: isImage ? "image" : isMedia ? "media" : "pdf",
-										mimeType: mime,
-										size: stat.size,
-										content: dataUrl,
-										fileName: path.basename(abs),
-										ext: ext.replace(/^\./, ""),
-									}),
-								)
+								safeSend(ws, {
+									type: "fileContent",
+									filePath: clientMsg.filePath,
+									fileType: isImage ? "image" : isMedia ? "media" : "pdf",
+									mimeType: mime,
+									size: stat.size,
+									content: dataUrl,
+									fileName: path.basename(abs),
+									ext: ext.replace(/^\./, ""),
+								})
 							} else if (isSvg) {
 								const text = fs.readFileSync(abs, "utf-8")
 								const mime = "image/svg+xml"
 								const dataUrl = `data:${mime};base64,${Buffer.from(text).toString("base64")}`
-								ws.send(
-									JSON.stringify({
-										type: "fileContent",
-										filePath: clientMsg.filePath,
-										fileType: "svg",
-										mimeType: mime,
-										size: stat.size,
-										content: dataUrl,
-										rawText: text,
-										fileName: path.basename(abs),
-										ext: "svg",
-									}),
-								)
+								safeSend(ws, {
+									type: "fileContent",
+									filePath: clientMsg.filePath,
+									fileType: "svg",
+									mimeType: mime,
+									size: stat.size,
+									content: dataUrl,
+									rawText: text,
+									fileName: path.basename(abs),
+									ext: "svg",
+								})
 							} else {
 								// Detect binary by reading first 1024 bytes and checking for null bytes
 								let fd: number | undefined
@@ -1295,42 +1324,38 @@ window.addEventListener("message", function(e) {
 								}
 
 								if (isBinary || stat.size > 3 * 1024 * 1024) {
-									ws.send(
-										JSON.stringify({
-											type: "fileContent",
-											filePath: clientMsg.filePath,
-											fileType: "binary",
-											size: stat.size,
-											fileName: path.basename(abs),
-											ext: ext.replace(/^\./, ""),
-											mtime: stat.mtimeMs,
-										}),
-									)
+									safeSend(ws, {
+										type: "fileContent",
+										filePath: clientMsg.filePath,
+										fileType: "binary",
+										size: stat.size,
+										fileName: path.basename(abs),
+										ext: ext.replace(/^\./, ""),
+										mtime: stat.mtimeMs,
+									})
 								} else {
 									const content = fs.readFileSync(abs, "utf-8")
-									ws.send(
-										JSON.stringify({
-											type: "fileContent",
-											filePath: clientMsg.filePath,
-											fileType: ext === ".md" ? "markdown" : ext === ".json" ? "json" : "text",
-											size: stat.size,
-											content,
-											fileName: path.basename(abs),
-											ext: ext.replace(/^\./, ""),
-										}),
-									)
+									safeSend(ws, {
+										type: "fileContent",
+										filePath: clientMsg.filePath,
+										fileType: ext === ".md" ? "markdown" : ext === ".json" ? "json" : "text",
+										size: stat.size,
+										content,
+										fileName: path.basename(abs),
+										ext: ext.replace(/^\./, ""),
+									})
 								}
 							}
 						} catch (err) {
-							ws.send(JSON.stringify({ type: "error", message: `Failed to read file: ${String(err)}` }))
+							safeSend(ws, { type: "error", message: `Failed to read file: ${String(err)}` })
 						}
 					} else {
-						ws.send(JSON.stringify({ type: "error", message: "File not found or outside workspace" }))
+						safeSend(ws, { type: "error", message: "File not found or outside workspace" })
 					}
 				} else if (clientMsg.type === "showItem" || clientMsg.type === "openFile") {
 					const rawWs = agentHost.getWorkspace()
 					if (!rawWs || !rawWs.trim()) {
-						ws.send(JSON.stringify({ type: "error", message: "No workspace open" }))
+						safeSend(ws, { type: "error", message: "No workspace open" })
 						return
 					}
 					const wsRoot = path.normalize(path.resolve(rawWs))
@@ -1367,23 +1392,24 @@ window.addEventListener("message", function(e) {
 							}
 						} catch {}
 					} else {
-						ws.send(JSON.stringify({ type: "error", message: validation.error || "Access outside workspace forbidden" }))
+						safeSend(ws, { type: "error", message: validation.error || "Access outside workspace forbidden" })
 					}
 				} else if (clientMsg.type === "getDiffs") {
-					ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
+					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 				} else if (clientMsg.type === "clearTerminalLogs") {
 					if (typeof (agentHost as any).clearTerminalLogs === "function") {
 						;(agentHost as any).clearTerminalLogs()
 					}
-					ws.send(JSON.stringify({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() }))
+					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 				}
 			} catch (err) {
-				ws.send(JSON.stringify({ type: "error", message: String(err) }))
+				safeSend(ws, { type: "error", message: String(err) })
 			}
 		})
 
-		ws.on("close", () => {
+		ws.on("close", (code, reason) => {
 			clients.delete(ws)
+			logStartupDebug(`[WS] Client disconnected (code: ${code}, reason: ${reason?.toString() || "none"}). Remaining clients: ${clients.size}`)
 		})
 	})
 
@@ -1406,9 +1432,51 @@ window.addEventListener("message", function(e) {
 			}),
 		stop: () =>
 			new Promise((resolve) => {
-				for (const client of clients) client.close()
-				wss.close(() => {
-					server.close(() => resolve())
+				logStartupDebug(`[SERVER] Stopping desktopServer... Active clients: ${clients.size}`)
+				for (const client of clients) {
+					try {
+						client.terminate()
+					} catch (e) {
+						logStartupDebug(`[SERVER] Error terminating client WS: ${e}`)
+					}
+				}
+				clients.clear()
+
+				let wssClosed = false
+				let serverClosed = false
+				const checkDone = () => {
+					if (wssClosed && serverClosed) {
+						logStartupDebug("[SERVER] Both WSS and HTTP server stopped cleanly.")
+						resolve()
+					}
+				}
+
+				const forceTimeout = setTimeout(() => {
+					logStartupDebug("[SERVER] Forcefully resolving stop() after timeout.")
+					resolve()
+				}, 2000)
+
+				wss.close((err) => {
+					if (err) logStartupDebug(`[SERVER] WSS close error: ${err}`)
+					else logStartupDebug("[SERVER] WSS closed.")
+					wssClosed = true
+					checkDone()
+				})
+
+				if (typeof (server as any).closeAllConnections === "function") {
+					try {
+						;(server as any).closeAllConnections()
+					} catch (err) {
+						logStartupDebug(`[SERVER] closeAllConnections error: ${err}`)
+					}
+				}
+
+				server.close((err) => {
+					if (err) logStartupDebug(`[SERVER] HTTP server close error: ${err}`)
+					else logStartupDebug("[SERVER] HTTP server closed.")
+					serverClosed = true
+					clearTimeout(forceTimeout)
+					checkDone()
 				})
 			}),
 	}
