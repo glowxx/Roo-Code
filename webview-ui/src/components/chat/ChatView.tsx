@@ -1461,7 +1461,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					message={messageOrGroup}
 					isExpanded={expandedRows[messageOrGroup.ts] || false}
 					onToggleExpand={toggleRowExpansion} // This was already stabilized
-					lastModifiedMessage={modifiedMessages.at(-1)} // Original direct access
+					lastModifiedMessage={index === groupedMessages.length - 1 ? modifiedMessages.at(-1) : undefined}
 					isLast={index === groupedMessages.length - 1} // Original direct access
 					onHeightChange={handleRowHeightChange}
 					isStreaming={isStreaming}
@@ -1669,7 +1669,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							ref={virtuosoRef}
 							key={task.ts}
 							className="scrollable grow overflow-y-scroll mb-1"
-							increaseViewportBy={{ top: 3_000, bottom: 1000 }}
+							increaseViewportBy={{ top: 800, bottom: 400 }}
 							data={groupedMessages}
 							itemContent={itemContent}
 							followOutput={followOutputCallback}

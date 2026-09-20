@@ -154,20 +154,38 @@ export function getGitBranch(workspacePath: string): string | undefined {
 	}
 }
 
-export function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
-	if (!dir || typeof dir !== "string") return []
+interface ScanQueueItem {
+	dirPath: string
+	relPath: string
+	depth: number
+}
+
+export function scanWorkspace(
+	dir: string,
+	maxFiles = 25000
+): { files: string[]; directories: string[] } {
+	if (!dir || typeof dir !== "string") return { files: [], directories: [] }
 
 	let normalizedDir = ""
 	try {
 		normalizedDir = path.normalize(path.resolve(dir))
-		if (!fs.existsSync(normalizedDir)) return []
+		if (!fs.existsSync(normalizedDir)) return { files: [], directories: [] }
 		const stat = fs.statSync(normalizedDir)
-		if (!stat.isDirectory()) return []
+		if (!stat.isDirectory()) return { files: [], directories: [] }
 	} catch {
-		return []
+		return { files: [], directories: [] }
 	}
 
-	const results: string[] = []
+	const files: string[] = []
+	const directories: string[] = []
+	const visitedPaths = new Set<string>()
+
+	try {
+		visitedPaths.add(fs.realpathSync(normalizedDir))
+	} catch {
+		visitedPaths.add(normalizedDir)
+	}
+
 	const IGNORED_DIRS = new Set([
 		"node_modules",
 		"dist",
@@ -191,49 +209,51 @@ export function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
 		"desktop.ini",
 	])
 
-	function walk(currentDir: string, relPrefix = "") {
-		if (results.length >= maxFiles) return
+	const MAX_FILES_PER_DIR = 2000
+	const MAX_DIRECTORIES = 15000
+
+	const queue: ScanQueueItem[] = [{ dirPath: normalizedDir, relPath: "", depth: 0 }]
+
+	while (queue.length > 0) {
+		const current = queue.shift()!
+		const { dirPath, relPath, depth } = current
+
 		let entries: fs.Dirent[] = []
 		try {
-			entries = fs.readdirSync(currentDir, { withFileTypes: true })
+			entries = fs.readdirSync(dirPath, { withFileTypes: true })
 		} catch {
-			// Ignore directory read errors on Windows (permissions, etc.)
-			return
+			// Ignore directory read errors (permissions, locks, etc.)
+			continue
 		}
 
 		const fileEntries: fs.Dirent[] = []
 		const dirEntries: fs.Dirent[] = []
 
 		for (const entry of entries) {
-			if (results.length >= maxFiles) break
 			try {
 				const nameLower = entry.name.toLowerCase()
 				if (IGNORED_SYSTEM_FILES.has(nameLower)) continue
 
 				let isDirectory = false
+				let isFile = false
+
 				try {
 					isDirectory = entry.isDirectory()
-				} catch {
-					isDirectory = false
-				}
-
-				let isFile = false
-				try {
 					isFile = entry.isFile()
 				} catch {
+					isDirectory = false
 					isFile = false
 				}
 
-				// If it's a symbolic link (e.g. symlink or junction on Windows) and neither returned true, try statSync safely
+				// Handle Windows junctions, symlinks safely
 				if (!isDirectory && !isFile) {
 					try {
 						if (entry.isSymbolicLink()) {
-							const targetStat = fs.statSync(path.join(currentDir, entry.name))
+							const targetStat = fs.statSync(path.join(dirPath, entry.name))
 							isDirectory = targetStat.isDirectory()
 							isFile = targetStat.isFile()
 						}
 					} catch {
-						// Broken symlink, inaccessible junction, or permission denied
 						continue
 					}
 				}
@@ -250,43 +270,68 @@ export function listWorkspaceFiles(dir: string, maxFiles = 1000): string[] {
 			}
 		}
 
+		// Sort entries deterministically
 		try {
-			fileEntries.sort((a, b) => a.name.localeCompare(b.name))
-		} catch {
-			// Fallback if sorting fails
-		}
-
-		for (const file of fileEntries) {
-			if (results.length >= maxFiles) return
-			const relPath = (relPrefix ? `${relPrefix}/${file.name}` : file.name).replace(/\\/g, "/")
-			results.push(relPath)
-		}
+			dirEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
+		} catch {}
 
 		try {
-			dirEntries.sort((a, b) => a.name.localeCompare(b.name))
-		} catch {
-			// Fallback if sorting fails
-		}
+			fileEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
+		} catch {}
 
+		// 1. Process directories first (Breadth-First Search)
 		for (const dir of dirEntries) {
-			if (results.length >= maxFiles) return
-			const relPath = (relPrefix ? `${relPrefix}/${dir.name}` : dir.name).replace(/\\/g, "/")
-			const subDirPath = path.join(currentDir, dir.name)
+			const subRelPath = (relPath ? `${relPath}/${dir.name}` : dir.name).replace(/\\/g, "/")
+			const subDirPath = path.join(dirPath, dir.name)
+
+			let realSubPath = subDirPath
 			try {
-				walk(subDirPath, relPath)
+				realSubPath = fs.realpathSync(subDirPath)
 			} catch {
-				// Prevent recursive failure from aborting outer scan
+				realSubPath = subDirPath
+			}
+
+			if (visitedPaths.has(realSubPath)) {
+				continue
+			}
+			visitedPaths.add(realSubPath)
+
+			// Register directory: depth <= 2 always registered regardless of limits
+			if (depth <= 2 || directories.length < MAX_DIRECTORIES) {
+				directories.push(subRelPath)
+			}
+
+			// Enqueue subfolder for BFS
+			if (depth <= 2 || (files.length < maxFiles && directories.length < MAX_DIRECTORIES)) {
+				queue.push({
+					dirPath: subDirPath,
+					relPath: subRelPath,
+					depth: depth + 1,
+				})
 			}
 		}
+
+		// 2. Process files with per-directory limit to avoid starving other branches
+		let dirFileCount = 0
+		for (const file of fileEntries) {
+			if (files.length >= maxFiles) break
+			if (dirFileCount >= MAX_FILES_PER_DIR) break
+
+			const relFilePath = (relPath ? `${relPath}/${file.name}` : file.name).replace(/\\/g, "/")
+			files.push(relFilePath)
+			dirFileCount++
+		}
 	}
 
-	try {
-		walk(normalizedDir)
-	} catch {
-		return results
-	}
+	// Sort final lists with natural numeric sorting
+	files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }))
+	directories.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }))
 
-	return results
+	return { files, directories }
+}
+
+export function listWorkspaceFiles(dir: string, maxFiles = 25000): string[] {
+	return scanWorkspace(dir, maxFiles).files
 }
 
 export function createDesktopServer(options: DesktopServerOptions): {
@@ -326,11 +371,13 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	})
 	agentHost.on("workspaceChanged", (wsPath) => {
 		const normalized = path.normalize(path.resolve(wsPath))
+		const scan = scanWorkspace(normalized)
 		const newWs: WorkspaceInfo = {
 			path: normalized,
 			name: path.basename(normalized),
 			branch: getGitBranch(normalized),
-			files: listWorkspaceFiles(normalized),
+			files: scan.files,
+			directories: scan.directories,
 		}
 		broadcast({ type: "workspaceInfo", workspace: newWs })
 		broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
@@ -354,6 +401,20 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			return
 		}
 
+		// Healthcheck endpoint for cold-start and readiness check
+		if (pathname === "/api/health") {
+			res.writeHead(200, { "Content-Type": "application/json" })
+			res.end(
+				JSON.stringify({
+					status: "ok",
+					ready: true,
+					uptime: process.uptime(),
+					timestamp: Date.now(),
+				})
+			)
+			return
+		}
+
 		// API endpoints
 		if (pathname === "/api/workspace") {
 			let wsPath = ""
@@ -365,12 +426,13 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			} catch {
 				wsPath = ""
 			}
-			const files = wsPath ? listWorkspaceFiles(wsPath) : []
+			const scan = wsPath ? scanWorkspace(wsPath) : { files: [], directories: [] }
 			const info: WorkspaceInfo = {
 				path: wsPath,
 				name: wsPath ? path.basename(wsPath) : "",
 				branch: wsPath ? getGitBranch(wsPath) : undefined,
-				files: Array.isArray(files) ? files : [],
+				files: scan.files,
+				directories: scan.directories,
 			}
 			res.writeHead(200, { "Content-Type": "application/json" })
 			res.end(JSON.stringify(info))
@@ -378,18 +440,18 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		}
 
 		if (pathname === "/api/files") {
-			let files: string[] = []
+			let scan = { files: [] as string[], directories: [] as string[] }
 			try {
 				const ws = agentHost.getWorkspace()
 				if (ws) {
 					const wsPath = path.normalize(path.resolve(ws))
-					files = listWorkspaceFiles(wsPath)
+					scan = scanWorkspace(wsPath)
 				}
 			} catch {
-				files = []
+				scan = { files: [], directories: [] }
 			}
 			res.writeHead(200, { "Content-Type": "application/json" })
-			res.end(JSON.stringify({ files: Array.isArray(files) ? files : [] }))
+			res.end(JSON.stringify({ files: scan.files, directories: scan.directories }))
 			return
 		}
 
@@ -1040,12 +1102,13 @@ window.addEventListener("message", function(e) {
 		} catch {
 			wsPath = ""
 		}
-		const initialFiles = wsPath ? listWorkspaceFiles(wsPath) : []
+		const scan = wsPath ? scanWorkspace(wsPath) : { files: [], directories: [] }
 		const initialWorkspace: WorkspaceInfo = {
 			path: wsPath,
 			name: wsPath ? path.basename(wsPath) : "",
 			branch: wsPath ? getGitBranch(wsPath) : undefined,
-			files: Array.isArray(initialFiles) ? initialFiles : [],
+			files: scan.files,
+			directories: scan.directories,
 		}
 		ws.send(JSON.stringify({ type: "workspaceInfo", workspace: initialWorkspace }))
 		ws.send(JSON.stringify({ type: "agentStatus", status: agentHost.getStatus() }))
@@ -1066,7 +1129,7 @@ window.addEventListener("message", function(e) {
 					} catch {
 						curPath = ""
 					}
-					const files = curPath ? listWorkspaceFiles(curPath) : []
+					const curScan = curPath ? scanWorkspace(curPath) : { files: [], directories: [] }
 					ws.send(
 						JSON.stringify({
 							type: "workspaceInfo",
@@ -1074,7 +1137,8 @@ window.addEventListener("message", function(e) {
 								path: curPath,
 								name: curPath ? path.basename(curPath) : "",
 								branch: curPath ? getGitBranch(curPath) : undefined,
-								files: Array.isArray(files) ? files : [],
+								files: curScan.files,
+								directories: curScan.directories,
 							},
 						}),
 					)
@@ -1084,11 +1148,13 @@ window.addEventListener("message", function(e) {
 							const normalized = path.normalize(path.resolve(clientMsg.path))
 							await agentHost.setWorkspace(normalized)
 							const curPath = path.normalize(path.resolve(agentHost.getWorkspace()))
+							const folderScan = scanWorkspace(curPath)
 							const newWs: WorkspaceInfo = {
 								path: curPath,
 								name: path.basename(curPath),
 								branch: getGitBranch(curPath),
-								files: listWorkspaceFiles(curPath),
+								files: folderScan.files,
+								directories: folderScan.directories,
 							}
 							broadcast({ type: "workspaceInfo", workspace: newWs })
 							broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })

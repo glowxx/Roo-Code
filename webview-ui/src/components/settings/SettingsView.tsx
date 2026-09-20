@@ -211,6 +211,7 @@ export const extractComparableSettings = (state?: any) => {
 		deniedCommands: state.deniedCommands ?? [],
 		allowedMaxRequests: state.allowedMaxRequests,
 		allowedMaxCost: state.allowedMaxCost,
+		autoApprovalEnabled: state.autoApprovalEnabled,
 		language: state.language,
 		alwaysAllowExecute: state.alwaysAllowExecute,
 		alwaysAllowMcp: state.alwaysAllowMcp,
@@ -535,6 +536,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 			vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
 			vscode.postMessage({ type: "debugSetting", bool: cachedState.debug })
+
+			if (cachedState.autoApprovalEnabled !== cleanOriginalState.autoApprovalEnabled) {
+				vscode.postMessage({ type: "autoApprovalEnabled", bool: cachedState.autoApprovalEnabled })
+			}
 
 			setCleanOriginalState(cachedState)
 		}
@@ -1037,6 +1042,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 													allowedMaxRequests={allowedMaxRequests ?? undefined}
 													allowedMaxCost={allowedMaxCost ?? undefined}
 													deniedCommands={deniedCommands}
+													autoApprovalEnabled={cachedState.autoApprovalEnabled}
 													setCachedStateField={setCachedStateField}
 												/>
 											</div>

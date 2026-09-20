@@ -211,8 +211,106 @@ const App = () => {
 			}
 		}, [renderContext]),
 	)
+
+	const [hydrationTimeout, setHydrationTimeout] = useState(false)
+
+	useEffect(() => {
+		if (didHydrateState) return
+		const timer = setTimeout(() => {
+			setHydrationTimeout(true)
+		}, 3500)
+		return () => clearTimeout(timer)
+	}, [didHydrateState])
+
 	if (!didHydrateState) {
-		return null
+		return (
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					alignItems: "center",
+					justifyContent: "center",
+					height: "100vh",
+					width: "100%",
+					backgroundColor: "var(--vscode-editor-background, #090a0f)",
+					color: "var(--vscode-foreground, #f2f4f7)",
+					fontFamily:
+						'var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
+					fontSize: "var(--vscode-font-size, 13px)",
+					padding: "20px",
+					boxSizing: "border-box",
+					textAlign: "center",
+					userSelect: "none",
+				}}>
+				<div
+					style={{
+						width: "32px",
+						height: "32px",
+						border: "3px solid rgba(255, 255, 255, 0.1)",
+						borderTopColor: "var(--vscode-button-background, #3b82f6)",
+						borderRadius: "50%",
+						marginBottom: "16px",
+						animation: "spin 0.8s linear infinite",
+					}}
+				/>
+				<div style={{ fontSize: "14px", fontWeight: 500, marginBottom: "6px" }}>
+					Inicjalizacja widoku Roo Code...
+				</div>
+				{hydrationTimeout && (
+					<div
+						style={{
+							marginTop: "12px",
+							display: "flex",
+							flexDirection: "column",
+							alignItems: "center",
+							gap: "10px",
+						}}>
+						<p
+							style={{
+								fontSize: "12px",
+								color: "var(--vscode-descriptionForeground, #98a2b3)",
+								margin: 0,
+								maxWidth: "360px",
+								lineHeight: "1.4",
+							}}>
+							Oczekiwanie na odpowiedź z silnika trwa dłużej niż zwykle...
+						</p>
+						<div style={{ display: "flex", gap: "8px" }}>
+							<button
+								type="button"
+								onClick={() => vscode.postMessage({ type: "webviewDidLaunch" })}
+								style={{
+									padding: "6px 14px",
+									fontSize: "12px",
+									fontWeight: 500,
+									backgroundColor: "var(--vscode-button-background, #2563eb)",
+									color: "var(--vscode-button-foreground, #ffffff)",
+									border: "none",
+									borderRadius: "6px",
+									cursor: "pointer",
+								}}>
+								Wyślij sygnał gotowości
+							</button>
+							<button
+								type="button"
+								onClick={() => window.location.reload()}
+								style={{
+									padding: "6px 14px",
+									fontSize: "12px",
+									fontWeight: 500,
+									backgroundColor: "var(--vscode-button-secondaryBackground, #181b26)",
+									color: "var(--vscode-button-secondaryForeground, #f2f4f7)",
+									border: "1px solid rgba(255, 255, 255, 0.1)",
+									borderRadius: "6px",
+									cursor: "pointer",
+								}}>
+								Odśwież
+							</button>
+						</div>
+					</div>
+				)}
+			</div>
+		)
 	}
 
 	// Do not conditionally load ChatView, it's expensive and there's state we

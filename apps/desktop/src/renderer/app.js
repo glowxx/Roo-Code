@@ -45,6 +45,10 @@
 	const footerWorkspaceEl = document.getElementById("footer-workspace-path")
 	const connectionStatusEl = document.getElementById("connection-status")
 	const webviewFrame = document.getElementById("webview-frame")
+	const webviewLoadingState = document.getElementById("webview-loading-state")
+	const webviewErrorState = document.getElementById("webview-error-state")
+	const webviewErrorDesc = document.getElementById("webview-error-desc")
+	const webviewRetryBtn = document.getElementById("webview-retry-btn")
 	// Header & Window controls
 	const windowMinimizeBtn = document.getElementById("window-minimize-btn")
 	const windowMaximizeBtn = document.getElementById("window-maximize-btn")
@@ -183,12 +187,122 @@
 		window.__desktopAPI?.close?.()
 	})
 
-	if (webviewFrame) {
-		webviewFrame.addEventListener("load", () => {
+	// Webview Loading & Cold Start Resilience with Healthcheck and Exponential Backoff Retry
+	let webviewRetryCount = 0
+	const MAX_WEBVIEW_RETRIES = 3
+	const RETRY_DELAYS = [500, 1000, 2000]
+	let webviewLoadTimeoutTimer = null
+
+	function showWebviewLoading(statusText) {
+		if (webviewLoadingState) {
+			webviewLoadingState.style.display = "flex"
+			const desc = webviewLoadingState.querySelector(".placeholder-desc")
+			if (desc && statusText) desc.textContent = statusText
+		}
+		if (webviewErrorState) webviewErrorState.style.display = "none"
+		if (webviewFrame) webviewFrame.style.display = "none"
+	}
+
+	function showWebviewError(message) {
+		if (webviewLoadingState) webviewLoadingState.style.display = "none"
+		if (webviewFrame) webviewFrame.style.display = "none"
+		if (webviewErrorState) {
+			webviewErrorState.style.display = "flex"
+			if (webviewErrorDesc && message) {
+				webviewErrorDesc.textContent = message
+			}
+		}
+	}
+
+	function showWebviewSuccess() {
+		if (webviewLoadingState) webviewLoadingState.style.display = "none"
+		if (webviewErrorState) webviewErrorState.style.display = "none"
+		if (webviewFrame) {
+			webviewFrame.style.display = "block"
 			const theme = localStorage.getItem("roo-theme") || "linear-dark"
 			webviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+		}
+	}
+
+	async function checkServerHealth(maxAttempts = 3, delays = RETRY_DELAYS) {
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			try {
+				const controller = new AbortController()
+				const timeoutId = setTimeout(() => controller.abort(), 2000)
+				const res = await fetch("/api/health", { signal: controller.signal, cache: "no-store" })
+				clearTimeout(timeoutId)
+				if (res.ok) {
+					return true
+				}
+			} catch (err) {
+				console.warn(`Healthcheck attempt ${attempt + 1}/${maxAttempts} failed:`, err)
+			}
+			if (attempt < maxAttempts - 1) {
+				const delay = delays[attempt] || 1000
+				showWebviewLoading(`Oczekiwanie na gotowość serwera... (próba ${attempt + 2}/${maxAttempts})`)
+				await new Promise((resolve) => setTimeout(resolve, delay))
+			}
+		}
+		return false
+	}
+
+	async function loadWebviewFrame() {
+		if (!webviewFrame) return
+		clearTimeout(webviewLoadTimeoutTimer)
+
+		showWebviewLoading("Nawiązywanie połączenia z serwerem...")
+
+		const isServerReady = await checkServerHealth(MAX_WEBVIEW_RETRIES, RETRY_DELAYS)
+		if (!isServerReady) {
+			showWebviewError("Serwer aplikacji nie odpowiada na żądania healthcheck. Upewnij się, że silnik Roo Code został uruchomiony.")
+			return
+		}
+
+		showWebviewLoading("Ładowanie widoku agenta...")
+
+		// Set up frame load timeout (8 seconds)
+		webviewLoadTimeoutTimer = setTimeout(() => {
+			console.warn("Webview iframe loading timed out.")
+			handleWebviewLoadError("Przekroczono limit czasu ładowania widoku agenta.")
+		}, 8000)
+
+		// Set src to trigger load
+		webviewFrame.src = "/webview/index.html"
+	}
+
+	function handleWebviewLoadError(reason) {
+		clearTimeout(webviewLoadTimeoutTimer)
+		if (webviewRetryCount < MAX_WEBVIEW_RETRIES) {
+			const delay = RETRY_DELAYS[webviewRetryCount] || 1000
+			webviewRetryCount++
+			showWebviewLoading(`Błąd ładowania ramki (${reason || "połączenie przerwane"}). Ponawianie za ${delay}ms... (próba ${webviewRetryCount}/${MAX_WEBVIEW_RETRIES})`)
+			setTimeout(() => {
+				loadWebviewFrame()
+			}, delay)
+		} else {
+			showWebviewError(reason || "Nie udało się załadować widoku agenta po 3 próbach. Sprawdź połączenie i ponów próbę.")
+		}
+	}
+
+	if (webviewFrame) {
+		webviewFrame.addEventListener("load", () => {
+			clearTimeout(webviewLoadTimeoutTimer)
+			webviewRetryCount = 0
+			showWebviewSuccess()
+		})
+
+		webviewFrame.addEventListener("error", () => {
+			handleWebviewLoadError("Błąd sieciowy podczas ładowania ramki iframe.")
 		})
 	}
+
+	webviewRetryBtn?.addEventListener("click", () => {
+		webviewRetryCount = 0
+		loadWebviewFrame()
+	})
+
+	// Initiate safe webview loading
+	loadWebviewFrame()
 
 	// Folder Selection
 	openFolderBtn?.addEventListener("click", () => {
@@ -453,7 +567,7 @@
 			if (gitPill) gitPill.style.display = "none"
 		}
 
-		renderFilesTree(filesSearchInput?.value?.toLowerCase() || "")
+		renderFilesTree(ws.files || [], filesSearchInput?.value?.toLowerCase() || "", ws.directories || [])
 	}
 
 	function renderDiffs() {
@@ -745,12 +859,13 @@
 			if (res.ok) {
 				const data = await res.json()
 				if (signal.aborted) return
-				if (data && Array.isArray(data.files)) {
+				if (data && (Array.isArray(data.files) || Array.isArray(data.directories))) {
 					if (!currentWorkspace) {
-						currentWorkspace = { files: [] }
+						currentWorkspace = { files: [], directories: [] }
 					}
-					currentWorkspace.files = data.files
-					renderFilesTree(data.files, filesSearchInput?.value?.trim().toLowerCase() || "")
+					currentWorkspace.files = Array.isArray(data.files) ? data.files : []
+					currentWorkspace.directories = Array.isArray(data.directories) ? data.directories : []
+					renderFilesTree(currentWorkspace.files, filesSearchInput?.value?.trim().toLowerCase() || "", currentWorkspace.directories)
 					if (currentWorkspace.name) {
 						return data.files
 					}
@@ -793,7 +908,7 @@
 		}
 	}
 
-	function buildTree(files) {
+	function buildTree(files = [], directories = []) {
 		const root = {
 			name: "",
 			path: "",
@@ -801,26 +916,20 @@
 			children: new Map(),
 		}
 
-		for (const rawPath of files) {
-			if (typeof rawPath !== "string") continue
-			const parts = rawPath.split(/[\\/]/).filter(Boolean)
-			if (parts.length === 0) continue
+		// 1. Create nodes for all directories first
+		if (Array.isArray(directories)) {
+			for (const rawDir of directories) {
+				if (typeof rawDir !== "string") continue
+				const parts = rawDir.split(/[\\/]/).filter(Boolean)
+				if (parts.length === 0) continue
 
-			let current = root
-			let currentPath = ""
+				let current = root
+				let currentPath = ""
 
-			for (let i = 0; i < parts.length; i++) {
-				const segment = parts[i]
-				const isFile = i === parts.length - 1
-				currentPath = currentPath ? `${currentPath}/${segment}` : segment
+				for (let i = 0; i < parts.length; i++) {
+					const segment = parts[i]
+					currentPath = currentPath ? `${currentPath}/${segment}` : segment
 
-				if (isFile) {
-					current.children.set(segment, {
-						type: "file",
-						name: segment,
-						path: currentPath,
-					})
-				} else {
 					let folder = current.children.get(segment)
 					if (!folder || folder.type !== "folder") {
 						folder = {
@@ -832,6 +941,44 @@
 						current.children.set(segment, folder)
 					}
 					current = folder
+				}
+			}
+		}
+
+		// 2. Insert nodes for all files
+		if (Array.isArray(files)) {
+			for (const rawPath of files) {
+				if (typeof rawPath !== "string") continue
+				const parts = rawPath.split(/[\\/]/).filter(Boolean)
+				if (parts.length === 0) continue
+
+				let current = root
+				let currentPath = ""
+
+				for (let i = 0; i < parts.length; i++) {
+					const segment = parts[i]
+					const isFile = i === parts.length - 1
+					currentPath = currentPath ? `${currentPath}/${segment}` : segment
+
+					if (isFile) {
+						current.children.set(segment, {
+							type: "file",
+							name: segment,
+							path: currentPath,
+						})
+					} else {
+						let folder = current.children.get(segment)
+						if (!folder || folder.type !== "folder") {
+							folder = {
+								type: "folder",
+								name: segment,
+								path: currentPath,
+								children: new Map(),
+							}
+							current.children.set(segment, folder)
+						}
+						current = folder
+					}
 				}
 			}
 		}
@@ -885,41 +1032,47 @@
 		return html
 	}
 
-	function renderFilesTree(arg1, arg2) {
+	function renderFilesTree(arg1, arg2, arg3) {
 		let files = null
 		let filter = null
+		let directories = null
 
-		if (Array.isArray(arg1)) {
-			files = arg1
-			if (typeof arg2 === "string") {
-				filter = arg2
+		const args = [arg1, arg2, arg3]
+		for (const a of args) {
+			if (typeof a === "string" && filter === null) {
+				filter = a
+			} else if (Array.isArray(a)) {
+				if (files === null) {
+					files = a
+				} else if (directories === null) {
+					directories = a
+				}
 			}
-		} else if (typeof arg1 === "string") {
-			filter = arg1
-			if (Array.isArray(arg2)) {
-				files = arg2
-			}
-		} else if (Array.isArray(arg2)) {
-			files = arg2
-		} else if (typeof arg2 === "string") {
-			filter = arg2
 		}
 
 		if (!files) {
 			files = currentWorkspace?.files || []
 		}
+		if (!directories) {
+			directories = currentWorkspace?.directories || []
+		}
 		if (typeof filter !== "string") {
 			filter = filesSearchInput?.value || ""
 		}
 
-		// Guard against TypeError: ensure files is an array and filter out null/undefined/non-string items
+		// Guard against TypeError: ensure files and directories are arrays and filter out non-strings
 		if (!Array.isArray(files)) {
 			files = []
 		}
+		if (!Array.isArray(directories)) {
+			directories = []
+		}
 		const validFiles = files.filter((f) => typeof f === "string" && f.trim().length > 0)
+		const validDirs = directories.filter((d) => typeof d === "string" && d.trim().length > 0)
 
-		if (currentWorkspace && Array.isArray(arg1)) {
-			currentWorkspace.files = validFiles
+		if (currentWorkspace) {
+			if (Array.isArray(files)) currentWorkspace.files = validFiles
+			if (Array.isArray(directories)) currentWorkspace.directories = validDirs
 		}
 
 		if (!filesTreeEl) return
@@ -927,7 +1080,7 @@
 		const searchFilter = (filter || "").trim().toLowerCase()
 		const isSearchActive = searchFilter.length > 0
 
-		// Filter files if search is active
+		// Filter files and directories if search is active
 		const filteredFiles = isSearchActive
 			? validFiles.filter((f) => {
 				const normalized = f.replace(/\\/g, "/")
@@ -935,7 +1088,14 @@
 			})
 			: validFiles
 
-		if (filteredFiles.length === 0) {
+		const filteredDirs = isSearchActive
+			? validDirs.filter((d) => {
+				const normalized = d.replace(/\\/g, "/")
+				return normalized.toLowerCase().includes(searchFilter)
+			})
+			: validDirs
+
+		if (filteredFiles.length === 0 && filteredDirs.length === 0) {
 			if (isSearchActive) {
 				filesTreeEl.innerHTML = `
 					<div class="empty-state">
@@ -960,7 +1120,7 @@
 			return
 		}
 
-		const treeRoot = buildTree(filteredFiles)
+		const treeRoot = buildTree(filteredFiles, filteredDirs)
 
 		// Auto-expand top-level folders on first load if user hasn't toggled folders yet
 		if (expandedFolders.size === 0 && !hasUserToggledFolders && !isSearchActive) {

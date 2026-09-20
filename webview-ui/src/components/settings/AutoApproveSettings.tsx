@@ -1,4 +1,4 @@
-import { HTMLAttributes, useState } from "react"
+import { HTMLAttributes, useMemo, useState } from "react"
 import { X } from "lucide-react"
 import { Trans } from "react-i18next"
 import { Package } from "@roo/package"
@@ -14,9 +14,7 @@ import { Section } from "./Section"
 import { SearchableSetting } from "./SearchableSetting"
 import { AutoApproveToggle } from "./AutoApproveToggle"
 import { MaxLimitInputs } from "./MaxLimitInputs"
-import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useAutoApprovalState } from "@/hooks/useAutoApprovalState"
-import { useAutoApprovalToggles } from "@/hooks/useAutoApprovalToggles"
 
 type AutoApproveSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	alwaysAllowReadOnly?: boolean
@@ -34,6 +32,7 @@ type AutoApproveSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	allowedMaxRequests?: number | undefined
 	allowedMaxCost?: number | undefined
 	deniedCommands?: string[]
+	autoApprovalEnabled?: boolean
 	setCachedStateField: SetCachedStateField<
 		| "alwaysAllowReadOnly"
 		| "alwaysAllowReadOnlyOutsideWorkspace"
@@ -50,6 +49,7 @@ type AutoApproveSettingsProps = HTMLAttributes<HTMLDivElement> & {
 		| "allowedMaxRequests"
 		| "allowedMaxCost"
 		| "deniedCommands"
+		| "autoApprovalEnabled"
 	>
 }
 
@@ -69,15 +69,34 @@ export const AutoApproveSettings = ({
 	allowedMaxRequests,
 	allowedMaxCost,
 	deniedCommands,
+	autoApprovalEnabled,
 	setCachedStateField,
 	...props
 }: AutoApproveSettingsProps) => {
 	const { t } = useAppTranslation()
 	const [commandInput, setCommandInput] = useState("")
 	const [deniedCommandInput, setDeniedCommandInput] = useState("")
-	const { autoApprovalEnabled, setAutoApprovalEnabled } = useExtensionState()
 
-	const toggles = useAutoApprovalToggles()
+	const toggles = useMemo(
+		() => ({
+			alwaysAllowReadOnly,
+			alwaysAllowWrite,
+			alwaysAllowExecute,
+			alwaysAllowMcp,
+			alwaysAllowModeSwitch,
+			alwaysAllowSubtasks,
+			alwaysAllowFollowupQuestions,
+		}),
+		[
+			alwaysAllowReadOnly,
+			alwaysAllowWrite,
+			alwaysAllowExecute,
+			alwaysAllowMcp,
+			alwaysAllowModeSwitch,
+			alwaysAllowSubtasks,
+			alwaysAllowFollowupQuestions,
+		],
+	)
 
 	const { effectiveAutoApprovalEnabled } = useAutoApprovalState(toggles, autoApprovalEnabled)
 
@@ -117,9 +136,7 @@ export const AutoApproveSettings = ({
 							checked={effectiveAutoApprovalEnabled}
 							aria-label={t("settings:autoApprove.toggleAriaLabel")}
 							onChange={() => {
-								const newValue = !(autoApprovalEnabled ?? false)
-								setAutoApprovalEnabled(newValue)
-								vscode.postMessage({ type: "autoApprovalEnabled", bool: newValue })
+								setCachedStateField("autoApprovalEnabled", !(autoApprovalEnabled ?? false))
 							}}>
 							<span className="font-medium">{t("settings:autoApprove.enabled")}</span>
 						</VSCodeCheckbox>

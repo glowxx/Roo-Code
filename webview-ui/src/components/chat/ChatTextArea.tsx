@@ -82,6 +82,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		ref,
 	) => {
 		const { t } = useAppTranslation()
+		const inputValueRef = useRef(inputValue)
+		inputValueRef.current = inputValue
 		const {
 			filePaths,
 			openedTabs,
@@ -170,7 +172,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					if (message.text && textAreaRef.current) {
 						// Insert the command text at the current cursor position
 						const textarea = textAreaRef.current
-						const currentValue = inputValue
+						const currentValue = inputValueRef.current
 						const cursorPos = textarea.selectionStart || 0
 
 						// Check if we need to add a space before the command
@@ -216,7 +218,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 			window.addEventListener("message", messageHandler)
 			return () => window.removeEventListener("message", messageHandler)
-		}, [setInputValue, searchRequestId, inputValue])
+		}, [setInputValue, searchRequestId])
 
 		const [isDraggingOver, setIsDraggingOver] = useState(false)
 		const [textAreaBaseHeight, setTextAreaBaseHeight] = useState<number | undefined>(undefined)
@@ -925,7 +927,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		const [isTtsPlaying, setIsTtsPlaying] = useState(false)
 
-		useEvent("message", (event: MessageEvent) => {
+		const handleTtsMessage = useCallback((event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
 
 			if (message.type === "ttsStart") {
@@ -933,7 +935,13 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			} else if (message.type === "ttsStop") {
 				setIsTtsPlaying(false)
 			}
-		})
+		}, [])
+
+		useEvent("message", handleTtsMessage)
+
+		const handleStopTts = useCallback(() => {
+			vscode.postMessage({ type: "stopTts" })
+		}, [])
 
 		const placeholderBottomText = `\n(${t("chat:addContext")}${shouldDisableImages ? `, ${t("chat:dragFiles")}` : `, ${t("chat:dragFilesImages")}`})`
 
@@ -1337,7 +1345,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							<StandardTooltip content={t("chat:stopTts")}>
 								<button
 									aria-label={t("chat:stopTts")}
-									onClick={() => vscode.postMessage({ type: "stopTts" })}
+									onClick={handleStopTts}
 									className={cn(
 										"h-8 w-8 relative inline-flex items-center justify-center",
 										"bg-transparent border border-border/40",

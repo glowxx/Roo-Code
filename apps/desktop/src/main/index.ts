@@ -3,7 +3,7 @@ import fs from "fs"
 import os from "os"
 import { fileURLToPath } from "url"
 import { DesktopAgentHost } from "./agent-host.js"
-import { createDesktopServer, validatePathWithinRoot, getGitBranch, listWorkspaceFiles } from "./server.js"
+import { createDesktopServer, validatePathWithinRoot, getGitBranch, listWorkspaceFiles, scanWorkspace } from "./server.js"
 import type { WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -133,7 +133,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				if (!win.isDestroyed()) win.close()
 			})
 
-			ipcMain.handle("desktop:select-folder", async () => {
+			const handleSelectFolder = async () => {
 				const result = await dialog.showOpenDialog(win, {
 					properties: ["openDirectory"],
 					defaultPath: agentHost.getWorkspace(),
@@ -144,11 +144,13 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 						console.log(`Switching workspace to: ${selectedPath}`)
 						const normalized = path.normalize(path.resolve(selectedPath))
 						await agentHost.setWorkspace(normalized)
+						const scan = scanWorkspace(normalized)
 						const newWs: WorkspaceInfo = {
 							path: normalized,
 							name: path.basename(normalized),
 							branch: getGitBranch(normalized),
-							files: listWorkspaceFiles(normalized),
+							files: scan.files,
+							directories: scan.directories,
 						}
 						if (!win.isDestroyed()) {
 							win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
@@ -158,7 +160,10 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 					}
 				}
 				return null
-			})
+			}
+
+			ipcMain.handle("desktop:select-folder", handleSelectFolder)
+			ipcMain.handle("desktop:select-workspace", handleSelectFolder)
 
 			ipcMain.handle("desktop:show-item", async (_event, filePath: string) => {
 				if (filePath && typeof filePath === "string") {
@@ -203,11 +208,13 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 										console.log(`Switching workspace to: ${selectedPath}`)
 										const normalized = path.normalize(path.resolve(selectedPath))
 										await agentHost.setWorkspace(normalized)
+										const scan = scanWorkspace(normalized)
 										const newWs: WorkspaceInfo = {
 											path: normalized,
 											name: path.basename(normalized),
 											branch: getGitBranch(normalized),
-											files: listWorkspaceFiles(normalized),
+											files: scan.files,
+											directories: scan.directories,
 										}
 										if (!win.isDestroyed()) {
 											win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
@@ -255,11 +262,13 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			win.webContents.on("did-finish-load", () => {
 				if (!win.isDestroyed()) {
 					const curWs = path.normalize(path.resolve(agentHost.getWorkspace()))
+					const scan = scanWorkspace(curWs)
 					const newWs: WorkspaceInfo = {
 						path: curWs,
 						name: path.basename(curWs),
 						branch: getGitBranch(curWs),
-						files: listWorkspaceFiles(curWs),
+						files: scan.files,
+						directories: scan.directories,
 					}
 					win.webContents.send("desktop:message-from-extension", { type: "workspaceInfo", workspace: newWs })
 					win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })

@@ -192,6 +192,8 @@ export const ChatRowContent = ({
 
 	// Handle message events for image selection during edit mode
 	useEffect(() => {
+		if (!isEditing) return
+
 		const handleMessage = (event: MessageEvent) => {
 			const msg = event.data
 			if (msg.type === "selectedImages" && msg.context === "edit" && msg.messageTs === message.ts && isEditing) {

@@ -5,6 +5,7 @@ export interface WorkspaceInfo {
 	name: string
 	branch?: string
 	files?: string[]
+	directories?: string[]
 }
 
 export interface TerminalLogEntry {
