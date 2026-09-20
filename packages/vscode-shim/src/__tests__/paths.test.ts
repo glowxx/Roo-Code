@@ -2,7 +2,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { tmpdir } from "os"
 
-import { VSCodeMockPaths } from "../utils/paths.js"
+import { VSCodeMockPaths, ensureDirectoryExists } from "../utils/paths.js"
 
 describe("VSCodeMockPaths", () => {
 	let originalHome: string | undefined
@@ -203,6 +203,17 @@ describe("VSCodeMockPaths", () => {
 
 			// Restore for cleanup
 			process.env.HOME = tempDir
+		})
+	})
+
+	describe("ensureDirectoryExists()", () => {
+		it("should create directory with mode 0o700", () => {
+			const testDir = path.join(tempDir, "ensure-test-dir")
+			ensureDirectoryExists(testDir)
+			expect(fs.existsSync(testDir)).toBe(true)
+			if (process.platform !== "win32") {
+				expect(fs.statSync(testDir).mode & 0o777).toBe(0o700)
+			}
 		})
 	})
 })
