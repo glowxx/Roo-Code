@@ -1032,6 +1032,10 @@ body.light-theme #clear-terminal-btn:hover,
 	transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.folder-chevron svg {
+	transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .folder-node.expanded > .folder-header .folder-chevron svg {
 	transform: rotate(90deg);
 }

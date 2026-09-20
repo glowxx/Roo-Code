@@ -464,6 +464,45 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 		// API endpoints
 		if (pathname === "/api/workspace") {
+			if (req.method === "POST") {
+				let body = ""
+				req.on("data", (chunk) => {
+					body += chunk
+				})
+				req.on("end", async () => {
+					try {
+						const data = JSON.parse(body || "{}")
+						const requestedPath = data.path
+						if (requestedPath && typeof requestedPath === "string" && fs.existsSync(requestedPath)) {
+							const normalized = path.normalize(path.resolve(requestedPath))
+							if (fs.statSync(normalized).isDirectory()) {
+								await agentHost.setWorkspace(normalized)
+								saveDesktopConfig({ lastWorkspacePath: normalized })
+								const folderScan = scanWorkspace(normalized)
+								const newWs: WorkspaceInfo = {
+									path: normalized,
+									name: path.basename(normalized),
+									branch: getGitBranch(normalized),
+									files: folderScan.files,
+									directories: folderScan.directories,
+								}
+								broadcast({ type: "workspaceInfo", workspace: newWs })
+								broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+								res.writeHead(200, { "Content-Type": "application/json" })
+								res.end(JSON.stringify(newWs))
+								return
+							}
+						}
+						res.writeHead(400, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: "Invalid directory path" }))
+					} catch (e) {
+						res.writeHead(500, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: String(e) }))
+					}
+				})
+				return
+			}
+
 			let wsPath = ""
 			try {
 				const ws = agentHost.getWorkspace()

@@ -14,7 +14,7 @@ program
 	.name("roo-desktop")
 	.description("Roo Code Desktop - Autonomous AI Developer Standalone Application")
 	.version("1.0.0")
-	.option("-w, --workspace <path>", "Workspace directory path", process.cwd())
+	.option("-w, --workspace <path>", "Workspace directory path")
 	.option("-p, --port <number>", "HTTP & WebSocket server port", (v) => parseInt(v, 10), 4500)
 	.option("--electron", "Launch as native Electron desktop window", false)
 	.option("--web", "Launch as web desktop (accessible via browser)", false)

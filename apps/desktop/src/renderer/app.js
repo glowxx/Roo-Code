@@ -848,8 +848,19 @@
 		}
 	}
 
+	let lastRenderedWorkspacePath = null
+
 	function renderWorkspaceInfo(ws) {
 		if (!ws) return
+		if (ws.path && ws.path !== lastRenderedWorkspacePath) {
+			lastRenderedWorkspacePath = ws.path
+			expandedFolders.clear()
+			hasUserToggledFolders = false
+			selectedPreviewFile = null
+			try {
+				sessionStorage.removeItem("roo-expanded-folders")
+			} catch (e) {}
+		}
 		if (workspaceNameEl) {
 			workspaceNameEl.textContent = ws.name || ws.path
 			workspaceNameEl.title = ws.path
@@ -1420,14 +1431,7 @@
 
 		const treeRoot = buildTree(filteredFiles, filteredDirs)
 
-		// Auto-expand top-level folders on first load if user hasn't toggled folders yet
-		if (expandedFolders.size === 0 && !hasUserToggledFolders && !isSearchActive) {
-			for (const child of treeRoot.children.values()) {
-				if (child.type === "folder") {
-					expandedFolders.add(child.path)
-				}
-			}
-		}
+		// Folders remain collapsed by default on workspace load
 
 		// If there is an active selected preview file, make sure its enclosing folders are expanded
 		if (selectedPreviewFile && !isSearchActive) {

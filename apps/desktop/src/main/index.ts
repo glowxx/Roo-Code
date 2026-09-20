@@ -29,9 +29,8 @@ export interface DesktopRunOptions {
 
 export async function startDesktopApp(options: DesktopRunOptions = {}) {
 	logStartupDebug(`startDesktopApp called with options: ${JSON.stringify(options)}`)
-	let workspacePath = options.workspacePath
-
-	// Check if -w / --workspace was explicitly provided in CLI arguments
+	// Determine workspace:
+	// 1. Check CLI arguments (-w / --workspace)
 	const args = process.argv.slice(2)
 	const wsArgIdx = args.indexOf("-w") !== -1 ? args.indexOf("-w") : args.indexOf("--workspace")
 	let explicitWsFromArg: string | undefined
@@ -44,20 +43,42 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		}
 	}
 
-	// If no explicit workspace argument was passed via CLI, try loading lastWorkspacePath from config
-	if (!explicitWsFromArg) {
+	let workspacePath = ""
+	if (explicitWsFromArg && explicitWsFromArg.trim()) {
+		const resolvedArg = path.normalize(path.resolve(explicitWsFromArg.trim()))
+		if (fs.existsSync(resolvedArg)) {
+			try {
+				if (fs.statSync(resolvedArg).isDirectory()) {
+					workspacePath = resolvedArg
+					saveDesktopConfig({ lastWorkspacePath: resolvedArg })
+				}
+			} catch {}
+		}
+	} else if (options.workspacePath && options.workspacePath.trim()) {
+		const resolvedOpt = path.normalize(path.resolve(options.workspacePath.trim()))
+		if (fs.existsSync(resolvedOpt)) {
+			try {
+				if (fs.statSync(resolvedOpt).isDirectory()) {
+					workspacePath = resolvedOpt
+				}
+			} catch {}
+		}
+	}
+
+	// If no explicit workspace was resolved from CLI or options, restore lastWorkspacePath from config
+	if (!workspacePath) {
 		const config = loadDesktopConfig()
 		if (config.lastWorkspacePath && fs.existsSync(config.lastWorkspacePath)) {
 			try {
 				if (fs.statSync(config.lastWorkspacePath).isDirectory()) {
-					workspacePath = config.lastWorkspacePath
+					workspacePath = path.normalize(path.resolve(config.lastWorkspacePath))
 				}
 			} catch {}
 		}
 	}
 
 	// Zero-state resilience: do not force process.cwd() when no workspace is selected!
-	workspacePath = workspacePath && workspacePath.trim() ? path.resolve(workspacePath) : ""
+	workspacePath = workspacePath && workspacePath.trim() ? path.normalize(path.resolve(workspacePath)) : ""
 	const port = options.port || 4500
 	const storageDir = options.storageDir || path.join(os.homedir(), ".roo-desktop-data")
 	if (!fs.existsSync(storageDir)) {
@@ -165,6 +186,15 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			const electron = await import("electron")
 			const electronObj = (electron as any).app ? electron : ((electron as any).default || electron)
 			const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen } = electronObj
+
+			try {
+				if (app) {
+					app.name = "Roo Code"
+					if (typeof app.setName === "function") {
+						app.setName("Roo Code")
+					}
+				}
+			} catch {}
 
 			logStartupDebug("Waiting for app.whenReady()...")
 			await app.whenReady()
@@ -528,12 +558,30 @@ if (process.versions.electron && !process.env.ELECTRON_RUN_AS_NODE) {
 		}
 	}
 
+	if (workspacePath && workspacePath.trim()) {
+		const resolvedArg = path.normalize(path.resolve(workspacePath.trim()))
+		if (fs.existsSync(resolvedArg)) {
+			try {
+				if (fs.statSync(resolvedArg).isDirectory()) {
+					workspacePath = resolvedArg
+					saveDesktopConfig({ lastWorkspacePath: resolvedArg })
+				} else {
+					workspacePath = undefined
+				}
+			} catch {
+				workspacePath = undefined
+			}
+		} else {
+			workspacePath = undefined
+		}
+	}
+
 	if (!workspacePath) {
 		const config = loadDesktopConfig()
 		if (config.lastWorkspacePath && fs.existsSync(config.lastWorkspacePath)) {
 			try {
 				if (fs.statSync(config.lastWorkspacePath).isDirectory()) {
-					workspacePath = config.lastWorkspacePath
+					workspacePath = path.normalize(path.resolve(config.lastWorkspacePath))
 				}
 			} catch {}
 		}
