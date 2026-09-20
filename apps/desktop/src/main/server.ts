@@ -5,6 +5,7 @@ import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
 import { execSync, spawn } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
+import { saveDesktopConfig } from "./config.js"
 import type { DesktopClientMessage, DesktopServerMessage, WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -187,19 +188,22 @@ export function scanWorkspace(
 	}
 
 	const IGNORED_DIRS = new Set([
-		"node_modules",
-		"dist",
-		"release",
-		"build",
-		"out",
 		".git",
 		".turbo",
 		".roo",
 		".vscode",
 		".idea",
-		"coverage",
 		".next",
 		".cache",
+		".gemini",
+		".claude",
+		".antigravity",
+		"node_modules",
+		"dist",
+		"build",
+		"release",
+		"out",
+		"coverage",
 		"temp",
 		"tmp",
 	])
@@ -260,7 +264,6 @@ export function scanWorkspace(
 
 				if (isDirectory) {
 					if (IGNORED_DIRS.has(entry.name) || IGNORED_DIRS.has(nameLower)) continue
-					if (entry.name.startsWith(".") && entry.name !== ".github") continue
 					dirEntries.push(entry)
 				} else if (isFile) {
 					fileEntries.push(entry)
@@ -1147,6 +1150,7 @@ window.addEventListener("message", function(e) {
 						try {
 							const normalized = path.normalize(path.resolve(clientMsg.path))
 							await agentHost.setWorkspace(normalized)
+							saveDesktopConfig({ lastWorkspacePath: normalized })
 							const curPath = path.normalize(path.resolve(agentHost.getWorkspace()))
 							const folderScan = scanWorkspace(curPath)
 							const newWs: WorkspaceInfo = {

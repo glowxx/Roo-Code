@@ -22,6 +22,7 @@ async function runBuild() {
 			{ in: path.join(__dirname, "src/main/index.ts"), out: "main/index" },
 			{ in: path.join(__dirname, "src/main/server.ts"), out: "main/server" },
 			{ in: path.join(__dirname, "src/main/agent-host.ts"), out: "main/agent-host" },
+			{ in: path.join(__dirname, "src/main/config.ts"), out: "main/config" },
 			{ in: path.join(__dirname, "src/cli.ts"), out: "cli" },
 		],
 		outdir: outDir,

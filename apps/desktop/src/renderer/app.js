@@ -8,6 +8,7 @@
 	let selectedDiffFile = null
 	let selectedPreviewFile = null
 	let isConnected = false
+	let currentAgentStatus = null
 	let currentApiConfig = null
 	let currentApiProfileName = "default"
 	try {
@@ -46,15 +47,24 @@
 	const connectionStatusEl = document.getElementById("connection-status")
 	const webviewFrame = document.getElementById("webview-frame")
 	const webviewLoadingState = document.getElementById("webview-loading-state")
+	const webviewLoadingTitle = document.getElementById("webview-loading-title")
+	const webviewLoadingDesc = document.getElementById("webview-loading-desc")
 	const webviewErrorState = document.getElementById("webview-error-state")
+	const webviewErrorTitle = document.getElementById("webview-error-title")
 	const webviewErrorDesc = document.getElementById("webview-error-desc")
 	const webviewRetryBtn = document.getElementById("webview-retry-btn")
+	const webviewRetryText = document.getElementById("webview-retry-text")
 	// Header & Window controls
 	const windowMinimizeBtn = document.getElementById("window-minimize-btn")
 	const windowMaximizeBtn = document.getElementById("window-maximize-btn")
 	const windowCloseBtn = document.getElementById("window-close-btn")
 	const engineConnectionBadge = document.getElementById("engine-connection-badge")
 	const engineConnectionText = document.getElementById("engine-connection-text")
+	const tabLabelChat = document.getElementById("tab-label-chat")
+	const tabLabelDiffs = document.getElementById("tab-label-diffs")
+	const tabLabelTerminal = document.getElementById("tab-label-terminal")
+	const tabLabelFiles = document.getElementById("tab-label-files")
+	const tabLabelSettings = document.getElementById("tab-label-settings")
 
 	// API Modal elements
 	const apiModalBackdrop = document.getElementById("api-modal-backdrop")
@@ -77,17 +87,24 @@
 	const apiPillLabel = document.getElementById("api-pill-label")
 
 	// Diffs elements
+	const diffsSidebarTitle = document.getElementById("diffs-sidebar-title")
 	const diffsFileListEl = document.getElementById("diffs-file-list")
 	const diffFileCounterEl = document.getElementById("diff-file-counter")
 	const diffViewerHeaderEl = document.getElementById("diff-viewer-header")
 	const diffContentEl = document.getElementById("diff-content")
+	const diffsPlaceholderText = document.getElementById("diffs-placeholder-text")
 
 	// Terminal elements
+	const terminalTitleText = document.getElementById("terminal-title-text")
 	const terminalOutputEl = document.getElementById("terminal-output")
 	const clearTerminalBtn = document.getElementById("clear-terminal-btn")
+	const terminalClearText = document.getElementById("terminal-clear-text")
+	const terminalEmptyText = document.getElementById("terminal-empty-text")
 
 	// Files elements
+	const filesSidebarTitle = document.getElementById("files-sidebar-title")
 	const filesTreeEl = document.getElementById("files-tree")
+	const filesTreeEmpty = document.getElementById("files-tree-empty")
 	const filesSearchInput = document.getElementById("files-search")
 	const previewFileIconEl = document.getElementById("preview-file-icon")
 	const previewFilenameEl = document.getElementById("preview-filename")
@@ -95,10 +112,241 @@
 	const previewFileSizeEl = document.getElementById("preview-file-size")
 	const previewHeaderActionsEl = document.getElementById("preview-header-actions")
 	const previewCopyBtn = document.getElementById("preview-copy-btn")
+	const previewCopyText = document.getElementById("preview-copy-text")
 	const previewToggleWrapBtn = document.getElementById("preview-toggle-wrap-btn")
+	const previewWrapText = document.getElementById("preview-wrap-text")
 	const previewToggleViewBtn = document.getElementById("preview-toggle-view-btn")
+	const previewSourceText = document.getElementById("preview-source-text")
 	const previewOpenExternalBtn = document.getElementById("preview-open-external-btn")
+	const previewInExplorerText = document.getElementById("preview-in-explorer-text")
 	const previewContentAreaEl = document.getElementById("preview-content-area")
+	const previewPlaceholderText = document.getElementById("preview-placeholder-text")
+
+	// ==========================================
+	// Desktop Internationalization (i18n)
+	// ==========================================
+	const desktopTranslations = {
+		en: {
+			// Loading & Error States
+			loadingTitle: "Initializing Roo Code engine...",
+			loadingDesc: "Connecting to server and preparing agent view...",
+			loadingServerHealth: (attempt, max) => `Waiting for server readiness... (attempt ${attempt}/${max})`,
+			loadingConnectingServer: "Connecting to server...",
+			loadingServerUnavailable: "Application server is not responding to healthcheck requests. Make sure the Roo Code engine is running.",
+			loadingAgentView: "Loading agent view...",
+			loadingTimeout: "Loading agent view timed out.",
+			loadingFrameError: (reason, delay, attempt, max) => `Frame load error (${reason || "connection aborted"}). Retrying in ${delay}ms... (attempt ${attempt}/${max})`,
+			loadingFrameFailed: "Failed to load agent view after 3 attempts. Check connection and retry.",
+			loadingNetworkError: "Network error while loading iframe.",
+			errorTitle: "Failed to load agent view",
+			errorDesc: "Server is not responding or connection to core application failed.",
+			retryBtn: "Retry",
+
+			// Navigation tabs
+			tabAgent: "Agent",
+			tabDiffs: "Diffs",
+			tabTerminal: "Terminal",
+			tabFiles: "Files",
+			tabSettings: "Settings",
+
+			// Connection statuses & agent status
+			statusConnected: "Connected",
+			statusConnecting: "Connecting...",
+			statusDisconnected: "Disconnected (Reconnecting...)",
+			statusThinking: "Thinking...",
+			statusExecuting: "Running Command...",
+			statusWaitingApproval: "Waiting for Approval",
+			statusError: "Error",
+			coreEngineConnected: "Core Engine: Connected",
+			coreEngineConnecting: "Core Engine: Reconnecting...",
+			connectedToEngine: "Connected to Engine",
+
+			// Explorer & File Preview
+			projectFiles: "Project Files",
+			searchFilesPlaceholder: "Search project files...",
+			loadingFileTree: "Loading file tree...",
+			noFilesFound: "No files found",
+			noWorkspaceOpen: "No workspace folder open",
+			selectFileToPreview: "Select a file from the tree to preview",
+			previewPlaceholder: "Select any file from the project tree to view its code, image, or details.",
+			failedToLoadFilePreview: "Failed to load file preview",
+			fileCouldNotBeOpened: "File could not be opened",
+			copy: "Copy",
+			wrap: "Wrap",
+			sourceCode: "Source Code",
+			inExplorer: "In Explorer",
+
+			// Diffs
+			modifiedFiles: "Modified Files",
+			filesCount: (count) => `${count} file${count === 1 ? "" : "s"}`,
+			noChangesRecorded: "No file changes recorded.",
+			noChangesAgent: "No changes made by the agent yet.",
+			diffsPlaceholder: "When Roo Code modifies files in this workspace, you can inspect the diffs here.",
+			selectFileToReview: "Select a file from the list to review changes",
+			fileContentNotAvailable: "File content not available",
+
+			// Terminal
+			terminalTitle: "Terminal & Agent Command Logs",
+			terminalClear: "Clear",
+			terminalEmpty: "Roo Code terminal command executions and logs will appear here.",
+		},
+		pl: {
+			// Loading & Error States
+			loadingTitle: "Inicjalizacja silnika Roo Code...",
+			loadingDesc: "Nawiązywanie połączenia z serwerem i przygotowywanie widoku agenta...",
+			loadingServerHealth: (attempt, max) => `Oczekiwanie na gotowość serwera... (próba ${attempt}/${max})`,
+			loadingConnectingServer: "Nawiązywanie połączenia z serwerem...",
+			loadingServerUnavailable: "Serwer aplikacji nie odpowiada na żądania healthcheck. Upewnij się, że silnik Roo Code został uruchomiony.",
+			loadingAgentView: "Ładowanie widoku agenta...",
+			loadingTimeout: "Przekroczono limit czasu ładowania widoku agenta.",
+			loadingFrameError: (reason, delay, attempt, max) => `Błąd ładowania ramki (${reason || "połączenie przerwane"}). Ponawianie za ${delay}ms... (próba ${attempt}/${max})`,
+			loadingFrameFailed: "Nie udało się załadować widoku agenta po 3 próbach. Sprawdź połączenie i ponów próbę.",
+			loadingNetworkError: "Błąd sieciowy podczas ładowania ramki iframe.",
+			errorTitle: "Nie udało się załadować widoku agenta",
+			errorDesc: "Serwer nie odpowiada lub wystąpił błąd połączenia z rdzeniem aplikacji.",
+			retryBtn: "Ponów próbę",
+
+			// Navigation tabs
+			tabAgent: "Agent",
+			tabDiffs: "Diffs",
+			tabTerminal: "Terminal",
+			tabFiles: "Pliki",
+			tabSettings: "Ustawienia",
+
+			// Connection statuses & agent status
+			statusConnected: "Połączono",
+			statusConnecting: "Łączenie...",
+			statusDisconnected: "Rozłączono (Ponowne łączenie...)",
+			statusThinking: "Myślenie...",
+			statusExecuting: "Wykonywanie polecenia...",
+			statusWaitingApproval: "Oczekiwanie na zatwierdzenie",
+			statusError: "Błąd",
+			coreEngineConnected: "Rdzeń silnika: Połączono",
+			coreEngineConnecting: "Rdzeń silnika: Ponowne łączenie...",
+			connectedToEngine: "Połączono z silnikiem",
+
+			// Explorer & File Preview
+			projectFiles: "Pliki projektu",
+			searchFilesPlaceholder: "Szukaj plików projektu...",
+			loadingFileTree: "Ładowanie drzewa plików...",
+			noFilesFound: "Nie znaleziono plików",
+			noWorkspaceOpen: "Brak otwartego folderu roboczego",
+			selectFileToPreview: "Wybierz plik z drzewa, aby wyświetlić podgląd",
+			previewPlaceholder: "Wybierz dowolny plik z drzewa projektu, aby zobaczyć jego kod, obraz lub szczegóły.",
+			failedToLoadFilePreview: "Nie udało się załadować podglądu pliku",
+			fileCouldNotBeOpened: "Nie można otworzyć pliku",
+			copy: "Kopiuj",
+			wrap: "Zawijaj",
+			sourceCode: "Kod źródłowy",
+			inExplorer: "W eksploratorze",
+
+			// Diffs
+			modifiedFiles: "Zmodyfikowane pliki",
+			filesCount: (count) => `${count} plik${count === 1 ? "" : count < 5 ? "i" : "ów"}`,
+			noChangesRecorded: "Brak zarejestrowanych zmian w plikach.",
+			noChangesAgent: "Brak zmian wprowadzonych dotąd przez agenta.",
+			diffsPlaceholder: "Gdy Roo Code zmodyfikuje pliki w tym obszarze, zobaczysz tutaj podgląd zmian (diff).",
+			selectFileToReview: "Wybierz plik z listy, aby przejrzeć zmiany",
+			fileContentNotAvailable: "Zawartość pliku niedostępna",
+
+			// Terminal
+			terminalTitle: "Dziennik poleceń terminala i agenta",
+			terminalClear: "Wyczyść",
+			terminalEmpty: "Wyniki poleceń terminala i dzienniki wykonania Roo Code pojawią się tutaj.",
+		},
+	}
+
+	let currentLanguage = (() => {
+		try {
+			const saved = localStorage.getItem("roo-language")
+			if (saved) return (saved === "pl" || saved.startsWith("pl")) ? "pl" : "en"
+			const vscodeState = localStorage.getItem("vscodeState")
+			if (vscodeState) {
+				const parsed = JSON.parse(vscodeState)
+				if (parsed?.language) {
+					return (parsed.language === "pl" || parsed.language.startsWith("pl")) ? "pl" : "en"
+				}
+			}
+		} catch (e) {}
+		return navigator.language?.startsWith("pl") ? "pl" : "en"
+	})()
+
+	function tDesktop(key, ...args) {
+		const lang = currentLanguage === "pl" ? "pl" : "en"
+		const entry = desktopTranslations[lang]?.[key] ?? desktopTranslations.en[key]
+		if (typeof entry === "function") {
+			return entry(...args)
+		}
+		return entry ?? key
+	}
+
+	function applyDesktopTranslations(lang) {
+		if (lang) {
+			currentLanguage = (lang === "pl" || (typeof lang === "string" && lang.startsWith("pl"))) ? "pl" : "en"
+		}
+
+		// 1. Loading & Error elements
+		if (webviewLoadingTitle) webviewLoadingTitle.textContent = tDesktop("loadingTitle")
+		if (webviewLoadingDesc && (!webviewLoadingDesc.dataset.custom || webviewLoadingDesc.textContent === desktopTranslations.en.loadingDesc || webviewLoadingDesc.textContent === desktopTranslations.pl.loadingDesc)) {
+			webviewLoadingDesc.textContent = tDesktop("loadingDesc")
+		}
+		if (webviewErrorTitle) webviewErrorTitle.textContent = tDesktop("errorTitle")
+		if (webviewErrorDesc && (!webviewErrorDesc.dataset.custom || webviewErrorDesc.textContent === desktopTranslations.en.errorDesc || webviewErrorDesc.textContent === desktopTranslations.pl.errorDesc)) {
+			webviewErrorDesc.textContent = tDesktop("errorDesc")
+		}
+		if (webviewRetryText) webviewRetryText.textContent = tDesktop("retryBtn")
+
+		// 2. Tab labels
+		if (tabLabelChat) tabLabelChat.textContent = tDesktop("tabAgent")
+		if (tabLabelDiffs) tabLabelDiffs.textContent = tDesktop("tabDiffs")
+		if (tabLabelTerminal) tabLabelTerminal.textContent = tDesktop("tabTerminal")
+		if (tabLabelFiles) tabLabelFiles.textContent = tDesktop("tabFiles")
+		if (tabLabelSettings) tabLabelSettings.textContent = tDesktop("tabSettings")
+
+		// 3. Connection badge & status texts
+		if (isConnected) {
+			if (connectionStatusEl) connectionStatusEl.textContent = tDesktop("connectedToEngine")
+			if (engineConnectionText && !currentAgentStatus) engineConnectionText.textContent = tDesktop("statusConnected")
+			if (engineConnectionBadge && !currentAgentStatus) engineConnectionBadge.title = tDesktop("coreEngineConnected")
+		} else {
+			if (connectionStatusEl) connectionStatusEl.textContent = tDesktop("statusDisconnected")
+			if (engineConnectionText) engineConnectionText.textContent = tDesktop("statusConnecting")
+			if (engineConnectionBadge) engineConnectionBadge.title = tDesktop("coreEngineConnecting")
+		}
+		if (currentAgentStatus) {
+			updateAgentStatus(currentAgentStatus)
+		}
+
+		// 4. Explorer titles & placeholders
+		if (filesSidebarTitle) filesSidebarTitle.textContent = tDesktop("projectFiles")
+		if (filesSearchInput) filesSearchInput.placeholder = tDesktop("searchFilesPlaceholder")
+		if (filesTreeEmpty) filesTreeEmpty.textContent = tDesktop("loadingFileTree")
+		if (previewFilenameEl && !selectedPreviewFile) {
+			previewFilenameEl.textContent = tDesktop("selectFileToPreview")
+		}
+		if (previewCopyText) previewCopyText.textContent = tDesktop("copy")
+		if (previewWrapText) previewWrapText.textContent = tDesktop("wrap")
+		if (previewSourceText) previewSourceText.textContent = isSvgSourceView ? "View Image" : tDesktop("sourceCode")
+		if (previewInExplorerText) previewInExplorerText.textContent = tDesktop("inExplorer")
+		if (previewPlaceholderText) previewPlaceholderText.textContent = tDesktop("previewPlaceholder")
+
+		// 5. Diffs titles & placeholders
+		if (diffsSidebarTitle) diffsSidebarTitle.textContent = tDesktop("modifiedFiles")
+		if (diffFileCounterEl) diffFileCounterEl.textContent = tDesktop("filesCount", diffFiles.length)
+		if (diffsPlaceholderText) diffsPlaceholderText.textContent = tDesktop("diffsPlaceholder")
+		const diffViewerFilename = diffViewerHeaderEl?.querySelector(".diff-filename")
+		if (diffViewerFilename && !selectedDiffFile) {
+			diffViewerFilename.textContent = tDesktop("selectFileToReview")
+		}
+
+		// 6. Terminal titles & placeholders
+		if (terminalTitleText) terminalTitleText.textContent = tDesktop("terminalTitle")
+		if (terminalClearText) terminalClearText.textContent = tDesktop("terminalClear")
+		if (terminalEmptyText) terminalEmptyText.textContent = tDesktop("terminalEmpty")
+	}
+
+	// Apply initial desktop translations immediately
+	applyDesktopTranslations(currentLanguage)
 
 	let currentPreviewMsg = null
 	let isCodeWrapped = false
@@ -196,8 +444,12 @@
 	function showWebviewLoading(statusText) {
 		if (webviewLoadingState) {
 			webviewLoadingState.style.display = "flex"
-			const desc = webviewLoadingState.querySelector(".placeholder-desc")
-			if (desc && statusText) desc.textContent = statusText
+			if (webviewLoadingTitle) webviewLoadingTitle.textContent = tDesktop("loadingTitle")
+			const desc = webviewLoadingDesc || webviewLoadingState.querySelector(".placeholder-desc")
+			if (desc && statusText) {
+				desc.textContent = statusText
+				desc.dataset.custom = "true"
+			}
 		}
 		if (webviewErrorState) webviewErrorState.style.display = "none"
 		if (webviewFrame) webviewFrame.style.display = "none"
@@ -208,9 +460,12 @@
 		if (webviewFrame) webviewFrame.style.display = "none"
 		if (webviewErrorState) {
 			webviewErrorState.style.display = "flex"
+			if (webviewErrorTitle) webviewErrorTitle.textContent = tDesktop("errorTitle")
 			if (webviewErrorDesc && message) {
 				webviewErrorDesc.textContent = message
+				webviewErrorDesc.dataset.custom = "true"
 			}
+			if (webviewRetryText) webviewRetryText.textContent = tDesktop("retryBtn")
 		}
 	}
 
@@ -221,6 +476,7 @@
 			webviewFrame.style.display = "block"
 			const theme = localStorage.getItem("roo-theme") || "linear-dark"
 			webviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+			webviewFrame.contentWindow?.postMessage({ type: "languageChange", language: currentLanguage }, "*")
 		}
 	}
 
@@ -239,7 +495,7 @@
 			}
 			if (attempt < maxAttempts - 1) {
 				const delay = delays[attempt] || 1000
-				showWebviewLoading(`Oczekiwanie na gotowość serwera... (próba ${attempt + 2}/${maxAttempts})`)
+				showWebviewLoading(tDesktop("loadingServerHealth", attempt + 2, maxAttempts))
 				await new Promise((resolve) => setTimeout(resolve, delay))
 			}
 		}
@@ -250,20 +506,20 @@
 		if (!webviewFrame) return
 		clearTimeout(webviewLoadTimeoutTimer)
 
-		showWebviewLoading("Nawiązywanie połączenia z serwerem...")
+		showWebviewLoading(tDesktop("loadingConnectingServer"))
 
 		const isServerReady = await checkServerHealth(MAX_WEBVIEW_RETRIES, RETRY_DELAYS)
 		if (!isServerReady) {
-			showWebviewError("Serwer aplikacji nie odpowiada na żądania healthcheck. Upewnij się, że silnik Roo Code został uruchomiony.")
+			showWebviewError(tDesktop("loadingServerUnavailable"))
 			return
 		}
 
-		showWebviewLoading("Ładowanie widoku agenta...")
+		showWebviewLoading(tDesktop("loadingAgentView"))
 
 		// Set up frame load timeout (8 seconds)
 		webviewLoadTimeoutTimer = setTimeout(() => {
 			console.warn("Webview iframe loading timed out.")
-			handleWebviewLoadError("Przekroczono limit czasu ładowania widoku agenta.")
+			handleWebviewLoadError(tDesktop("loadingTimeout"))
 		}, 8000)
 
 		// Set src to trigger load
@@ -275,12 +531,12 @@
 		if (webviewRetryCount < MAX_WEBVIEW_RETRIES) {
 			const delay = RETRY_DELAYS[webviewRetryCount] || 1000
 			webviewRetryCount++
-			showWebviewLoading(`Błąd ładowania ramki (${reason || "połączenie przerwane"}). Ponawianie za ${delay}ms... (próba ${webviewRetryCount}/${MAX_WEBVIEW_RETRIES})`)
+			showWebviewLoading(tDesktop("loadingFrameError", reason, delay, webviewRetryCount, MAX_WEBVIEW_RETRIES))
 			setTimeout(() => {
 				loadWebviewFrame()
 			}, delay)
 		} else {
-			showWebviewError(reason || "Nie udało się załadować widoku agenta po 3 próbach. Sprawdź połączenie i ponów próbę.")
+			showWebviewError(reason || tDesktop("loadingFrameFailed"))
 		}
 	}
 
@@ -292,7 +548,7 @@
 		})
 
 		webviewFrame.addEventListener("error", () => {
-			handleWebviewLoadError("Błąd sieciowy podczas ładowania ramki iframe.")
+			handleWebviewLoadError(tDesktop("loadingNetworkError"))
 		})
 	}
 
@@ -372,6 +628,22 @@
 		if (event.source === webviewFrame?.contentWindow) {
 			const data = event.data
 			if (data) {
+				if (data.type === "languageChange" && data.language) {
+					const newLang = (data.language === "pl" || data.language.startsWith("pl")) ? "pl" : "en"
+					if (newLang !== currentLanguage) {
+						currentLanguage = newLang
+						localStorage.setItem("roo-language", currentLanguage)
+						applyDesktopTranslations(currentLanguage)
+					}
+				}
+				if (data.type === "state" && data.state?.language) {
+					const newLang = (data.state.language === "pl" || data.state.language.startsWith("pl")) ? "pl" : "en"
+					if (newLang !== currentLanguage) {
+						currentLanguage = newLang
+						localStorage.setItem("roo-language", currentLanguage)
+						applyDesktopTranslations(currentLanguage)
+					}
+				}
 				if (data.type === "themeChange" && data.theme) {
 					applyDesktopTheme(data.theme)
 				}
@@ -423,14 +695,14 @@
 		socket.onopen = () => {
 			isConnected = true
 			if (connectionStatusEl) {
-				connectionStatusEl.textContent = "Connected to Engine"
+				connectionStatusEl.textContent = tDesktop("connectedToEngine")
 				const dot = connectionStatusEl.parentElement?.querySelector(".indicator-dot")
 				if (dot) dot.style.background = "var(--success)"
 			}
-			if (engineConnectionText) engineConnectionText.textContent = "Connected"
+			if (engineConnectionText) engineConnectionText.textContent = tDesktop("statusConnected")
 			if (engineConnectionBadge) {
 				engineConnectionBadge.className = "engine-connection-badge status-connected"
-				engineConnectionBadge.title = "Core Engine: Connected"
+				engineConnectionBadge.title = tDesktop("coreEngineConnected")
 			}
 			sendToServer({ type: "getWorkspaceInfo" })
 		}
@@ -447,14 +719,14 @@
 		socket.onclose = () => {
 			isConnected = false
 			if (connectionStatusEl) {
-				connectionStatusEl.textContent = "Disconnected (Reconnecting...)"
+				connectionStatusEl.textContent = tDesktop("statusDisconnected")
 				const dot = connectionStatusEl.parentElement?.querySelector(".indicator-dot")
 				if (dot) dot.style.background = "var(--danger)"
 			}
-			if (engineConnectionText) engineConnectionText.textContent = "Connecting..."
+			if (engineConnectionText) engineConnectionText.textContent = tDesktop("statusConnecting")
 			if (engineConnectionBadge) {
 				engineConnectionBadge.className = "engine-connection-badge status-connecting"
-				engineConnectionBadge.title = "Core Engine: Reconnecting..."
+				engineConnectionBadge.title = tDesktop("coreEngineConnecting")
 			}
 			setTimeout(connectWebSocket, 2000)
 		}
@@ -479,6 +751,14 @@
 			case "extensionMessage":
 				forwardToWebview(msg.message)
 				if (msg.message?.type === "state" && msg.message.state) {
+					if (msg.message.state.language) {
+						const newLang = (msg.message.state.language === "pl" || msg.message.state.language.startsWith("pl")) ? "pl" : "en"
+						if (newLang !== currentLanguage) {
+							currentLanguage = newLang
+							localStorage.setItem("roo-language", currentLanguage)
+							applyDesktopTranslations(currentLanguage)
+						}
+					}
 					if (msg.message.state.apiConfiguration) {
 						currentApiConfig = { ...currentApiConfig, ...msg.message.state.apiConfiguration }
 						updateApiPill(currentApiConfig)
@@ -525,8 +805,8 @@
 				if (selectedPreviewFile && previewContentAreaEl && previewContentAreaEl.querySelector(".preview-placeholder")) {
 					previewContentAreaEl.innerHTML = `
 						<div class="empty-state" style="color: var(--danger, #f04438);">
-							<div class="empty-title">Failed to load file preview</div>
-							<div class="empty-subtitle">${escapeHtml(msg.message || "File could not be opened")}</div>
+							<div class="empty-title">${escapeHtml(tDesktop("failedToLoadFilePreview"))}</div>
+							<div class="empty-subtitle">${escapeHtml(msg.message || tDesktop("fileCouldNotBeOpened"))}</div>
 						</div>
 					`
 				}
@@ -535,18 +815,20 @@
 	}
 
 	function updateAgentStatus(status) {
+		currentAgentStatus = status
 		const labels = {
-			idle: "Connected",
-			thinking: "Thinking...",
-			executing: "Running Command...",
-			waiting_approval: "Waiting for Approval",
-			error: "Error",
+			idle: tDesktop("statusConnected"),
+			thinking: tDesktop("statusThinking"),
+			executing: tDesktop("statusExecuting"),
+			waiting_approval: tDesktop("statusWaitingApproval"),
+			error: tDesktop("statusError"),
 		}
 		if (engineConnectionText) {
 			engineConnectionText.textContent = labels[status] || status
 		}
 		if (engineConnectionBadge) {
 			engineConnectionBadge.className = `engine-connection-badge status-${status === "idle" ? "connected" : status}`
+			engineConnectionBadge.title = status === "idle" ? tDesktop("coreEngineConnected") : (labels[status] || status)
 		}
 	}
 
@@ -571,12 +853,12 @@
 	}
 
 	function renderDiffs() {
-		diffFileCounterEl.textContent = `${diffFiles.length} file${diffFiles.length === 1 ? "" : "s"}`
+		diffFileCounterEl.textContent = tDesktop("filesCount", diffFiles.length)
 		if (diffFiles.length === 0) {
-			diffsFileListEl.innerHTML = '<div class="empty-state">No changes made by the agent yet.</div>'
+			diffsFileListEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("noChangesAgent"))}</div>`
 			diffContentEl.innerHTML = `
 				<div class="diff-placeholder">
-					<p>When Roo Code modifies files in this workspace, you can inspect the diffs here.</p>
+					<p id="diffs-placeholder-text">${escapeHtml(tDesktop("diffsPlaceholder"))}</p>
 				</div>
 			`
 			return
@@ -663,7 +945,7 @@
 	function renderSelectedDiff(file) {
 		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(file.filePath)} &nbsp;·&nbsp; <span style="text-transform: capitalize; color: var(--text-primary); font-weight: 600;">${escapeHtml(file.status)}</span></span>`
 		if (!file.newContent && !file.oldContent) {
-			diffContentEl.innerHTML = '<div class="empty-state">File content not available</div>'
+			diffContentEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("fileContentNotAvailable"))}</div>`
 			return
 		}
 
@@ -694,7 +976,7 @@
 
 	function renderTerminalLogs() {
 		if (terminalLogs.length === 0) {
-			terminalOutputEl.innerHTML = '<div class="terminal-empty">Terminal output from tools and commands executed by Roo Code will appear here.</div>'
+			terminalOutputEl.innerHTML = `<div class="terminal-empty" id="terminal-empty-text">${escapeHtml(tDesktop("terminalEmpty"))}</div>`
 			return
 		}
 
@@ -1102,7 +1384,7 @@
 						<svg class="empty-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
 							<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
 						</svg>
-						<div class="empty-title">No files matching &quot;${escapeHtml(searchFilter)}&quot;</div>
+						<div class="empty-title">${escapeHtml(tDesktop("noFilesFound"))}</div>
 						<div class="empty-subtitle">Try a different search query</div>
 					</div>
 				`
@@ -1112,7 +1394,7 @@
 						<svg class="empty-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
 							<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
 						</svg>
-						<div class="empty-title">No files found in this workspace</div>
+						<div class="empty-title">${escapeHtml(currentWorkspace?.path ? tDesktop("noFilesFound") : tDesktop("noWorkspaceOpen"))}</div>
 						<div class="empty-subtitle">Workspace is empty or files are ignored</div>
 					</div>
 				`
@@ -1169,7 +1451,7 @@
 			fileNode.classList.add("selected")
 			if (previewFilenameEl) previewFilenameEl.textContent = filePath
 			if (previewContentAreaEl) {
-				previewContentAreaEl.innerHTML = '<div class="preview-placeholder"><p>Loading file preview...</p></div>'
+				previewContentAreaEl.innerHTML = `<div class="preview-placeholder"><p>${escapeHtml(tDesktop("loadingFileTree"))}</p></div>`
 			}
 			sendToServer({ type: "readFile", filePath })
 		}

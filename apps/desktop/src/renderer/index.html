@@ -54,7 +54,7 @@
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
 						</svg>
-						<span>Agent</span>
+						<span id="tab-label-chat">Agent</span>
 					</button>
 					<button class="nav-tab" data-tab="diffs">
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -63,7 +63,7 @@
 							<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
 							<line x1="6" y1="9" x2="6" y2="21"></line>
 						</svg>
-						<span>Diffs</span>
+						<span id="tab-label-diffs">Diffs</span>
 						<span class="badge" id="diffs-count">0</span>
 					</button>
 					<button class="nav-tab" data-tab="terminal">
@@ -71,7 +71,7 @@
 							<polyline points="4 17 10 11 4 5"></polyline>
 							<line x1="12" y1="19" x2="20" y2="19"></line>
 						</svg>
-						<span>Terminal</span>
+						<span id="tab-label-terminal">Terminal</span>
 						<span class="badge" id="terminal-count">0</span>
 					</button>
 					<button class="nav-tab" data-tab="files">
@@ -79,14 +79,14 @@
 							<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
 							<polyline points="14 2 14 8 20 8"></polyline>
 						</svg>
-						<span>Files</span>
+						<span id="tab-label-files">Files</span>
 					</button>
 					<button class="nav-tab" id="nav-settings-btn" data-tab="settings" title="Settings">
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<circle cx="12" cy="12" r="3"></circle>
 							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
 						</svg>
-						<span>Settings</span>
+						<span id="tab-label-settings">Settings</span>
 					</button>
 				</nav>
 			</div>
@@ -129,8 +129,8 @@
 					<!-- Loading State Overlay -->
 					<div class="webview-placeholder-state" id="webview-loading-state">
 						<div class="loading-spinner"></div>
-						<h3 class="placeholder-title">Inicjalizacja silnika Roo Code...</h3>
-						<p class="placeholder-desc">Nawiązywanie połączenia z serwerem i przygotowywanie widoku agenta...</p>
+						<h3 class="placeholder-title" id="webview-loading-title">Initializing Roo Code engine...</h3>
+						<p class="placeholder-desc" id="webview-loading-desc">Connecting to server and preparing agent view...</p>
 					</div>
 
 					<!-- Error State Fallback -->
@@ -142,8 +142,8 @@
 								<line x1="12" y1="17" x2="12.01" y2="17"/>
 							</svg>
 						</div>
-						<h3 class="placeholder-title">Nie udało się załadować widoku agenta</h3>
-						<p class="placeholder-desc" id="webview-error-desc">Serwer nie odpowiada lub wystąpił błąd połączenia z rdzeniem aplikacji.</p>
+						<h3 class="placeholder-title" id="webview-error-title">Failed to load agent view</h3>
+						<p class="placeholder-desc" id="webview-error-desc">Server is not responding or connection to core application failed.</p>
 						<div class="placeholder-actions">
 							<button class="btn btn-primary" id="webview-retry-btn">
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -151,7 +151,7 @@
 									<polyline points="1 20 1 14 7 14"></polyline>
 									<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
 								</svg>
-								<span>Ponów próbę</span>
+								<span id="webview-retry-text">Retry</span>
 							</button>
 						</div>
 					</div>
@@ -165,7 +165,7 @@
 				<div class="diffs-view">
 					<aside class="diffs-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Modified Files</span>
+							<span class="sidebar-title" id="diffs-sidebar-title">Modified Files</span>
 							<span class="file-counter" id="diff-file-counter">0 files</span>
 						</div>
 						<div class="diffs-list" id="diffs-file-list">
@@ -184,7 +184,7 @@
 									<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
 									<line x1="6" y1="9" x2="6" y2="21"></line>
 								</svg>
-								<p>When the agent creates or edits files, line-by-line diffs will appear here.</p>
+								<p id="diffs-placeholder-text">When Roo Code modifies files in this workspace, you can inspect the diffs here.</p>
 							</div>
 						</div>
 					</div>
@@ -197,7 +197,7 @@
 					<div class="terminal-toolbar">
 						<div class="terminal-title">
 							<span class="terminal-prompt">$</span>
-							<span>Terminal & Agent Command Logs</span>
+							<span id="terminal-title-text">Terminal & Agent Command Logs</span>
 						</div>
 						<div class="terminal-actions">
 							<button class="icon-btn" id="clear-terminal-btn" title="Clear terminal logs">
@@ -208,12 +208,12 @@
 									<line x1="10" y1="11" x2="10" y2="17"/>
 									<line x1="14" y1="11" x2="14" y2="17"/>
 								</svg>
-								<span>Clear</span>
+								<span id="terminal-clear-text">Clear</span>
 							</button>
 						</div>
 					</div>
 					<div class="terminal-output" id="terminal-output">
-						<div class="terminal-empty">Roo Code terminal command executions and logs will appear here.</div>
+						<div class="terminal-empty" id="terminal-empty-text">Roo Code terminal command executions and logs will appear here.</div>
 					</div>
 				</div>
 			</section>
@@ -223,11 +223,11 @@
 				<div class="files-view">
 					<aside class="files-sidebar">
 						<div class="sidebar-header">
-							<span class="sidebar-title">Project Files</span>
+							<span class="sidebar-title" id="files-sidebar-title">Project Files</span>
 							<input type="text" id="files-search" class="files-search-input" placeholder="Search project files...">
 						</div>
 						<div class="files-tree" id="files-tree">
-							<div class="empty-state">Loading file tree...</div>
+							<div class="empty-state" id="files-tree-empty">Loading file tree...</div>
 						</div>
 					</aside>
 					<div class="file-preview-panel">
@@ -244,7 +244,7 @@
 										<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
 										<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
 									</svg>
-									<span>Copy</span>
+									<span id="preview-copy-text">Copy</span>
 								</button>
 								<button class="preview-action-btn" id="preview-toggle-wrap-btn" title="Toggle line wrap">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -253,10 +253,10 @@
 										<path d="M18 9l3 3-3 3"></path>
 										<line x1="3" y1="18" x2="21" y2="18"></line>
 									</svg>
-									<span>Wrap</span>
+									<span id="preview-wrap-text">Wrap</span>
 								</button>
 								<button class="preview-action-btn" id="preview-toggle-view-btn" style="display: none;" title="Toggle preview / source">
-									<span>Source Code</span>
+									<span id="preview-source-text">Source Code</span>
 								</button>
 								<button class="preview-action-btn" id="preview-open-external-btn" title="Show in File Explorer">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -264,7 +264,7 @@
 										<polyline points="15 3 21 3 21 9"></polyline>
 										<line x1="10" y1="14" x2="21" y2="3"></line>
 									</svg>
-									<span>In Explorer</span>
+									<span id="preview-in-explorer-text">In Explorer</span>
 								</button>
 							</div>
 						</div>
@@ -277,7 +277,7 @@
 									<line x1="16" y1="17" x2="8" y2="17"></line>
 									<polyline points="10 9 9 9 8 9"></polyline>
 								</svg>
-								<p>Select any file from the project tree to view its code, image, or details.</p>
+								<p id="preview-placeholder-text">Select any file from the project tree to view its code, image, or details.</p>
 							</div>
 						</div>
 					</div>
