@@ -470,9 +470,13 @@
 	}
 
 	function showWebviewSuccess() {
+		clearTimeout(webviewLoadTimeoutTimer)
 		if (webviewLoadingState) webviewLoadingState.style.display = "none"
 		if (webviewErrorState) webviewErrorState.style.display = "none"
 		if (webviewFrame) {
+			if (!webviewFrame.getAttribute("src") || webviewFrame.getAttribute("src") === "") {
+				webviewFrame.src = "/webview/index.html"
+			}
 			webviewFrame.style.display = "block"
 			const theme = localStorage.getItem("roo-theme") || "linear-dark"
 			webviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
@@ -499,6 +503,7 @@
 				await new Promise((resolve) => setTimeout(resolve, delay))
 			}
 		}
+		showWebviewError(tDesktop("loadingServerUnavailable"))
 		return false
 	}
 
@@ -704,6 +709,8 @@
 				engineConnectionBadge.className = "engine-connection-badge status-connected"
 				engineConnectionBadge.title = tDesktop("coreEngineConnected")
 			}
+			// WebSocket connected - remove loading overlay immediately
+			showWebviewSuccess()
 			sendToServer({ type: "getWorkspaceInfo" })
 		}
 

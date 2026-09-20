@@ -40,7 +40,11 @@ export function hashWorkspacePath(workspacePath: string): string {
 export function ensureDirectoryExists(dirPath: string): void {
 	try {
 		if (!fs.existsSync(dirPath)) {
-			fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 })
+			const mkdirOptions: fs.MakeDirectoryOptions = { recursive: true }
+			if (process.platform !== "win32") {
+				mkdirOptions.mode = 0o700
+			}
+			fs.mkdirSync(dirPath, mkdirOptions)
 		}
 	} catch (error) {
 		console.warn(`Failed to create directory ${dirPath}:`, error)

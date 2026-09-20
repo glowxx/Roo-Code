@@ -18,27 +18,35 @@ export interface DesktopConfig {
 /**
  * Returns the path to desktop-config.json.
  * Uses app.getPath("userData") in Electron (%APPDATA%\Roo Code\desktop-config.json on Windows),
- * or %USERPROFILE%\.roo-desktop-data\desktop-config.json in non-Electron mode.
+ * or %APPDATA%\Roo Code\desktop-config.json / %USERPROFILE%\.roo-desktop-data\desktop-config.json in non-Electron or early-startup mode.
  */
 export function getConfigFilePath(): string {
-	if (process.versions.electron) {
-		try {
-			const req = createRequire(import.meta.url)
-			const electron = req("electron")
-			const app = electron?.app || electron?.default?.app
-			if (app && typeof app.getPath === "function") {
-				return path.join(app.getPath("userData"), "desktop-config.json")
+	try {
+		if (process.versions.electron) {
+			try {
+				const req = createRequire(import.meta.url)
+				const electron = req("electron")
+				const app = electron?.app || electron?.default?.app
+				if (app && typeof app.getPath === "function" && typeof app.isReady === "function" && app.isReady()) {
+					return path.join(app.getPath("userData"), "desktop-config.json")
+				}
+			} catch {
+				// Fall back to APPDATA or homedir if electron require fails or app is not ready
 			}
-		} catch {
-			// Fall back to APPDATA if electron require fails
+
+			if (process.platform === "win32" && process.env.APPDATA) {
+				return path.join(process.env.APPDATA, "Roo Code", "desktop-config.json")
+			}
 		}
 
 		if (process.platform === "win32" && process.env.APPDATA) {
 			return path.join(process.env.APPDATA, "Roo Code", "desktop-config.json")
 		}
-	}
 
-	return path.join(os.homedir(), ".roo-desktop-data", "desktop-config.json")
+		return path.join(os.homedir(), ".roo-desktop-data", "desktop-config.json")
+	} catch {
+		return path.join(os.homedir(), ".roo-desktop-data", "desktop-config.json")
+	}
 }
 
 /**

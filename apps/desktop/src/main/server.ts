@@ -1,3 +1,6 @@
+process.on("uncaughtException", (err) => console.error("[FATAL CRASH]", err))
+process.on("unhandledRejection", (reason) => console.error("[UNHANDLED REJECTION]", reason))
+
 import http from "http"
 import fs from "fs"
 import path from "path"
