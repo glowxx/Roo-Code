@@ -16,41 +16,46 @@
 
 ## 🌟 Wprowadzenie / Overview
 
-**Roo Code Desktop** to natywna, samodzielna aplikacja desktopowa AI dla programistów na system Windows, oparta o **Electron** oraz pakiet **`@roo-code/vscode-shim`**. Aplikacja działa całkowicie **bez zainstalowanego VS Code**, oferując pełnoprawne środowisko autonomicznego agenta AI bezpośrednio na pulpicie.
+**Roo Code Desktop** to samodzielna aplikacja AI Desktop dla programistów na system Windows, oparta o **Electron** oraz pakiet **`@roo-code/vscode-shim`**. Działa w pełni autonomicznie, **bez wymogu posiadania VS Code**, dostarczając zaawansowane środowisko asystenta i agenta AI bezpośrednio na pulpicie.
 
-Roo Code Desktop operuje bezpośrednio na Twoim lokalnym systemie plików: analizuje kod, edytuje i tworzy pliki, zarządza terminalem, diagnozuje błędy kompilacji oraz wykonuje złożone zadania programistyczne w bezpieczny i powtarzalny sposób.
+Roo Code Desktop operuje bezpośrednio na Twoim lokalnym systemie plików: analizuje kod, edytuje i tworzy pliki, zarządza terminalem, diagnozuje błędy kompilacji oraz wykonuje złożone zadania programistyczne w bezpieczny, izolowany i powtarzalny sposób.
 
 ---
 
 ## ⚡ Kluczowe możliwości / Key Features
 
-- 🚀 **Wbudowany, natywny provider modeli xKiro**:
+- 🚀 **Wbudowany provider modeli xKiro**:
   - Bezpośrednia integracja z gatewayem xKiro oraz wiodącymi modelami AI (m.in. DeepSeek V3/R1, Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro).
   - Dynamiczne pobieranie aktualnej listy modeli z API endpointu `/models`.
-  - Zaawansowane parsowanie wersji semantycznych i automatyczna promocja flagowców do najwyższych tierów.
+  - Semantyczne wersjonowanie modeli i automatyczna promocja modeli flagowych do najwyższych tierów.
+
+- 🌳 **Architektura Directory-First (BFS) drzewa plików**:
+  - Wierne odzwierciedlenie struktury katalogów Windows 1:1 z natywnym przeszukiwaniem wszerz (Breadth-First Search).
+  - Pełna obsługa pustych folderów, dysków wirtualnych `subst` oraz linków symbolicznych/junctions.
+  - Zoptymalizowany limit do 25 000 plików gwarantujący błyskawiczne indeksowanie i responsywność interfejsu.
 
 - 🗜️ **Silnik kondensacji kontekstu `/compact`**:
   - Dedykowana komenda slash do inteligentnej redukcji rozmiaru historii konwersacji.
-  - Zintegrowana kontrola za pomocą `AbortController` (możliwość bezpiecznego anulowania operacji w dowolnym momencie).
-  - Automatyczne scalanie ról i ochrona pamięci roboczej agenta przed przepełnieniem okna kontekstowego.
+  - Ochrona pamięci roboczej agenta przed przepełnieniem okna kontekstowego modelu.
+  - Automatyczne scalanie ról i pełna integracja z `AbortController` (bezpieczne anulowanie operacji w dowolnym momencie).
 
-- 🛡️ **Bezpieczna, dynamiczna izolacja przestrzeni roboczych (Workspace Isolation)**:
-  - Pełny, bezpieczny reset zadań, sesji terminali oraz procesów MCP przy przełączaniu projektów.
-  - Całkowite rozdzielenie magazynu stanu per-ścieżka projektu (izolowane cache, historia zadań i konfiguracje).
+- 🛡️ **Pełna izolacja przestrzeni roboczych (Workspace Isolation)**:
+  - Odseparowane magazyny stanu per-katalog projektu (odrębna historia zadań, pamięć podręczna i konfiguracje).
+  - Automatyczne czyszczenie terminali, procesów potomnych oraz serwerów MCP przy zmianie aktywnego projektu.
 
-- 📁 **Zintegrowany eksplorator plików i terminal**:
-  - Zaawansowane drzewo katalogów w pełni odporne na specyfikę ścieżek Windows, dyski wirtualne `subst` oraz dowiązania symboliczne i junctions.
-  - Wbudowany, natywny podgląd kodu ze składnią oraz przeglądarka zasobów multimedialnych.
-  - Zintegrowany terminal z obsługą wieloprocesowości i natywnym streamingiem wejścia/wyjścia.
+- ⚡ **Optymalizacje Webview**:
+  - Ultralekki wirtualizator **Virtuoso** do płynnego renderowania długich wątków konwersacji.
+  - Eliminacja kaskadowych re-renderów podczas streamingu odpowiedzi token-po-tokenie.
+  - Dedykowany komponent **`CrashBoundary`** chroniący przed czarnym ekranem i awariami renderera.
 
 - 🔒 **Utwardzone bezpieczeństwo**:
   - Atomowy zapis `SecretStorage` z automatycznym mechanizmem tworzenia kopii zapasowej `.bak`.
-  - Szczelny i szybki silnik `.rooignore` zabezpieczający poufne dane przed wczytaniem do promptu.
-  - Rygorystyczna ochrona przed wyciekami tokenów i kluczy API w logach diagnostycznych.
+  - Bezpieczne uruchamianie procesów (brak luk Command Injection w powłoce systemowej).
+  - Szczelne i wydajne reguły `.rooignore` zapobiegające wyciekom poufnych danych do kontekstu AI.
 
 ---
 
-## 📋 Wymagania systemowe / Prerequisites
+## 📋 Wymagania środowiskowe / System Requirements
 
 - **System operacyjny**: Windows 10 / Windows 11 x64
 - **Node.js**: `>= 20`
@@ -58,9 +63,9 @@ Roo Code Desktop operuje bezpośrednio na Twoim lokalnym systemie plików: anali
 
 ---
 
-## 🛠️ Uruchomienie deweloperskie / Development Setup
+## 🛠️ Środowisko deweloperskie / Development Setup
 
-### 1. Przygotowanie repozytorium
+### 1. Klonowanie i instalacja
 
 ```powershell
 # Klonowanie repozytorium
@@ -69,12 +74,9 @@ cd Roo-Code
 
 # Instalacja zależności w monorepo
 pnpm install
-
-# Kompilacja pakietów bazowych
-pnpm build
 ```
 
-### 2. Uruchomienie aplikacji
+### 2. Uruchomienie deweloperskie
 
 Zalecanym i najprostszym sposobem uruchomienia środowiska deweloperskiego na systemie Windows jest interaktywny skrypt wsadowy:
 
@@ -83,51 +85,49 @@ run.bat
 ```
 
 Wybierz opcję:
-- **`[1] Desktop App`** — uruchamia natywne okno aplikacji Electron Desktop.
+- **`[1] Native Electron Desktop Application (Recommended)`** — kompiluje pakiety składowe i uruchamia natywne okno aplikacji Electron Desktop.
 
-Alternatywnie z poziomu konsoli:
+Alternatywnie z poziomu terminala:
 ```bash
+# Kompilacja pakietów bazowych
+pnpm build
+
 # Uruchomienie aplikacji Electron Desktop
 pnpm desktop
-
-# Uruchomienie w trybie developerskim z hot-reloadem
-pnpm run dev
 ```
 
 ---
 
-## 📦 Budowanie instalatora produkcyjnego / Production Build
+## 📦 Generowanie instalatora produkcyjnego / Production Build
 
-Roo Code Desktop zawiera kompletny, zautomatyzowany proces budowania instalatora NSIS dla systemu Windows.
-
-Aby wygenerować instalator produkcyjny `.exe`, uruchom:
+Roo Code Desktop zawiera kompletny, zautomatyzowany skrypt do budowania produkcyjnego instalatora NSIS dla systemu Windows:
 
 ```cmd
 build_win_installer.bat
 ```
 
-Skrypt weryfikuje środowisko, buduje wszystkie pakiety składowe oraz generuje plik instalacyjny NSIS w lokalizacji:
+Skrypt automatycznie weryfikuje środowisko, buduje wszystkie pakiety składowe (`@roo-code/build`, `@roo-code/types`, `@roo-code/vscode-shim`, Core Engine oraz aplikację Desktop) i generuje plik instalatora w lokalizacji:
 ```
 apps/desktop/release/Roo-Code-Setup-*.exe
 ```
 
 ---
 
-## 🏗️ Architektura Monorepo
+## 🏗️ Architektura repozytorium / Monorepo Architecture
 
 Projekt jest zorganizowany w zwięzłą i modułową strukturę monorepo:
 
 ```
 Roo-Code/
 ├── apps/
-│   └── desktop/             # Samodzielna aplikacja Electron Desktop (okno aplikacji, proces główny, preload)
+│   └── desktop/             # Samodzielna aplikacja Electron Desktop (proces główny, preload, okno aplikacji)
 ├── packages/
 │   ├── vscode-shim/         # Warstwa emulacji VS Code API (@roo-code/vscode-shim - workspace, secret storage, terminal)
 │   └── types/               # Współdzielone definicje typów TypeScript, schematy konfiguracji i modeli
 ├── src/                     # Rdzenna logika Roo Code (pętla agenta, silnik /compact, .rooignore, provider xKiro)
-├── webview-ui/              # Nowoczesny interfejs użytkownika (React 18, Tailwind CSS, Vite)
-├── run.bat                  # Interaktywny skrypt startowy Windows (uruchamianie Desktop App)
-└── build_win_installer.bat  # Zautomatyzowany skrypt generowania instalatora NSIS (.exe)
+├── webview-ui/              # Nowoczesny interfejs użytkownika (React 18, Tailwind CSS, Vite, Virtuoso)
+├── run.bat                  # Interaktywny skrypt startowy Windows (opcja [1] Electron Desktop)
+└── build_win_installer.bat  # Zautomatyzowany skrypt budowy instalatora produkcyjnego NSIS (.exe)
 ```
 
 ---

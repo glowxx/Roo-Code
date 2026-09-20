@@ -26,7 +26,6 @@ roo-cli-*.tar.gz*
 *.AppImage
 *.exe
 !**/rg.exe
-!**/bin/rg.exe
 *.dmg
 
 # Environment, secrets & credentials (NEVER commit personal or sensitive data)
@@ -38,14 +37,11 @@ roo-cli-*.tar.gz*
 *.cert
 *.pfx
 *.token
-*.secret
-*.secrets
+*.secret*
 *secret*.json
-*secret*.key
 *secret*.txt
 secrets/
 *credentials*.json
-*credentials*.key
 credentials/
 auth.json
 hosts.yml
@@ -80,6 +76,7 @@ qdrant_storage/
 # Logs & debugging
 logs/
 *.log
+*.log.*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -119,5 +116,6 @@ cache/
 session/
 .session/
 sessions/
+.sessions/
 *.swp
 *~
