@@ -5,7 +5,7 @@ package-lock.json
 yarn.lock
 bun.lockb
 
-# Build outputs
+# Build outputs & installers
 dist/
 out/
 out-*/
@@ -26,11 +26,10 @@ roo-cli-*.tar.gz*
 *.AppImage
 *.exe
 !**/rg.exe
+!**/bin/rg.exe
 *.dmg
 
 # Environment, secrets & credentials (NEVER commit personal or sensitive data)
-.env
-.env.*
 *.env*
 !.env.sample
 !.env.*.sample
@@ -48,7 +47,6 @@ secrets/
 *credentials*.json
 *credentials*.key
 credentials/
-credentials.json
 auth.json
 hosts.yml
 id_rsa
@@ -107,11 +105,12 @@ desktop.ini
 *.sublime-workspace
 .fleet/
 
-# Temporary / Scratch files
+# Temporary, scratch & session files
 scratch/
 tmp/
 temp/
 *.tmp
+*.tmp.*
 *.temp
 *.bak
 .cache/
