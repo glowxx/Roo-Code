@@ -61,6 +61,7 @@ import { SectionHeader } from "./SectionHeader"
 import ApiConfigManager from "./ApiConfigManager"
 import ApiOptions from "./ApiOptions"
 import { AutoApproveSettings } from "./AutoApproveSettings"
+import { CommandSafetySettings } from "./CommandSafetySettings"
 import { CheckpointSettings } from "./CheckpointSettings"
 import { NotificationSettings } from "./NotificationSettings"
 import { ContextManagementSettings } from "./ContextManagementSettings"
@@ -263,6 +264,7 @@ export const extractComparableSettings = (state?: any) => {
 		includeCurrentCost: state.includeCurrentCost,
 		maxGitStatusFiles: state.maxGitStatusFiles,
 		debug: state.debug,
+		commandSafetyConfig: state.commandSafetyConfig,
 	}
 }
 
@@ -349,6 +351,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		includeCurrentTime,
 		includeCurrentCost,
 		maxGitStatusFiles,
+		commandSafetyConfig,
 	} = cachedState
 
 	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
@@ -370,6 +373,16 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			setCleanOriginalState((prevCleanState) => ({ ...prevCleanState, ...extensionState }))
 		}
 	}, [settingsImportedAt, extensionState])
+
+	// Sync cached state when state is first hydrated from extension host
+	const prevDidHydrateState = useRef(extensionState.didHydrateState)
+	useEffect(() => {
+		if (!prevDidHydrateState.current && extensionState.didHydrateState) {
+			setCachedState((prevCachedState) => ({ ...prevCachedState, ...extensionState }))
+			setCleanOriginalState((prevCleanState) => ({ ...prevCleanState, ...extensionState }))
+		}
+		prevDidHydrateState.current = extensionState.didHydrateState
+	}, [extensionState.didHydrateState, extensionState])
 
 	const setCachedStateField: SetCachedStateField<keyof ExtensionStateContextType> = useCallback((field, value) => {
 		setCachedState((prevState) => {
@@ -531,6 +544,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					openRouterImageGenerationSelectedModel,
 					experiments,
 					customSupportPrompts,
+					commandSafetyConfig: cachedState.commandSafetyConfig,
 				},
 			})
 
@@ -1043,7 +1057,18 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 													allowedMaxCost={allowedMaxCost ?? undefined}
 													deniedCommands={deniedCommands}
 													autoApprovalEnabled={cachedState.autoApprovalEnabled}
+													state={cachedState}
 													setCachedStateField={setCachedStateField}
+												/>
+											</div>
+											<div
+												id="section-commandSafety"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												<CommandSafetySettings
+													commandSafetyConfig={commandSafetyConfig}
+													onChange={(newConfig) =>
+														setCachedStateField("commandSafetyConfig", newConfig)
+													}
 												/>
 											</div>
 										</div>

@@ -200,6 +200,9 @@ vi.mock("../ApiOptions", () => ({
 vi.mock("../AutoApproveSettings", () => ({
 	AutoApproveSettings: vi.fn(() => <div>AutoApproveSettings</div>),
 }))
+vi.mock("../CommandSafetySettings", () => ({
+	CommandSafetySettings: vi.fn(() => <div>CommandSafetySettings</div>),
+}))
 vi.mock("../CheckpointSettings", () => ({
 	CheckpointSettings: vi.fn(() => <div>CheckpointSettings</div>),
 }))

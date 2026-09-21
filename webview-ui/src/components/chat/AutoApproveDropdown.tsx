@@ -30,6 +30,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 	const portalContainer = useRooPortal("roo-portal")
 	const { t } = useAppTranslation()
 
+	const state = useExtensionState()
 	const {
 		autoApprovalEnabled,
 		setAutoApprovalEnabled,
@@ -40,12 +41,17 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 		setAlwaysAllowModeSwitch,
 		setAlwaysAllowSubtasks,
 		setAlwaysAllowFollowupQuestions,
-	} = useExtensionState()
+	} = state
+
+	const isSafetyConfigured = isSafetyModelConfigured(state)
 
 	const toggles = useAutoApprovalToggles()
 
 	const onAutoApproveToggle = React.useCallback(
 		(key: AutoApproveSetting, value: boolean) => {
+			if (key === "alwaysAllowExecute" && value && !isSafetyConfigured) {
+				return
+			}
 			vscode.postMessage({ type: "updateSettings", updatedSettings: { [key]: value } })
 
 			switch (key) {
@@ -80,6 +86,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 		},
 		[
 			autoApprovalEnabled,
+			isSafetyConfigured,
 			setAlwaysAllowReadOnly,
 			setAlwaysAllowWrite,
 			setAlwaysAllowExecute,
@@ -94,6 +101,9 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 	const handleSelectAll = React.useCallback(() => {
 		// Enable all options
 		Object.keys(autoApproveSettingsConfig).forEach((key) => {
+			if (key === "alwaysAllowExecute" && !isSafetyConfigured) {
+				return
+			}
 			onAutoApproveToggle(key as AutoApproveSetting, true)
 		})
 		// Enable master auto-approval
@@ -101,7 +111,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 			setAutoApprovalEnabled(true)
 			vscode.postMessage({ type: "autoApprovalEnabled", bool: true })
 		}
-	}, [onAutoApproveToggle, autoApprovalEnabled, setAutoApprovalEnabled])
+	}, [onAutoApproveToggle, autoApprovalEnabled, setAutoApprovalEnabled, isSafetyConfigured])
 
 	const handleSelectNone = React.useCallback(() => {
 		// Disable all options
@@ -112,7 +122,10 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 
 	const handleOpenSettings = React.useCallback(
 		() =>
-			window.postMessage({ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } }),
+			window.postMessage(
+				{ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } },
+				"*",
+			),
 		[],
 	)
 
@@ -209,23 +222,54 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 					<div className="grid grid-cols-1 min-[340px]:grid-cols-2 gap-x-2 gap-y-2 p-3">
 						{settingsArray.map(({ key, labelKey, descriptionKey, icon }) => {
 							const isEnabled = toggles[key]
+							const isExecute = key === "alwaysAllowExecute"
+							const isExecuteLocked = isExecute && !isSafetyConfigured
+							const isDisabled = !effectiveAutoApprovalEnabled || isExecuteLocked
+
+							const tooltipContent = isExecuteLocked ? (
+								<div className="flex flex-col gap-1.5 p-1 max-w-[240px]" data-testid="execute-safety-tooltip">
+									<span>Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach</span>
+									<button
+										type="button"
+										className="text-xs text-vscode-textLink-foreground hover:underline text-left cursor-pointer p-0 bg-transparent border-0 flex items-center gap-1"
+										onClick={(e) => {
+											e.stopPropagation()
+											handleOpenSettings()
+										}}>
+										Otwórz Ustawienia
+									</button>
+								</div>
+							) : (
+								t(descriptionKey)
+							)
+
 							return (
-								<StandardTooltip key={key} content={t(descriptionKey)}>
-									<Button
-										variant={isEnabled ? "primary" : "secondary"}
-										onClick={() => onAutoApproveToggle(key, !isEnabled)}
-										className={cn(
-											"flex items-center gap-2 px-2 py-2 text-sm text-left justify-start h-auto",
-											"transition-all duration-150",
-											!effectiveAutoApprovalEnabled &&
-												"opacity-50 cursor-not-allowed hover:opacity-50",
-											!isEnabled && "bg-vscode-button-background/15",
-										)}
-										disabled={!effectiveAutoApprovalEnabled}
-										data-testid={`auto-approve-${key}`}>
-										<span className={`codicon codicon-${icon} text-sm flex-shrink-0`} />
-										<span className="flex-1 truncate">{t(labelKey)}</span>
-									</Button>
+								<StandardTooltip key={key} content={tooltipContent}>
+									<span className="inline-flex w-full">
+										<Button
+											variant={isEnabled && !isExecuteLocked ? "primary" : "secondary"}
+											onClick={() => onAutoApproveToggle(key, !isEnabled)}
+											className={cn(
+												"flex items-center gap-2 px-2 py-2 text-sm text-left justify-start h-auto w-full",
+												"transition-all duration-150",
+												isDisabled &&
+													"opacity-50 cursor-not-allowed hover:opacity-50",
+												(!isEnabled || isExecuteLocked) && "bg-vscode-button-background/15",
+											)}
+											disabled={isDisabled}
+											data-testid={`auto-approve-${key}`}>
+											<span className={`codicon codicon-${icon} text-sm flex-shrink-0`} />
+											<span className="flex-1 truncate">{t(labelKey)}</span>
+											{isExecuteLocked && (
+												<span
+													className="flex items-center gap-1 text-[10px] bg-vscode-badge-background text-vscode-badge-foreground px-1.5 py-0.5 rounded flex-shrink-0"
+													data-testid="requires-safety-model-badge">
+													<Lock className="size-2.5" />
+													<span>Requires Safety Model</span>
+												</span>
+											)}
+										</Button>
+									</span>
 								</StandardTooltip>
 							)
 						})}

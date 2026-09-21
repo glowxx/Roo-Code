@@ -14,6 +14,19 @@ vi.mock("@/i18n/TranslationContext", () => {
 	}
 })
 
+vi.mock("@/components/ui", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/components/ui")>()
+	return {
+		...actual,
+		StandardTooltip: ({ children, content }: any) => (
+			<>
+				{children}
+				<div data-testid="tooltip-content">{content}</div>
+			</>
+		),
+	}
+})
+
 describe("AutoApproveToggle", () => {
 	const mockOnToggle = vi.fn()
 	const initialProps = {
@@ -86,5 +99,58 @@ describe("AutoApproveToggle", () => {
 			"aria-pressed",
 			"true",
 		)
+	})
+
+	test("disables alwaysAllowExecute and shows lock icon and warning tooltip when safety model is not configured", () => {
+		render(
+			<TranslationProvider>
+				<AutoApproveToggle
+					{...initialProps}
+					state={{
+						commandSafetyConfig: {
+							enabled: false,
+							provider: "openai",
+							modelId: "gpt-4o",
+							apiKey: "test-key",
+						},
+					}}
+				/>
+			</TranslationProvider>,
+		)
+
+		const executeButton = screen.getByTestId(autoApproveSettingsConfig.alwaysAllowExecute.testId)
+		expect(executeButton).toBeDisabled()
+		expect(screen.getByTestId("execute-lock-icon")).toBeInTheDocument()
+		expect(
+			screen.getByText(/Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach/),
+		).toBeInTheDocument()
+
+		fireEvent.click(executeButton)
+		expect(mockOnToggle).not.toHaveBeenCalled()
+	})
+
+	test("enables alwaysAllowExecute when safety model is configured", () => {
+		render(
+			<TranslationProvider>
+				<AutoApproveToggle
+					{...initialProps}
+					state={{
+						commandSafetyConfig: {
+							enabled: true,
+							provider: "openai",
+							modelId: "gpt-4o-mini",
+							apiKey: "test-key",
+						},
+					}}
+				/>
+			</TranslationProvider>,
+		)
+
+		const executeButton = screen.getByTestId(autoApproveSettingsConfig.alwaysAllowExecute.testId)
+		expect(executeButton).not.toBeDisabled()
+		expect(screen.queryByTestId("execute-lock-icon")).not.toBeInTheDocument()
+
+		fireEvent.click(executeButton)
+		expect(mockOnToggle).toHaveBeenCalledWith("alwaysAllowExecute", false)
 	})
 })

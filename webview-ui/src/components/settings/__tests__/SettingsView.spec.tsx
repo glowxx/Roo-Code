@@ -1,6 +1,6 @@
 // pnpm --filter @roo-code/vscode-webview test src/components/settings/__tests__/SettingsView.spec.tsx
 
-import { render, screen, fireEvent, within } from "@/utils/test-utils"
+import { render, screen, fireEvent, within, act } from "@/utils/test-utils"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { vscode } from "@/utils/vscode"
@@ -266,25 +266,31 @@ vi.mock("@/components/ui", () => ({
 
 // Mock window.postMessage to trigger state hydration
 const mockPostMessage = (state: any) => {
-	window.postMessage(
-		{
-			type: "state",
-			state: {
-				version: "1.0.0",
-				clineMessages: [],
-				taskHistory: [],
-				shouldShowAnnouncement: false,
-				allowedCommands: [],
-				alwaysAllowExecute: false,
-				ttsEnabled: false,
-				ttsSpeed: 1,
-				soundEnabled: false,
-				soundVolume: 0.5,
-				...state,
+	const messageData = {
+		type: "state",
+		state: {
+			version: "1.0.0",
+			clineMessages: [],
+			taskHistory: [],
+			shouldShowAnnouncement: false,
+			allowedCommands: [],
+			alwaysAllowExecute: false,
+			ttsEnabled: false,
+			ttsSpeed: 1,
+			soundEnabled: false,
+			soundVolume: 0.5,
+			commandSafetyConfig: {
+				enabled: true,
+				provider: "openai",
+				modelId: "gpt-4o",
+				apiKey: "test-key",
 			},
+			...state,
 		},
-		"*",
-	)
+	}
+	act(() => {
+		window.dispatchEvent(new MessageEvent("message", { data: messageData }))
+	})
 }
 
 const renderSettingsView = () => {
@@ -313,6 +319,7 @@ const renderSettingsView = () => {
 				</QueryClientProvider>
 			</ExtensionStateContextProvider>,
 		)
+		mockPostMessage({})
 	}
 
 	// Helper to get elements within the settings content (not the indexing container)

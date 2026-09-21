@@ -194,6 +194,10 @@ vi.mock("../AutoApproveSettings", () => ({
 	AutoApproveSettings: () => null,
 }))
 
+vi.mock("../CommandSafetySettings", () => ({
+	CommandSafetySettings: () => null,
+}))
+
 vi.mock("../SectionHeader", () => ({
 	SectionHeader: ({ children }: any) => <div>{children}</div>,
 }))

@@ -1,8 +1,11 @@
-import type { GlobalSettings } from "@roo-code/types"
+import { useContext } from "react"
+import { type GlobalSettings, type ExtensionState, isSafetyModelConfigured } from "@roo-code/types"
+import { Lock } from "lucide-react"
 
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { cn } from "@/lib/utils"
 import { Button, StandardTooltip } from "@/components/ui"
+import { ExtensionStateContext } from "@/context/ExtensionStateContext"
 
 type AutoApproveToggles = Pick<
 	GlobalSettings,
@@ -79,27 +82,48 @@ export const autoApproveSettingsConfig: Record<AutoApproveSetting, AutoApproveCo
 
 type AutoApproveToggleProps = AutoApproveToggles & {
 	onToggle: (key: AutoApproveSetting, value: boolean) => void
+	state?: Partial<ExtensionState> | null
 }
 
-export const AutoApproveToggle = ({ onToggle, ...props }: AutoApproveToggleProps) => {
+export const AutoApproveToggle = ({ onToggle, state: passedState, ...props }: AutoApproveToggleProps) => {
 	const { t } = useAppTranslation()
+	const extensionState = useContext(ExtensionStateContext)
+	const state = passedState !== undefined ? passedState : extensionState
+	const isSafetyConfigured = isSafetyModelConfigured(state)
 
 	return (
 		<div className={cn("flex flex-row flex-wrap gap-2 py-2")}>
-			{Object.values(autoApproveSettingsConfig).map(({ key, descriptionKey, labelKey, icon, testId }) => (
-				<StandardTooltip key={key} content={t(descriptionKey || "")}>
-					<Button
-						variant={props[key] ? "primary" : "secondary"}
-						onClick={() => onToggle(key, !props[key])}
-						aria-label={t(labelKey)}
-						aria-pressed={!!props[key]}
-						data-testid={testId}
-						className={cn("gap-1.5 text-xs whitespace-nowrap", !props[key] && "opacity-50")}>
-						<span className={`codicon codicon-${icon} text-sm`} />
-						<span>{t(labelKey)}</span>
-					</Button>
-				</StandardTooltip>
-			))}
+			{Object.values(autoApproveSettingsConfig).map(({ key, descriptionKey, labelKey, icon, testId }) => {
+				const isExecute = key === "alwaysAllowExecute"
+				const isExecuteLocked = isExecute && !isSafetyConfigured
+				const tooltipContent = isExecuteLocked
+					? "Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach"
+					: t(descriptionKey || "")
+
+				return (
+					<StandardTooltip key={key} content={tooltipContent}>
+						<Button
+							variant={props[key] && !isExecuteLocked ? "primary" : "secondary"}
+							onClick={() => {
+								if (isExecuteLocked) return
+								onToggle(key, !props[key])
+							}}
+							aria-label={t(labelKey)}
+							aria-pressed={!!props[key]}
+							disabled={isExecuteLocked}
+							data-testid={testId}
+							className={cn(
+								"gap-1.5 text-xs whitespace-nowrap",
+								(!props[key] || isExecuteLocked) && "opacity-50",
+							)}>
+							<span className={`codicon codicon-${icon} text-sm`} />
+							<span>{t(labelKey)}</span>
+							{isExecuteLocked && <Lock className="size-3 flex-shrink-0" data-testid="execute-lock-icon" />}
+						</Button>
+					</StandardTooltip>
+				)
+			})}
 		</div>
 	)
 }
+

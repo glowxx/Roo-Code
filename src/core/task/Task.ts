@@ -44,6 +44,8 @@ import {
 	isIdleAsk,
 	isInteractiveAsk,
 	isResumableAsk,
+	isSafetyModelConfigured,
+	type SafetyEvaluationResult,
 	QueuedMessage,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -52,6 +54,7 @@ import {
 	MAX_MCP_TOOLS_THRESHOLD,
 	countEnabledMcpTools,
 } from "@roo-code/types"
+import { CommandSafetyJudge, SAFETY_EVALUATION_FALLBACK_RESULT } from "../security/CommandSafetyJudge"
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
@@ -125,7 +128,7 @@ import { processUserContentMentions } from "../mentions/processUserContentMentio
 import { getMessagesSinceLastSummary, summarizeConversation, getEffectiveApiHistory } from "../condense"
 import { compactHistory } from "../context/ContextCompactor"
 import { MessageQueueService } from "../message-queue/MessageQueueService"
-import { AutoApprovalHandler, checkAutoApproval } from "../auto-approval"
+import { AutoApprovalHandler, checkAutoApproval, type CheckAutoApprovalResult } from "../auto-approval"
 import { MessageManager } from "../message-manager"
 import { validateAndFixToolResultIds } from "./validateToolResultIds"
 import { mergeConsecutiveApiMessages } from "./mergeConsecutiveApiMessages"
@@ -1325,19 +1328,62 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Automatically approve if the ask according to the user's settings.
 		const provider = this.providerRef.deref()
 		const state = provider ? await provider.getState() : undefined
-		const approval = await checkAutoApproval({ state, ask: type, text, isProtected })
+		let approval: CheckAutoApprovalResult = await checkAutoApproval({ state, ask: type, text, isProtected })
 
 		if (approval.decision === "approve") {
-			this.approveAsk()
+			if (type === "command") {
+				if (!isSafetyModelConfigured(state)) {
+					approval = { decision: "ask" }
+				} else {
+					const recentCommands = this.clineMessages
+						.filter((m) => m.ask === "command" && m.text && m.ts !== askTs)
+						.slice(-5)
+						.map((m) => m.text!)
+
+					let evaluation: SafetyEvaluationResult
+					try {
+						evaluation = await CommandSafetyJudge.evaluate({
+							command: text || "",
+							cwd: this.cwd,
+							recentCommands,
+							config: state?.commandSafetyConfig!,
+							state,
+						})
+					} catch (error) {
+						evaluation = SAFETY_EVALUATION_FALLBACK_RESULT
+					}
+
+					if (
+						evaluation.isSafe === false ||
+						["medium", "high", "critical"].includes(evaluation.riskLevel)
+					) {
+						approval = { decision: "ask" }
+						await this.say("command_safety_warning", JSON.stringify(evaluation))
+						this.lastMessageTs = askTs
+					} else if (
+						evaluation.isSafe === true &&
+						(evaluation.riskLevel === "safe" || evaluation.riskLevel === "low")
+					) {
+						this.approveAsk()
+					} else {
+						approval = { decision: "ask" }
+						await this.say("command_safety_warning", JSON.stringify(evaluation))
+						this.lastMessageTs = askTs
+					}
+				}
+			} else {
+				this.approveAsk()
+			}
 		} else if (approval.decision === "deny") {
 			this.denyAsk()
 		} else if (approval.decision === "timeout") {
+			const timeoutApproval = approval
 			// Store the auto-approval timeout so it can be cancelled if user interacts
 			this.autoApprovalTimeoutRef = setTimeout(() => {
-				const { askResponse, text, images } = approval.fn()
+				const { askResponse, text, images } = timeoutApproval.fn()
 				this.handleWebviewAskResponse(askResponse, text, images)
 				this.autoApprovalTimeoutRef = undefined
-			}, approval.timeout)
+			}, timeoutApproval.timeout)
 			timeouts.push(this.autoApprovalTimeoutRef)
 		}
 
@@ -1858,6 +1904,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			throw new Error(`[RooCode#say] task ${this.taskId}.${this.instanceId} aborted`)
 		}
 
+		const isNonInteractive = options.isNonInteractive ?? (type === "command_safety_warning")
+
 		if (partial !== undefined) {
 			const lastMessage = this.clineMessages.at(-1)
 
@@ -1876,7 +1924,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// This is a new partial message, so add it with partial state.
 					const sayTs = Date.now()
 
-					if (!options.isNonInteractive) {
+					if (!isNonInteractive) {
 						this.lastMessageTs = sayTs
 					}
 
@@ -1896,7 +1944,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				// This is the complete version of a previously partial
 				// message, so replace the partial with the complete version.
 				if (isUpdatingPreviousPartial) {
-					if (!options.isNonInteractive) {
+					if (!isNonInteractive) {
 						this.lastMessageTs = lastMessage.ts
 					}
 
@@ -1915,7 +1963,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// This is a new and complete message, so add it like normal.
 					const sayTs = Date.now()
 
-					if (!options.isNonInteractive) {
+					if (!isNonInteractive) {
 						this.lastMessageTs = sayTs
 					}
 
@@ -1938,7 +1986,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// does not need to respond to. We don't want these message types
 			// to trigger an update to `lastMessageTs` since they can be created
 			// asynchronously and could interrupt a pending ask.
-			if (!options.isNonInteractive) {
+			if (!isNonInteractive) {
 				this.lastMessageTs = sayTs
 			}
 

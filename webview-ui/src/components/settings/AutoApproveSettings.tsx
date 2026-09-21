@@ -1,12 +1,14 @@
-import { HTMLAttributes, useMemo, useState } from "react"
-import { X } from "lucide-react"
+import { HTMLAttributes, useContext, useMemo, useState } from "react"
+import { Lock, X } from "lucide-react"
 import { Trans } from "react-i18next"
 import { Package } from "@roo/package"
+import { type ExtensionState, isSafetyModelConfigured } from "@roo-code/types"
 
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { vscode } from "@/utils/vscode"
 import { Button, Input, Slider } from "@/components/ui"
+import { ExtensionStateContext } from "@/context/ExtensionStateContext"
 
 import { SetCachedStateField } from "./types"
 import { SectionHeader } from "./SectionHeader"
@@ -33,6 +35,7 @@ type AutoApproveSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	allowedMaxCost?: number | undefined
 	deniedCommands?: string[]
 	autoApprovalEnabled?: boolean
+	state?: Partial<ExtensionState> | null
 	setCachedStateField: SetCachedStateField<
 		| "alwaysAllowReadOnly"
 		| "alwaysAllowReadOnlyOutsideWorkspace"
@@ -70,10 +73,14 @@ export const AutoApproveSettings = ({
 	allowedMaxCost,
 	deniedCommands,
 	autoApprovalEnabled,
+	state,
 	setCachedStateField,
 	...props
 }: AutoApproveSettingsProps) => {
 	const { t } = useAppTranslation()
+	const extensionState = useContext(ExtensionStateContext)
+	const resolvedState = state !== undefined ? state : extensionState
+	const isSafetyConfigured = isSafetyModelConfigured(resolvedState)
 	const [commandInput, setCommandInput] = useState("")
 	const [deniedCommandInput, setDeniedCommandInput] = useState("")
 
@@ -174,7 +181,13 @@ export const AutoApproveSettings = ({
 						alwaysAllowSubtasks={alwaysAllowSubtasks}
 						alwaysAllowExecute={alwaysAllowExecute}
 						alwaysAllowFollowupQuestions={alwaysAllowFollowupQuestions}
-						onToggle={(key, value) => setCachedStateField(key, value)}
+						state={resolvedState}
+						onToggle={(key, value) => {
+							if (key === "alwaysAllowExecute" && value && !isSafetyConfigured) {
+								return
+							}
+							setCachedStateField(key, value)
+						}}
 					/>
 
 					<MaxLimitInputs
@@ -292,7 +305,22 @@ export const AutoApproveSettings = ({
 						<div className="flex items-center gap-4 font-bold">
 							<span className="codicon codicon-terminal" />
 							<div>{t("settings:autoApprove.execute.label")}</div>
+							{!isSafetyConfigured && (
+								<span className="flex items-center gap-1 text-xs text-vscode-errorForeground font-normal">
+									<Lock className="size-3.5" />
+									<span>(Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach)</span>
+								</span>
+							)}
 						</div>
+
+						{!isSafetyConfigured && (
+							<div
+								className="flex items-center gap-2 p-2.5 rounded-lg bg-vscode-inputValidation-warningBackground text-vscode-inputValidation-warningForeground border border-vscode-inputValidation-warningBorder text-xs"
+								data-testid="execute-safety-warning">
+								<Lock className="size-4 shrink-0" />
+								<span>Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach</span>
+							</div>
+						)}
 
 						<SearchableSetting
 							settingId="auto-approve-allowed-commands"

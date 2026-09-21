@@ -178,6 +178,7 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 		customSupportPrompts: customSupportPrompts ?? prevState.customSupportPrompts,
 		experiments,
 		openAiModels: newState.openAiModels ?? prevState.openAiModels ?? [],
+		commandSafetyConfig: newState.commandSafetyConfig ?? prevState.commandSafetyConfig,
 	}
 }
 

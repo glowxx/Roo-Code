@@ -125,6 +125,10 @@ export class CommandSafetyJudge {
 		return new CommandSafetyJudge().parseSafetyResponse(rawResponse)
 	}
 
+	public static async evaluate(options: EvaluateSafetyOptions): Promise<SafetyEvaluationResult> {
+		return new CommandSafetyJudge().evaluate(options)
+	}
+
 	/**
 	 * Evaluates a command using the configured LLM safety judge.
 	 */
@@ -361,7 +365,7 @@ export class CommandSafetyJudge {
 		}
 
 		const client = new OpenAI({
-			apiKey,
+			apiKey: apiKey || "noop",
 			baseURL,
 			defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
 		})
