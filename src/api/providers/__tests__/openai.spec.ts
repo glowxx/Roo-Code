@@ -1011,6 +1011,59 @@ describe("OpenAiHandler", () => {
 			expect(callArgs).not.toHaveProperty("stream")
 		})
 
+		it("should use user-configured reasoningEffort from options in O3 streaming mode", async () => {
+			const o3Handler = new OpenAiHandler({
+				...o3Options,
+				reasoningEffort: "high",
+			})
+			const systemPrompt = "You are a helpful assistant."
+			const messages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user",
+					content: "Hello!",
+				},
+			]
+
+			const stream = o3Handler.createMessage(systemPrompt, messages)
+			for await (const _chunk of stream) {
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "o3-mini",
+					reasoning_effort: "high",
+				}),
+				{},
+			)
+		})
+
+		it("should use user-configured reasoningEffort from options in O3 non-streaming mode", async () => {
+			const o3Handler = new OpenAiHandler({
+				...o3Options,
+				openAiStreamingEnabled: false,
+				reasoningEffort: "low",
+			})
+			const systemPrompt = "You are a helpful assistant."
+			const messages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user",
+					content: "Hello!",
+				},
+			]
+
+			const stream = o3Handler.createMessage(systemPrompt, messages)
+			for await (const _chunk of stream) {
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "o3-mini",
+					reasoning_effort: "low",
+				}),
+				{},
+			)
+		})
+
 		it("should handle tool calls with O3 model in non-streaming mode", async () => {
 			const o3Handler = new OpenAiHandler({
 				...o3Options,

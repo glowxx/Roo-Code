@@ -1,5 +1,7 @@
 import React from "react"
-import { ListChecks, LayoutList, Settings, CheckCheck, X } from "lucide-react"
+import { ListChecks, LayoutList, Settings, CheckCheck, X, Lock } from "lucide-react"
+
+import { isSafetyModelConfigured } from "@roo-code/types"
 
 import { vscode } from "@/utils/vscode"
 

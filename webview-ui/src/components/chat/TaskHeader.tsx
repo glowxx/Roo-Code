@@ -1,6 +1,6 @@
 import { memo, useRef, useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft } from "lucide-react"
+import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft, Plus } from "lucide-react"
 import prettyBytes from "pretty-bytes"
 
 import type { ClineMessage } from "@roo-code/types"
@@ -181,7 +181,16 @@ const TaskHeader = ({
 								</div>
 							)}
 						</div>
-						<div className="flex items-center shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+						<div className="flex items-center shrink-0 ml-2 gap-1" onClick={(e) => e.stopPropagation()}>
+							<StandardTooltip content={t("chat:startNewTask.title", "New Chat")}>
+								<button
+									onClick={() => vscode.postMessage({ type: "clearTask" })}
+									data-testid="header-new-chat-btn"
+									className="shrink-0 min-h-[20px] min-w-[20px] p-[2px] cursor-pointer opacity-75 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground bg-transparent border-none rounded-md transition-colors"
+									aria-label={t("chat:startNewTask.title", "New Chat")}>
+									<Plus size={16} />
+								</button>
+							</StandardTooltip>
 							<StandardTooltip content={isTaskExpanded ? t("chat:task.collapse") : t("chat:task.expand")}>
 								<button
 									onClick={() => setIsTaskExpanded(!isTaskExpanded)}

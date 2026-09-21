@@ -278,6 +278,23 @@ describe("TaskHeader", () => {
 		})
 	})
 
+	describe("New Chat button", () => {
+		beforeEach(() => {
+			mockPostMessage.mockClear()
+		})
+
+		it("should render new chat button and post clearTask message when clicked", () => {
+			renderTaskHeader()
+			const newChatButton = screen.getByTestId("header-new-chat-btn")
+			expect(newChatButton).toBeInTheDocument()
+
+			fireEvent.click(newChatButton)
+			expect(mockPostMessage).toHaveBeenCalledWith({
+				type: "clearTask",
+			})
+		})
+	})
+
 	describe("Context window percentage calculation", () => {
 		// The percentage should be calculated as:
 		// contextTokens / (contextWindow - reservedForOutput) * 100

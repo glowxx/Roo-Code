@@ -1,7 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 
-import { isRetiredProvider, type ProviderSettings, type ModelInfo } from "@roo-code/types"
+import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels } from "@roo-code/types"
 
 import { ApiStream } from "./transform/stream"
 
@@ -133,19 +133,24 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				: new VertexHandler(options)
 		case "openai":
 			return new OpenAiHandler(options)
-		case "xkiro":
+		case "xkiro": {
+			const xkiroModelId =
+				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
+			const defaultInfo = (xkiroModels as Record<string, ModelInfo>)[xkiroModelId]
 			return new OpenAiHandler({
 				...options,
 				openAiBaseUrl: (options as any).xkiroBaseUrl || options.openAiBaseUrl || "https://api.xkiro.com/v1",
 				openAiApiKey: (options as any).xkiroApiKey || options.apiKey || options.openAiApiKey,
-				openAiModelId: (options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat",
-				openAiCustomModelInfo: options.openAiCustomModelInfo || {
+				openAiModelId: xkiroModelId,
+				openAiCustomModelInfo: options.openAiCustomModelInfo || defaultInfo || {
 					maxTokens: 8192,
 					contextWindow: 128000,
 					supportsImages: true,
 					supportsPromptCache: true,
 				},
+				reasoningEffort: options.reasoningEffort,
 			})
+		}
 		case "ollama":
 			return new NativeOllamaHandler(options)
 		case "lmstudio":

@@ -1315,16 +1315,6 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					/>
 				)}
 
-				{!isEditMode && contextWindow > 0 && (
-					<div className="flex items-center px-1 text-xs text-vscode-descriptionForeground min-w-0 -mt-0.5 mb-0.5">
-						<ContextWindowProgress
-							contextWindow={contextWindow}
-							contextTokens={contextTokens || 0}
-							maxTokens={maxTokens || undefined}
-						/>
-					</div>
-				)}
-
 				<div className="flex items-center justify-between gap-1.5 w-full min-w-0 overflow-hidden">
 					<div className="flex items-center gap-1.5 min-w-0 overflow-hidden flex-1">
 						<ModeSelector
@@ -1350,6 +1340,14 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							onApiConfigChange={handleApiConfigChange}
 						/>
 						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden shrink-0" />
+						{!isEditMode && contextWindow > 0 && (
+							<ContextWindowProgress
+								contextWindow={contextWindow}
+								contextTokens={contextTokens || 0}
+								maxTokens={maxTokens || undefined}
+								className="shrink-0"
+							/>
+						)}
 					</div>
 					<div className="flex flex-shrink-0 items-center gap-1 h-8 leading-none pr-1">
 						{isTtsPlaying && (

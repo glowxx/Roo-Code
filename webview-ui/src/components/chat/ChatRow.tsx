@@ -1549,6 +1549,28 @@ export const ChatRowContent = ({
 						/>
 					)
 				}
+				case "command_safety_warning": {
+					const evaluation = safeJsonParse<{
+						isSafe: boolean
+						riskLevel: string
+						reason: string
+					}>(message.text || "{}")
+					if (!evaluation) return null
+					const riskLevel = evaluation.riskLevel || "unknown"
+					return (
+						<WarningRow
+							title={`🛡️ AI Command Safety Guardrail: ${riskLevel.toUpperCase()} RISK DETECTED`}
+							message={evaluation.reason}
+							actionText="Configure Safety Guardrail"
+							onAction={() =>
+								window.postMessage(
+									{ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } },
+									"*",
+								)
+							}
+						/>
+					)
+				}
 				default:
 					return (
 						<>

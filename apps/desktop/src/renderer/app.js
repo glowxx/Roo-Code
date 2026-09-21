@@ -42,7 +42,7 @@
 
 	// DOM Elements
 	const workspaceNameEl = document.getElementById("workspace-name")
-	const openFolderBtn = document.getElementById("open-folder-btn")
+	const openFolderBtn = document.getElementById("open-folder-btn") || document.getElementById("sidebar-open-folder-btn")
 	const gitPill = document.getElementById("git-pill")
 	const gitBranchEl = document.getElementById("git-branch")
 	const diffsCountEl = document.getElementById("diffs-count")
@@ -131,7 +131,9 @@
 	const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn")
 	const sidebarCollapseBtn = document.getElementById("sidebar-collapse-btn")
 	const sidebarNewChatBtn = document.getElementById("sidebar-new-chat-btn")
+	const sidebarNewChatLabelEl = document.getElementById("sidebar-new-chat-label")
 	const sidebarOpenFolderBtn = document.getElementById("sidebar-open-folder-btn")
+	const sidebarOpenFolderLabelEl = document.getElementById("sidebar-open-folder-label")
 	const sidebarFilterInput = document.getElementById("sidebar-filter-input")
 	const sidebarProjectsListEl = document.getElementById("sidebar-projects-list")
 	const sidebarProjectsCountEl = document.getElementById("sidebar-projects-count")
@@ -227,7 +229,7 @@
 			activeProject: "Active",
 			removeRecent: "Remove from recent",
 			newChatInProject: "New chat in this project",
-			openWorkspaceFolder: "Open workspace folder",
+			openWorkspaceFolder: "Open Folder",
 			toggleSidebarHint: "toggle sidebar",
 		},
 		pl: {
@@ -304,7 +306,7 @@
 			activeProject: "Aktywny",
 			removeRecent: "Usuń z listy",
 			newChatInProject: "Nowy czat w tym projekcie",
-			openWorkspaceFolder: "Otwórz folder projektu",
+			openWorkspaceFolder: "Otwórz folder",
 			toggleSidebarHint: "zwiń/rozwiń panel",
 		},
 	}
@@ -404,8 +406,10 @@
 		if (sidebarHintTextEl) sidebarHintTextEl.textContent = tDesktop("toggleSidebarHint")
 		if (sidebarToggleBtn) sidebarToggleBtn.title = tDesktop("toggleSidebar")
 		if (sidebarCollapseBtn) sidebarCollapseBtn.title = tDesktop("toggleSidebar")
-		if (sidebarNewChatBtn) sidebarNewChatBtn.title = tDesktop("newChat")
+		if (sidebarNewChatBtn) sidebarNewChatBtn.title = `${tDesktop("newChat")} (Ctrl+N)`
+		if (sidebarNewChatLabelEl) sidebarNewChatLabelEl.textContent = tDesktop("newChat")
 		if (sidebarOpenFolderBtn) sidebarOpenFolderBtn.title = tDesktop("openWorkspaceFolder")
+		if (sidebarOpenFolderLabelEl) sidebarOpenFolderLabelEl.textContent = tDesktop("openWorkspaceFolder")
 	}
 
 	// Apply initial desktop translations immediately
@@ -517,17 +521,42 @@
 	sidebarToggleBtn?.addEventListener("click", () => toggleSidebar())
 	sidebarCollapseBtn?.addEventListener("click", () => toggleSidebar(true))
 
-	// Global shortcut: Ctrl+B / Cmd+B
+	// Global shortcuts: Ctrl+B / Cmd+B (toggle sidebar), Ctrl+N / Cmd+N (new chat)
 	window.addEventListener("keydown", (e) => {
 		if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && !e.shiftKey && !e.altKey) {
 			e.preventDefault()
 			toggleSidebar()
 		}
+		if ((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N") && !e.shiftKey && !e.altKey) {
+			e.preventDefault()
+			startNewChat()
+		}
 	})
+
+	async function openFolderDialog() {
+		if (window.__desktopAPI?.selectFolder) {
+			try {
+				const newPath = await window.__desktopAPI.selectFolder()
+				if (newPath) {
+					await selectWorkspaceFolder(newPath)
+					fetchSidebarData()
+				}
+			} catch (err) {
+				console.error("Failed to select folder via Electron dialog:", err)
+			}
+		} else {
+			const newPath = prompt("Enter full path of folder to open:", currentWorkspace?.path || "")
+			if (newPath && newPath.trim()) {
+				const trimmed = newPath.trim()
+				await selectWorkspaceFolder(trimmed)
+				fetchSidebarData()
+			}
+		}
+	}
 
 	// Open folder from sidebar button
 	sidebarOpenFolderBtn?.addEventListener("click", () => {
-		openFolderBtn?.click()
+		openFolderDialog()
 	})
 
 	// New chat from sidebar button
@@ -603,6 +632,8 @@
 		renderSidebar()
 
 		switchDesktopTab("chat", "user")
+
+		forwardToWebview({ type: "showTaskWithId", text: taskId })
 
 		try {
 			const resp = await fetch("/api/chat/switch", {
@@ -687,7 +718,7 @@
 				</div>
 			`
 			document.getElementById("sidebar-open-first-btn")?.addEventListener("click", () => {
-				openFolderBtn?.click()
+				openFolderDialog()
 			})
 			return
 		}
@@ -761,11 +792,11 @@
 								<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
 							</svg>
 						</div>
+						${isActive ? `<span class="project-status-dot" title="${escapeHtml(tDesktop("activeProject"))}"></span>` : ""}
 						<div class="project-meta" data-action="switch-workspace" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(ws)}">
-							<span class="project-name">${escapeHtml(wsName)}</span>
-							<span class="project-path">${escapeHtml(ws)}</span>
+							<span class="project-name" title="${escapeHtml(wsName)}">${escapeHtml(wsName)}</span>
+							<span class="project-path" title="${escapeHtml(ws)}">${escapeHtml(ws)}</span>
 						</div>
-						${isActive ? `<span class="project-active-badge">${escapeHtml(tDesktop("activeProject"))}</span>` : ""}
 						<div class="project-actions">
 							<button class="project-action-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}">
 								<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -976,47 +1007,7 @@
 
 	// Folder Selection
 	openFolderBtn?.addEventListener("click", () => {
-		if (window.__desktopAPI?.selectFolder) {
-			window.__desktopAPI.selectFolder().then((newPath) => {
-				if (newPath) {
-					const name = newPath.split(/[/\\]/).filter(Boolean).pop() || newPath
-					if (workspaceNameEl) {
-						workspaceNameEl.textContent = name
-						workspaceNameEl.title = newPath
-					}
-					if (footerWorkspaceEl) {
-						footerWorkspaceEl.textContent = "Path: " + newPath
-					}
-					if (!currentWorkspace) {
-						currentWorkspace = {}
-					}
-					currentWorkspace.path = newPath
-					currentWorkspace.name = name
-					loadWorkspaceFiles()
-					sendToServer({ type: "getWorkspaceInfo" })
-				}
-			})
-		} else {
-			const newPath = prompt("Enter full path of folder to open:", currentWorkspace?.path || "")
-			if (newPath && newPath.trim()) {
-				const trimmed = newPath.trim()
-				const name = trimmed.split(/[/\\]/).filter(Boolean).pop() || trimmed
-				if (workspaceNameEl) {
-					workspaceNameEl.textContent = name
-					workspaceNameEl.title = trimmed
-				}
-				if (footerWorkspaceEl) {
-					footerWorkspaceEl.textContent = "Path: " + trimmed
-				}
-				if (!currentWorkspace) {
-					currentWorkspace = {}
-				}
-				currentWorkspace.path = trimmed
-				currentWorkspace.name = name
-				sendToServer({ type: "selectFolder", path: trimmed })
-				loadWorkspaceFiles()
-			}
-		}
+		openFolderDialog()
 	})
 
 	// Clear Terminal

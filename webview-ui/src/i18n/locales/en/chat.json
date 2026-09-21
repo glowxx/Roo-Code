@@ -162,7 +162,7 @@
 	"pressToSend": "Press {{keyCombination}} to send",
 	"stopTts": "Stop text-to-speech",
 	"typeMessage": "Type a message...",
-	"typeTask": "Type your task here...",
+	"typeTask": "Type a message...",
 	"addContext": "@ to add context, / for commands",
 	"dragFiles": "hold shift to drag in files",
 	"dragFilesImages": "hold shift to drag in files/images",

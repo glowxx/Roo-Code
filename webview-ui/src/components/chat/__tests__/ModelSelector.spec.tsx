@@ -4,6 +4,7 @@ import {
 	cleanModelDisplayName,
 	extractModelFamily,
 	extractModelVersion,
+	isReasoningModel,
 	promoteDynamicFlagships,
 	sanitizeCustomModelId,
 } from "../ModelSelector"
@@ -17,7 +18,7 @@ vi.mock("@/utils/vscode", () => ({
 
 const mockSetApiConfiguration = vi.fn()
 
-let mockExtensionState = {
+let mockExtensionState: any = {
 	apiConfiguration: {
 		apiProvider: "xkiro",
 		apiModelId: "deepseek/deepseek-chat",
@@ -34,19 +35,28 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => mockExtensionState,
 }))
 
+let mockSelectedModel = {
+	id: "deepseek/deepseek-chat",
+	info: {
+		contextWindow: 128000,
+		maxTokens: 8192,
+	} as any,
+}
+
 vi.mock("@/components/ui/hooks/useSelectedModel", () => ({
-	useSelectedModel: () => ({
-		id: "deepseek/deepseek-chat",
-		info: {
-			contextWindow: 128000,
-			maxTokens: 8192,
-		},
-	}),
+	useSelectedModel: () => mockSelectedModel,
 }))
 
 describe("ModelSelector", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		mockSelectedModel = {
+			id: "deepseek/deepseek-chat",
+			info: {
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+		}
 		mockExtensionState = {
 			apiConfiguration: {
 				apiProvider: "xkiro",
@@ -247,6 +257,171 @@ describe("ModelSelector", () => {
 			expect.objectContaining({
 				apiModelId: "new-custom-modelfragx%3D2",
 				xkiroModelId: "new-custom-modelfragx%3D2",
+			}),
+		)
+	})
+
+	test("isReasoningModel correctly identifies reasoning models", () => {
+		expect(isReasoningModel("openai/o3-mini")).toBe(true)
+		expect(isReasoningModel("deepseek/deepseek-reasoner")).toBe(true)
+		expect(isReasoningModel("deepseek-r1")).toBe(true)
+		expect(isReasoningModel("anthropic/claude-3.7-sonnet")).toBe(true)
+		expect(isReasoningModel("any-model", { supportsReasoningEffort: true } as any)).toBe(true)
+		expect(isReasoningModel("any-model", { supportsReasoningBudget: true } as any)).toBe(true)
+		expect(isReasoningModel("any-model", { maxThinkingTokens: 8192 } as any)).toBe(true)
+		expect(isReasoningModel("deepseek/deepseek-chat")).toBe(false)
+		expect(isReasoningModel("openai/gpt-4o")).toBe(false)
+	})
+
+	test("does not render reasoning effort section when active model does not support reasoning", () => {
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		expect(screen.queryByTestId("reasoning-effort-section")).not.toBeInTheDocument()
+	})
+
+	test("renders reasoning effort section with pills when active model supports reasoning", () => {
+		mockSelectedModel = {
+			id: "openai/o3-mini",
+			info: {
+				contextWindow: 200000,
+				maxTokens: 100000,
+				supportsReasoningEffort: true,
+				reasoningEffort: "medium",
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "medium",
+			enableReasoningEffort: true,
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		expect(screen.getByTestId("reasoning-effort-section")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-off")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-low")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-high")).toBeInTheDocument()
+	})
+
+	test("selecting a reasoning effort pill immediately updates apiConfiguration and synchronizes via IPC", () => {
+		mockSelectedModel = {
+			id: "openai/o3-mini",
+			info: {
+				contextWindow: 200000,
+				maxTokens: 100000,
+				supportsReasoningEffort: true,
+				reasoningEffort: "medium",
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "medium",
+			enableReasoningEffort: true,
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Click "High"
+		const highPill = screen.getByTestId("reasoning-effort-pill-high")
+		fireEvent.click(highPill)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reasoningEffort: "high",
+				enableReasoningEffort: true,
+			}),
+		)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "upsertApiConfiguration",
+				text: "default",
+				apiConfiguration: expect.objectContaining({
+					reasoningEffort: "high",
+					enableReasoningEffort: true,
+				}),
+			}),
+		)
+
+		// Click "Off"
+		const offPill = screen.getByTestId("reasoning-effort-pill-off")
+		fireEvent.click(offPill)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reasoningEffort: "disable",
+				enableReasoningEffort: false,
+			}),
+		)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "upsertApiConfiguration",
+				text: "default",
+				apiConfiguration: expect.objectContaining({
+					reasoningEffort: "disable",
+					enableReasoningEffort: false,
+				}),
+			}),
+		)
+	})
+
+	test("switching to a reasoning model preserves reasoningEffort", () => {
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "high",
+			enableReasoningEffort: true,
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Target: DeepSeek R1 (reasoning model)
+		const r1Item = screen.getByText("DeepSeek R1")
+		fireEvent.click(r1Item)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "deepseek/deepseek-reasoner",
+				reasoningEffort: "high",
+			}),
+		)
+	})
+
+	test("switching to a non-reasoning model deletes reasoningEffort", () => {
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "high",
+			enableReasoningEffort: true,
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		// Target: DeepSeek V3 (non-reasoning model)
+		const v3Items = screen.getAllByText("DeepSeek V3")
+		fireEvent.click(v3Items[v3Items.length - 1])
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.not.objectContaining({
+				reasoningEffort: "high",
 			}),
 		)
 	})
