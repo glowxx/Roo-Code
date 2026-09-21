@@ -97,7 +97,7 @@ export const AutoApproveToggle = ({ onToggle, state: passedState, ...props }: Au
 				const isExecute = key === "alwaysAllowExecute"
 				const isExecuteLocked = isExecute && !isSafetyConfigured
 				const tooltipContent = isExecuteLocked
-					? "Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach"
+					? t("settings:autoApprove.requiresSafetyModel")
 					: t(descriptionKey || "")
 
 				return (

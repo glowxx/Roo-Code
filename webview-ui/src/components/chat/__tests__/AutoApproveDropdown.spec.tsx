@@ -96,9 +96,9 @@ describe("AutoApproveDropdown", () => {
 		fireEvent.click(screen.getByTestId("auto-approve-dropdown-trigger"))
 
 		expect(
-			screen.getByText(/Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach/),
+			screen.getByText("settings:autoApprove.requiresSafetyModel"),
 		).toBeInTheDocument()
-		const openSettingsBtn = screen.getByText("Otwórz Ustawienia")
+		const openSettingsBtn = screen.getByText("chat:openSettings")
 		expect(openSettingsBtn).toBeInTheDocument()
 
 		fireEvent.click(openSettingsBtn)

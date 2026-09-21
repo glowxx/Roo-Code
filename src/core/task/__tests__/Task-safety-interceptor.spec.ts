@@ -192,7 +192,76 @@ describe("Task safety interceptor", () => {
 		expect((task as any).askResponse).toBeUndefined()
 		expect(saySpy).toHaveBeenCalledWith(
 			"command_safety_warning",
-			JSON.stringify(SAFETY_EVALUATION_FALLBACK_RESULT),
+			expect.stringContaining("Command safety evaluation timed out after 5000ms"),
+		)
+
+		task.handleWebviewAskResponse("yesButtonClicked")
+		const result = await askPromise
+		expect(result.response).toBe("yesButtonClicked")
+	})
+
+	it("blocks auto-approval and emits warning when verifier rejects with network error", async () => {
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockRejectedValue(
+			new Error("Network connection refused: ECONNREFUSED"),
+		)
+		const saySpy = vi.spyOn(task, "say")
+
+		const askPromise = task.ask("command", "npm install")
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith(
+			"command_safety_warning",
+			expect.stringContaining("Network connection refused: ECONNREFUSED"),
+		)
+
+		task.handleWebviewAskResponse("noButtonClicked")
+		const result = await askPromise
+		expect(result.response).toBe("noButtonClicked")
+	})
+
+	it("blocks auto-approval and emits warning when verifier returns malformed response result", async () => {
+		const malformedResult: SafetyEvaluationResult = {
+			isSafe: false,
+			riskLevel: "critical",
+			reason: "Command safety verification failed: Invalid or malformed JSON response from safety auditor model. Manual approval required.",
+		}
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue(malformedResult)
+		const saySpy = vi.spyOn(task, "say")
+
+		const askPromise = task.ask("command", "ls -la")
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith(
+			"command_safety_warning",
+			JSON.stringify(malformedResult),
+		)
+
+		task.handleWebviewAskResponse("yesButtonClicked")
+		const result = await askPromise
+		expect(result.response).toBe("yesButtonClicked")
+	})
+
+	it("blocks auto-approval and emits warning when verifier returns HTTP error fail-closed result", async () => {
+		const httpErrorResult: SafetyEvaluationResult = {
+			isSafe: false,
+			riskLevel: "critical",
+			reason: "Command safety verification failed: HTTP 500: Internal Server Error. Manual approval required.",
+		}
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue(httpErrorResult)
+		const saySpy = vi.spyOn(task, "say")
+
+		const askPromise = task.ask("command", "npm start")
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith(
+			"command_safety_warning",
+			JSON.stringify(httpErrorResult),
 		)
 
 		task.handleWebviewAskResponse("yesButtonClicked")

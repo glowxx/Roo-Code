@@ -322,7 +322,7 @@
 				}
 			}
 		} catch (e) {}
-		return navigator.language?.startsWith("pl") ? "pl" : "en"
+		return "en"
 	})()
 
 	function tDesktop(key, ...args) {

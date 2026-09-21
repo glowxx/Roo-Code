@@ -308,7 +308,7 @@ export const AutoApproveSettings = ({
 							{!isSafetyConfigured && (
 								<span className="flex items-center gap-1 text-xs text-vscode-errorForeground font-normal">
 									<Lock className="size-3.5" />
-									<span>(Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach)</span>
+									<span>({t("settings:autoApprove.requiresSafetyModel")})</span>
 								</span>
 							)}
 						</div>
@@ -318,7 +318,7 @@ export const AutoApproveSettings = ({
 								className="flex items-center gap-2 p-2.5 rounded-lg bg-vscode-inputValidation-warningBackground text-vscode-inputValidation-warningForeground border border-vscode-inputValidation-warningBorder text-xs"
 								data-testid="execute-safety-warning">
 								<Lock className="size-4 shrink-0" />
-								<span>Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach</span>
+								<span>{t("settings:autoApprove.requiresSafetyModel")}</span>
 							</div>
 						)}
 

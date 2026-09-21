@@ -1,10 +1,47 @@
 import { render, screen, fireEvent } from "@/utils/test-utils"
 import { DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE } from "@roo-code/types"
+import { ExtensionStateContext } from "@src/context/ExtensionStateContext"
 import { CommandSafetySettings } from "../CommandSafetySettings"
 
 vi.mock("@/i18n/TranslationContext", () => ({
 	useAppTranslation: () => ({
-		t: (key: string) => key,
+		t: (key: string, params?: Record<string, any>) => {
+			const translations: Record<string, string | ((p: any) => string)> = {
+				"settings:commandSafety.title": "Command Safety Guardrail (Weryfikator Bezpieczeństwa Poleceń)",
+				"settings:commandSafety.enabled": "Włącz weryfikator bezpieczeństwa poleceń (Command Safety Guardrail)",
+				"settings:commandSafety.enabledLabel": "Włącz weryfikator bezpieczeństwa (Enabled)",
+				"settings:commandSafety.enabledDescription":
+					"Automatyczna weryfikacja bezpieczeństwa poleceń terminalowych za pomocą dedykowanego modelu LLM przed ich wykonaniem.",
+				"settings:commandSafety.providerLabel": "Dostawca (Provider)",
+				"settings:commandSafety.providerSelectPlaceholder": "Wybierz dostawcę",
+				"settings:commandSafety.modelIdLabel": "ID Modelu (Model ID)",
+				"settings:commandSafety.modelIdPlaceholder": "np. gpt-4o-mini, claude-3-5-haiku-20241022",
+				"settings:commandSafety.apiKeyLabel": "Klucz API (Opcjonalny)",
+				"settings:commandSafety.apiKeyInheritedBadge": (p) =>
+					`Pobrano z konfiguracji ${p?.provider} (Gotowy)`,
+				"settings:commandSafety.apiKeyInheritedPlaceholder": "(Odziedziczono z profilu głównego)",
+				"settings:commandSafety.apiKeyPlaceholder": "Klucz API (opcjonalnie)",
+				"settings:commandSafety.apiKeyWarning": (p) =>
+					`Brak klucza API dla ${p?.provider}. Wprowadź klucz tutaj lub w sekcji Dostawcy.`,
+				"settings:commandSafety.apiKeyDescription":
+					"Opcjonalny dedykowany klucz API. Jeśli pozostanie pusty, zostanie użyty klucz z głównej konfiguracji wybranego dostawcy.",
+				"settings:commandSafety.promptTemplateLabel": "Szablon promptu weryfikacji",
+				"settings:commandSafety.resetToDefault": "Reset to Default",
+				"settings:commandSafety.promptTemplateDescription":
+					"Szablon instrukcji weryfikującej polecenie. Użyj {{command}} jako zmiennej dla polecenia.",
+				"settings:commandSafetyCombobox.recommendedHeader": "Rekomendowane modele audytowe (Szybkie i ekonomiczne)",
+				"settings:commandSafetyCombobox.otherHeader": "Pozostałe modele",
+				"settings:commandSafetyCombobox.recommendedBadge": "Polecany",
+				"settings:commandSafetyCombobox.useCustomId": "Użyj niestandardowego ID:",
+				"settings:commandSafetyCombobox.noModels": "Brak dostępnych modeli",
+				"settings:commandSafetyCombobox.placeholder": "np. gpt-4o-mini, claude-3-5-haiku-20241022",
+			}
+			const val = translations[key]
+			if (typeof val === "function") {
+				return val(params)
+			}
+			return val || key
+		},
 	}),
 }))
 
@@ -357,6 +394,7 @@ describe("CommandSafetySettings", () => {
 			expect(screen.getByTestId("command-safety-model-option-deepseek/deepseek-chat")).toBeInTheDocument()
 			expect(screen.getByTestId("command-safety-model-option-google/gemini-2.5-flash")).toBeInTheDocument()
 			expect(screen.getByTestId("command-safety-model-option-openai/gpt-5-mini")).toBeInTheDocument()
+			expect(screen.getByTestId("command-safety-model-option-openai/gpt-4o-mini")).toBeInTheDocument()
 
 			// Gemini
 			rerender(
@@ -413,6 +451,128 @@ describe("CommandSafetySettings", () => {
 					modelId: "custom-safety-guardrail-v1",
 				}),
 			)
+		})
+
+		test("confirms custom ID with Enter key directly when typed", () => {
+			render(
+				<CommandSafetySettings
+					commandSafetyConfig={{
+						enabled: true,
+						provider: "openai",
+						modelId: "",
+					}}
+					onChange={mockOnChange}
+				/>,
+			)
+
+			const modelIdInput = screen.getByTestId("command-safety-model-id-input")
+			fireEvent.change(modelIdInput, { target: { value: "custom-safety-guardrail-v2" } })
+			mockOnChange.mockClear()
+
+			fireEvent.keyDown(modelIdInput, { key: "Enter", code: "Enter" })
+
+			expect(mockOnChange).toHaveBeenCalledWith(
+				expect.objectContaining({
+					modelId: "custom-safety-guardrail-v2",
+				}),
+			)
+		})
+
+		test("confirms highlighted custom ID with ArrowDown and Enter key", () => {
+			render(
+				<CommandSafetySettings
+					commandSafetyConfig={{
+						enabled: true,
+						provider: "openai",
+						modelId: "",
+					}}
+					onChange={mockOnChange}
+				/>,
+			)
+
+			const modelIdInput = screen.getByTestId("command-safety-model-id-input")
+			fireEvent.change(modelIdInput, { target: { value: "custom-safety-guardrail-v3" } })
+			mockOnChange.mockClear()
+
+			// Arrow down to highlight the custom option
+			fireEvent.keyDown(modelIdInput, { key: "ArrowDown", code: "ArrowDown" })
+			fireEvent.keyDown(modelIdInput, { key: "Enter", code: "Enter" })
+
+			expect(mockOnChange).toHaveBeenCalledWith(
+				expect.objectContaining({
+					modelId: "custom-safety-guardrail-v3",
+				}),
+			)
+		})
+
+		test("aggregates static models and dynamic models from ExtensionStateContext for openai, xkiro, and openrouter", () => {
+			const mockState = {
+				openAiModels: ["dynamic-api-model-x"],
+				openAiModelInfos: {
+					"info-model-y": { maxTokens: 4096 },
+				},
+				routerModels: {
+					openrouter: {
+						"openrouter/dynamic-model-z": { maxTokens: 8192 },
+					},
+				},
+			}
+
+			// Test OpenAI provider with dynamic models
+			const { rerender } = render(
+				<ExtensionStateContext.Provider value={mockState as any}>
+					<CommandSafetySettings
+						commandSafetyConfig={{
+							enabled: true,
+							provider: "openai",
+							modelId: "",
+						}}
+						onChange={mockOnChange}
+					/>
+				</ExtensionStateContext.Provider>,
+			)
+
+			fireEvent.click(screen.getByTestId("command-safety-model-combobox-toggle"))
+
+			// Check static OpenAI models
+			expect(screen.getByTestId("command-safety-model-option-gpt-4o")).toBeInTheDocument()
+			// Check dynamic models
+			expect(screen.getByTestId("command-safety-model-option-dynamic-api-model-x")).toBeInTheDocument()
+			expect(screen.getByTestId("command-safety-model-option-info-model-y")).toBeInTheDocument()
+
+			// Test xKiro provider with dynamic models
+			rerender(
+				<ExtensionStateContext.Provider value={mockState as any}>
+					<CommandSafetySettings
+						commandSafetyConfig={{
+							enabled: true,
+							provider: "xkiro",
+							modelId: "",
+						}}
+						onChange={mockOnChange}
+					/>
+				</ExtensionStateContext.Provider>,
+			)
+
+			// Check dynamic models present in xkiro as well
+			expect(screen.getByTestId("command-safety-model-option-dynamic-api-model-x")).toBeInTheDocument()
+			expect(screen.getByTestId("command-safety-model-option-info-model-y")).toBeInTheDocument()
+
+			// Test OpenRouter provider with dynamic models
+			rerender(
+				<ExtensionStateContext.Provider value={mockState as any}>
+					<CommandSafetySettings
+						commandSafetyConfig={{
+							enabled: true,
+							provider: "openrouter",
+							modelId: "",
+						}}
+						onChange={mockOnChange}
+					/>
+				</ExtensionStateContext.Provider>,
+			)
+
+			expect(screen.getByTestId("command-safety-model-option-openrouter/dynamic-model-z")).toBeInTheDocument()
 		})
 	})
 })

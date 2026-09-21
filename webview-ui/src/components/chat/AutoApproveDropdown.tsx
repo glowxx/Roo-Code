@@ -228,7 +228,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 
 							const tooltipContent = isExecuteLocked ? (
 								<div className="flex flex-col gap-1.5 p-1 max-w-[240px]" data-testid="execute-safety-tooltip">
-									<span>Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach</span>
+									<span>{t("settings:autoApprove.requiresSafetyModel")}</span>
 									<button
 										type="button"
 										className="text-xs text-vscode-textLink-foreground hover:underline text-left cursor-pointer p-0 bg-transparent border-0 flex items-center gap-1"
@@ -236,7 +236,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 											e.stopPropagation()
 											handleOpenSettings()
 										}}>
-										Otwórz Ustawienia
+										{t("chat:openSettings")}
 									</button>
 								</div>
 							) : (

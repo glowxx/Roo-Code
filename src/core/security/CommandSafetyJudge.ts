@@ -10,11 +10,17 @@ import type {
 import { resolveProviderApiKey } from "@roo-code/types"
 import { buildSafetyPrompt } from "./safetyPromptTemplate"
 
-export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = {
-	isSafe: false,
-	riskLevel: "critical",
-	reason: "Command safety evaluation failed (timeout or network error). Auto-execution blocked defensively.",
+export function createFailClosedResult(detail: string): SafetyEvaluationResult {
+	return {
+		isSafe: false,
+		riskLevel: "critical",
+		reason: `Command safety verification failed: ${detail}. Manual approval required.`,
+	}
 }
+
+export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createFailClosedResult(
+	"Command safety evaluation failed (timeout or network error). Auto-execution blocked defensively"
+)
 
 export interface EvaluateSafetyOptions {
 	command: string
@@ -57,7 +63,7 @@ export class CommandSafetyJudge {
 	 */
 	public parseSafetyResponse(rawResponse: string): SafetyEvaluationResult {
 		if (!rawResponse || typeof rawResponse !== "string" || rawResponse.trim().length === 0) {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+			return createFailClosedResult("Empty or whitespace response from safety auditor model")
 		}
 
 		const trimmed = rawResponse.trim()
@@ -93,12 +99,12 @@ export class CommandSafetyJudge {
 		}
 
 		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+			return createFailClosedResult("Invalid or malformed JSON response from safety auditor model")
 		}
 
 		// Validate isSafe (boolean)
 		if (typeof parsedObject.isSafe !== "boolean") {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+			return createFailClosedResult("Missing or non-boolean 'isSafe' field in safety auditor response")
 		}
 
 		// Validate riskLevel ("safe" | "low" | "medium" | "high" | "critical")
@@ -106,12 +112,14 @@ export class CommandSafetyJudge {
 		const riskLevel =
 			typeof parsedObject.riskLevel === "string" ? parsedObject.riskLevel.toLowerCase().trim() : ""
 		if (!validRiskLevels.includes(riskLevel as CommandSafetyRiskLevel)) {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+			return createFailClosedResult(
+				`Invalid 'riskLevel' field in safety auditor response: '${parsedObject.riskLevel}'`
+			)
 		}
 
 		// Validate reason (string)
 		if (typeof parsedObject.reason !== "string" || parsedObject.reason.trim().length === 0) {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+			return createFailClosedResult("Missing or empty 'reason' field in safety auditor response")
 		}
 
 		return {
@@ -139,17 +147,18 @@ export class CommandSafetyJudge {
 		config,
 		state,
 	}: EvaluateSafetyOptions): Promise<SafetyEvaluationResult> {
+		let abortController: AbortController | undefined
 		try {
 			const effectiveConfig = config || state?.commandSafetyConfig
 			if (!effectiveConfig) {
-				return SAFETY_EVALUATION_FALLBACK_RESULT
+				return createFailClosedResult("Command safety configuration is missing")
 			}
 
 			const provider = effectiveConfig.provider?.toLowerCase().trim()
 			const modelId = effectiveConfig.modelId?.trim()
 
 			if (!provider || !modelId) {
-				return SAFETY_EVALUATION_FALLBACK_RESULT
+				return createFailClosedResult("Model configuration missing (provider or modelId)")
 			}
 
 			const apiKey =
@@ -157,7 +166,7 @@ export class CommandSafetyJudge {
 
 			const isLocalProvider = provider === "ollama" || provider === "lmstudio"
 			if (!apiKey && !isLocalProvider) {
-				return SAFETY_EVALUATION_FALLBACK_RESULT
+				return createFailClosedResult(`API key missing for provider '${provider}'`)
 			}
 
 			const { systemPrompt, userPrompt } = buildSafetyPrompt({
@@ -167,13 +176,14 @@ export class CommandSafetyJudge {
 				customTemplate: effectiveConfig.customPromptTemplate,
 			})
 
-			const abortController = new AbortController()
+			abortController = new AbortController()
 			let timeoutId: ReturnType<typeof setTimeout> | undefined
 
 			const timeoutPromise = new Promise<never>((_, reject) => {
 				timeoutId = setTimeout(() => {
-					abortController.abort(new Error("Command safety evaluation timed out after 5000ms"))
-					reject(new Error("Command safety evaluation timed out after 5000ms"))
+					const timeoutError = new Error(`Command safety evaluation timed out after ${this.timeoutMs}ms`)
+					abortController?.abort(timeoutError)
+					reject(timeoutError)
 				}, this.timeoutMs)
 			})
 
@@ -201,8 +211,38 @@ export class CommandSafetyJudge {
 			}
 
 			return this.parseSafetyResponse(rawResponse)
-		} catch (error) {
-			return SAFETY_EVALUATION_FALLBACK_RESULT
+		} catch (error: any) {
+			const isTimeout =
+				abortController?.signal.aborted ||
+				(error instanceof Error &&
+					(error.message.includes("timed out") ||
+						error.message === "Aborted" ||
+						error.name === "AbortError" ||
+						error.name === "TimeoutError")) ||
+				error?.message?.includes("timed out") ||
+				error?.name === "AbortError"
+
+			if (isTimeout) {
+				return createFailClosedResult(`Command safety evaluation timed out after ${this.timeoutMs}ms`)
+			}
+
+			const status = error?.status || error?.statusCode || error?.response?.status
+			const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+
+			if (status) {
+				const statusDetail = message
+					? message.includes(String(status))
+						? message
+						: `HTTP ${status}: ${message}`
+					: `HTTP ${status}`
+				return createFailClosedResult(statusDetail)
+			}
+
+			if (message) {
+				return createFailClosedResult(message)
+			}
+
+			return createFailClosedResult("Unknown error during command safety evaluation")
 		}
 	}
 

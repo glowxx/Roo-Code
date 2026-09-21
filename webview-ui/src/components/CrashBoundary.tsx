@@ -59,16 +59,6 @@ export function resolveCrashLanguage(explicitLanguage?: string): CrashLanguage {
 		// Ignore storage errors
 	}
 
-	try {
-		if (typeof navigator !== "undefined" && typeof navigator.language === "string") {
-			if (navigator.language.toLowerCase().startsWith("pl")) {
-				return "pl"
-			}
-		}
-	} catch {
-		// Ignore navigator errors
-	}
-
 	return "en"
 }
 

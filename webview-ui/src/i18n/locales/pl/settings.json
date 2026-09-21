@@ -304,7 +304,35 @@
 		},
 		"maxLimits": {
 			"description": "Automatycznie składaj zapytania do tych limitów przed poproszeniem o zgodę na kontynuowanie."
-		}
+		},
+		"requiresSafetyModel": "Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach"
+	},
+	"commandSafety": {
+		"title": "Weryfikator Bezpieczeństwa Poleceń (Command Safety Guardrail)",
+		"enabled": "Włącz weryfikator bezpieczeństwa poleceń (Command Safety Guardrail)",
+		"enabledLabel": "Włącz weryfikator bezpieczeństwa (Enabled)",
+		"enabledDescription": "Automatyczna weryfikacja bezpieczeństwa poleceń terminalowych za pomocą dedykowanego modelu LLM przed ich wykonaniem.",
+		"providerLabel": "Dostawca modelu bezpieczeństwa (Safety Model Provider)",
+		"providerSelectPlaceholder": "Wybierz dostawcę",
+		"modelIdLabel": "ID Modelu Bezpieczeństwa (Model ID)",
+		"modelIdPlaceholder": "np. gpt-4o-mini, claude-3-5-haiku-20241022",
+		"apiKeyLabel": "Klucz API (Opcjonalny)",
+		"apiKeyPlaceholder": "Klucz API (opcjonalnie)",
+		"apiKeyInheritedPlaceholder": "(Odziedziczono z profilu głównego)",
+		"apiKeyInheritedBadge": "Pobrano z konfiguracji {{provider}} (Gotowy)",
+		"apiKeyWarning": "Brak klucza API dla {{provider}}. Wprowadź klucz tutaj lub w sekcji Dostawcy.",
+		"apiKeyDescription": "Opcjonalny dedykowany klucz API. Jeśli pozostanie pusty, zostanie użyty klucz z głównej konfiguracji wybranego dostawcy.",
+		"promptTemplateLabel": "Szablon promptu weryfikacji",
+		"promptTemplateDescription": "Szablon instrukcji weryfikującej polecenie. Użyj {{command}} jako zmiennej dla polecenia.",
+		"resetToDefault": "Przywróć domyślny"
+	},
+	"commandSafetyCombobox": {
+		"recommendedHeader": "Rekomendowane modele audytowe (Szybkie i ekonomiczne)",
+		"otherHeader": "Pozostałe modele",
+		"recommendedBadge": "Polecany",
+		"useCustomId": "Użyj niestandardowego ID:",
+		"noModels": "Brak dostępnych modeli",
+		"placeholder": "np. gpt-4o-mini, claude-3-5-haiku-20241022"
 	},
 	"providers": {
 		"providerDocumentation": "Dokumentacja {{provider}}",

@@ -1350,15 +1350,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							state,
 						})
 					} catch (error) {
-						evaluation = SAFETY_EVALUATION_FALLBACK_RESULT
+						const errorDetail = error instanceof Error ? error.message : String(error)
+						evaluation = {
+							isSafe: false,
+							riskLevel: "critical",
+							reason: `Command safety verification failed: ${errorDetail || "Unknown error"}. Manual approval required.`,
+						}
 					}
 
 					if (
+						!evaluation ||
 						evaluation.isSafe === false ||
 						["medium", "high", "critical"].includes(evaluation.riskLevel)
 					) {
 						approval = { decision: "ask" }
-						await this.say("command_safety_warning", JSON.stringify(evaluation))
+						await this.say("command_safety_warning", JSON.stringify(evaluation || SAFETY_EVALUATION_FALLBACK_RESULT))
 						this.lastMessageTs = askTs
 					} else if (
 						evaluation.isSafe === true &&
@@ -1367,7 +1373,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						this.approveAsk()
 					} else {
 						approval = { decision: "ask" }
-						await this.say("command_safety_warning", JSON.stringify(evaluation))
+						await this.say("command_safety_warning", JSON.stringify(evaluation || SAFETY_EVALUATION_FALLBACK_RESULT))
 						this.lastMessageTs = askTs
 					}
 				}

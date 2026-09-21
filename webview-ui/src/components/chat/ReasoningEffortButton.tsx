@@ -11,6 +11,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useSelectedModel } from "@/components/ui/hooks/useSelectedModel"
 import { useRooPortal } from "@/components/ui/hooks/useRooPortal"
 import { Popover, PopoverContent, PopoverTrigger, StandardTooltip } from "@/components/ui"
+import { useAppTranslation } from "@/i18n/TranslationContext"
 import { cn } from "@/lib/utils"
 import { vscode } from "@/utils/vscode"
 import { isReasoningModel } from "./ModelSelector"
@@ -44,8 +45,32 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 	modelId: propModelId,
 	modelInfo: propModelInfo,
 }) => {
+	const { t } = useAppTranslation()
 	const [open, setOpen] = useState(false)
 	const portalContainer = useRooPortal("roo-portal")
+
+	const getEffortLabel = useCallback(
+		(level: string) => {
+			const lower = level.toLowerCase()
+			switch (lower) {
+				case "off":
+					return t("chat:effort.off")
+				case "minimal":
+					return t("chat:effort.minimal")
+				case "low":
+					return t("chat:effort.low")
+				case "medium":
+					return t("chat:effort.medium")
+				case "high":
+					return t("chat:effort.high")
+				case "xhigh":
+					return t("chat:effort.xhigh")
+				default:
+					return level
+			}
+		},
+		[t],
+	)
 
 	const {
 		apiConfiguration,
@@ -162,7 +187,7 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 
 	return (
 		<Popover open={open} onOpenChange={setOpen} data-testid="reasoning-effort-root">
-			<StandardTooltip content={`Reasoning Effort: ${currentEffort}`}>
+			<StandardTooltip content={t("chat:effort.tooltip", { level: getEffortLabel(currentEffort) })}>
 				<PopoverTrigger
 					disabled={disabled}
 					data-testid="reasoning-effort-trigger"
@@ -176,7 +201,7 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 						className,
 					)}>
 					<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
-					<span className="font-medium">Effort: {currentEffort}</span>
+					<span className="font-medium">{t("chat:effort.label", { level: getEffortLabel(currentEffort) })}</span>
 					<ChevronDown className="size-3 text-vscode-descriptionForeground opacity-60 flex-shrink-0 -mr-0.5" />
 				</PopoverTrigger>
 			</StandardTooltip>
@@ -190,7 +215,7 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 				<div className="flex flex-col gap-0.5" data-testid="reasoning-effort-section">
 					<div className="px-2 py-1 text-[11px] font-semibold text-vscode-descriptionForeground flex items-center gap-1.5 border-b border-vscode-dropdown-border/50 pb-1 mb-0.5 select-none">
 						<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
-						<span>Reasoning Effort</span>
+						<span>{t("chat:effort.title")}</span>
 					</div>
 					{effortOptions.map((effort) => {
 						const isSelected = currentEffort.toLowerCase() === effort.toLowerCase()
@@ -205,14 +230,14 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 									setOpen(false)
 								}}
 								className={cn(
-									"w-full flex items-center justify-between px-2 py-1.5 text-xs rounded transition-all cursor-pointer text-left font-medium select-none",
+									"w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded transition-all cursor-pointer text-left font-medium select-none",
 									isSelected
 										? effort === "Off"
 											? "bg-vscode-button-secondaryBackground text-vscode-foreground font-semibold shadow-xs"
 											: "bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/35 shadow-xs"
 										: "text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-vscode-toolbar-hoverBackground/60 border border-transparent",
 								)}>
-								<span>{effort}</span>
+								<span>{getEffortLabel(effort)}</span>
 								{isSelected && <Check className="size-3.5 text-current flex-shrink-0" />}
 							</button>
 						)

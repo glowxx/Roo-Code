@@ -17,6 +17,7 @@ import {
 	SelectValue,
 	Textarea,
 } from "@src/components/ui"
+import { useAppTranslation } from "@/i18n/TranslationContext"
 import { SectionHeader } from "./SectionHeader"
 import { Section } from "./Section"
 import { SearchableSetting } from "./SearchableSetting"
@@ -43,6 +44,8 @@ export const CommandSafetySettings = ({
 	className,
 	...props
 }: CommandSafetySettingsProps) => {
+	const { t } = useAppTranslation()
+
 	const config: CommandSafetyConfig = useMemo(
 		() =>
 			commandSafetyConfig ?? {
@@ -75,7 +78,7 @@ export const CommandSafetySettings = ({
 			<SectionHeader>
 				<div className="flex items-center gap-2">
 					<ShieldCheck className="size-5" />
-					<span>Command Safety Guardrail (Weryfikator Bezpieczeństwa Poleceń)</span>
+					<span>{t("settings:commandSafety.title")}</span>
 				</div>
 			</SectionHeader>
 
@@ -85,15 +88,15 @@ export const CommandSafetySettings = ({
 					<SearchableSetting
 						settingId="command-safety-enabled"
 						section="autoApprove"
-						label="Włącz weryfikator bezpieczeństwa poleceń (Command Safety Guardrail)">
+						label={t("settings:commandSafety.enabled")}>
 						<VSCodeCheckbox
 							checked={config.enabled}
 							onChange={(e: any) => updateField("enabled", e.target.checked)}
 							data-testid="command-safety-enabled-toggle">
-							<span className="font-medium">Włącz weryfikator bezpieczeństwa (Enabled)</span>
+							<span className="font-medium">{t("settings:commandSafety.enabledLabel")}</span>
 						</VSCodeCheckbox>
 						<div className="text-vscode-descriptionForeground text-xs mt-1">
-							Automatyczna weryfikacja bezpieczeństwa poleceń terminalowych za pomocą dedykowanego modelu LLM przed ich wykonaniem.
+							{t("settings:commandSafety.enabledDescription")}
 						</div>
 					</SearchableSetting>
 
@@ -101,13 +104,13 @@ export const CommandSafetySettings = ({
 					<SearchableSetting
 						settingId="command-safety-provider"
 						section="autoApprove"
-						label="Dostawca modelu bezpieczeństwa (Safety Model Provider)">
-						<label className="block text-sm font-medium mb-1">Dostawca (Provider)</label>
+						label={t("settings:commandSafety.providerLabel")}>
+						<label className="block text-sm font-medium mb-1">{t("settings:commandSafety.providerLabel")}</label>
 						<Select
 							value={config.provider || "openai"}
 							onValueChange={(value) => updateField("provider", value)}>
 							<SelectTrigger className="w-full" data-testid="command-safety-provider-select">
-								<SelectValue placeholder="Wybierz dostawcę" />
+								<SelectValue placeholder={t("settings:commandSafety.providerSelectPlaceholder")} />
 							</SelectTrigger>
 							<SelectContent>
 								<SelectGroup>
@@ -125,13 +128,13 @@ export const CommandSafetySettings = ({
 					<SearchableSetting
 						settingId="command-safety-model-id"
 						section="autoApprove"
-						label="ID Modelu Bezpieczeństwa (Model ID)">
-						<label className="block text-sm font-medium mb-1">ID Modelu (Model ID)</label>
+						label={t("settings:commandSafety.modelIdLabel")}>
+						<label className="block text-sm font-medium mb-1">{t("settings:commandSafety.modelIdLabel")}</label>
 						<CommandSafetyModelCombobox
 							provider={config.provider || "openai"}
 							value={config.modelId || ""}
 							onChange={(modelId) => updateField("modelId", modelId)}
-							placeholder="np. gpt-4o-mini, claude-3-5-haiku-20241022"
+							placeholder={t("settings:commandSafety.modelIdPlaceholder")}
 							data-testid="command-safety-model-id-input"
 						/>
 					</SearchableSetting>
@@ -140,16 +143,16 @@ export const CommandSafetySettings = ({
 					<SearchableSetting
 						settingId="command-safety-api-key"
 						section="autoApprove"
-						label="Dedykowany Klucz API (Dedicated API Key)">
+						label={t("settings:commandSafety.apiKeyLabel")}>
 						<div className="flex items-center justify-between mb-1">
-							<label className="block text-sm font-medium">Klucz API (Opcjonalny)</label>
+							<label className="block text-sm font-medium">{t("settings:commandSafety.apiKeyLabel")}</label>
 							{!hasDedicatedApiKey && hasInheritedApiKey && (
 								<Badge
 									variant="outline"
 									className="flex items-center gap-1.5 text-xs text-green-500 border-green-500/30 bg-green-500/10 font-normal"
 									data-testid="command-safety-inherited-badge">
 									<Check className="size-3 text-green-500" />
-									<span>{`Pobrano z konfiguracji ${providerDisplayName} (Gotowy)`}</span>
+									<span>{t("settings:commandSafety.apiKeyInheritedBadge", { provider: providerDisplayName })}</span>
 								</Badge>
 							)}
 						</div>
@@ -159,8 +162,8 @@ export const CommandSafetySettings = ({
 							onChange={(e) => updateField("apiKey", e.target.value)}
 							placeholder={
 								!hasDedicatedApiKey && hasInheritedApiKey
-									? "(Odziedziczono z profilu głównego)"
-									: "Klucz API (opcjonalnie)"
+									? t("settings:commandSafety.apiKeyInheritedPlaceholder")
+									: t("settings:commandSafety.apiKeyPlaceholder")
 							}
 							className="w-full"
 							data-testid="command-safety-api-key-input"
@@ -170,11 +173,11 @@ export const CommandSafetySettings = ({
 								className="flex items-center gap-1.5 text-amber-500 text-xs mt-1.5"
 								data-testid="command-safety-api-key-warning">
 								<AlertTriangle className="size-3.5 shrink-0" />
-								<span>{`Brak klucza API dla ${providerDisplayName}. Wprowadź klucz tutaj lub w sekcji Dostawcy.`}</span>
+								<span>{t("settings:commandSafety.apiKeyWarning", { provider: providerDisplayName })}</span>
 							</div>
 						)}
 						<div className="text-vscode-descriptionForeground text-xs mt-1">
-							Opcjonalny dedykowany klucz API. Jeśli pozostanie pusty, zostanie użyty klucz z głównej konfiguracji wybranego dostawcy.
+							{t("settings:commandSafety.apiKeyDescription")}
 						</div>
 					</SearchableSetting>
 
@@ -182,9 +185,9 @@ export const CommandSafetySettings = ({
 					<SearchableSetting
 						settingId="command-safety-prompt-template"
 						section="autoApprove"
-						label="Szablon Promptu (Custom Prompt Template)">
+						label={t("settings:commandSafety.promptTemplateLabel")}>
 						<div className="flex items-center justify-between mb-1">
-							<label className="text-sm font-medium">Szablon promptu weryfikacji</label>
+							<label className="text-sm font-medium">{t("settings:commandSafety.promptTemplateLabel")}</label>
 							<Button
 								type="button"
 								variant="secondary"
@@ -195,7 +198,7 @@ export const CommandSafetySettings = ({
 								className="h-7 text-xs flex items-center gap-1"
 								data-testid="command-safety-reset-prompt-button">
 								<RotateCcw className="size-3" />
-								<span>Reset to Default</span>
+								<span>{t("settings:commandSafety.resetToDefault")}</span>
 							</Button>
 						</div>
 						<Textarea
@@ -210,7 +213,7 @@ export const CommandSafetySettings = ({
 							data-testid="command-safety-prompt-template-textarea"
 						/>
 						<div className="text-vscode-descriptionForeground text-xs mt-1">
-							Szablon instrukcji weryfikującej polecenie. Użyj &#123;&#123;command&#125;&#125; jako zmiennej dla polecenia.
+							{t("settings:commandSafety.promptTemplateDescription")}
 						</div>
 					</SearchableSetting>
 				</div>

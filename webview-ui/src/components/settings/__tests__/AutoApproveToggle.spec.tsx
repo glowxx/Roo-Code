@@ -122,7 +122,7 @@ describe("AutoApproveToggle", () => {
 		expect(executeButton).toBeDisabled()
 		expect(screen.getByTestId("execute-lock-icon")).toBeInTheDocument()
 		expect(
-			screen.getByText(/Wymaga skonfigurowania modelu weryfikacji bezpieczeństwa w Ustawieniach/),
+			screen.getByText("settings:autoApprove.requiresSafetyModel"),
 		).toBeInTheDocument()
 
 		fireEvent.click(executeButton)

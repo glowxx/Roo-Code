@@ -204,51 +204,88 @@ Please confirm before running.`
 
 	describe("malformed JSON fallback (isSafe: false)", () => {
 		it("returns fallback on empty or whitespace response", () => {
-			expect(judge.parseSafetyResponse("")).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
-			expect(judge.parseSafetyResponse("   ")).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
-			expect(judge.parseSafetyResponse(null as any)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res1 = judge.parseSafetyResponse("")
+			expect(res1.isSafe).toBe(false)
+			expect(res1.riskLevel).toBe("critical")
+			expect(res1.reason).toContain("Command safety verification failed:")
+
+			const res2 = judge.parseSafetyResponse("   ")
+			expect(res2.isSafe).toBe(false)
+			expect(res2.riskLevel).toBe("critical")
+
+			const res3 = judge.parseSafetyResponse(null as any)
+			expect(res3.isSafe).toBe(false)
+			expect(res3.riskLevel).toBe("critical")
 		})
 
 		it("returns fallback on non-JSON plain text", () => {
 			const raw = "I think this command looks safe to run."
-			expect(judge.parseSafetyResponse(raw)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res = judge.parseSafetyResponse(raw)
+			expect(res.isSafe).toBe(false)
+			expect(res.riskLevel).toBe("critical")
+			expect(res.reason).toContain("Command safety verification failed:")
 		})
 
 		it("returns fallback on broken syntax JSON", () => {
 			const raw = '{"isSafe": true, "riskLevel": "safe", "reason":'
-			expect(judge.parseSafetyResponse(raw)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res = judge.parseSafetyResponse(raw)
+			expect(res.isSafe).toBe(false)
+			expect(res.riskLevel).toBe("critical")
+			expect(res.reason).toContain("Command safety verification failed:")
 		})
 
 		it("returns fallback when isSafe is missing or non-boolean", () => {
 			const noIsSafe = JSON.stringify({ riskLevel: "safe", reason: "ok" })
-			expect(judge.parseSafetyResponse(noIsSafe)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res1 = judge.parseSafetyResponse(noIsSafe)
+			expect(res1.isSafe).toBe(false)
+			expect(res1.riskLevel).toBe("critical")
+			expect(res1.reason).toContain("Missing or non-boolean 'isSafe'")
 
 			const stringIsSafe = JSON.stringify({ isSafe: "true", riskLevel: "safe", reason: "ok" })
-			expect(judge.parseSafetyResponse(stringIsSafe)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res2 = judge.parseSafetyResponse(stringIsSafe)
+			expect(res2.isSafe).toBe(false)
+			expect(res2.riskLevel).toBe("critical")
+			expect(res2.reason).toContain("Missing or non-boolean 'isSafe'")
 		})
 
 		it("returns fallback when riskLevel is invalid", () => {
 			const invalidRisk = JSON.stringify({ isSafe: true, riskLevel: "harmless", reason: "ok" })
-			expect(judge.parseSafetyResponse(invalidRisk)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res1 = judge.parseSafetyResponse(invalidRisk)
+			expect(res1.isSafe).toBe(false)
+			expect(res1.riskLevel).toBe("critical")
+			expect(res1.reason).toContain("Invalid 'riskLevel'")
 
 			const missingRisk = JSON.stringify({ isSafe: true, reason: "ok" })
-			expect(judge.parseSafetyResponse(missingRisk)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res2 = judge.parseSafetyResponse(missingRisk)
+			expect(res2.isSafe).toBe(false)
+			expect(res2.riskLevel).toBe("critical")
+			expect(res2.reason).toContain("Invalid 'riskLevel'")
 		})
 
 		it("returns fallback when reason is missing or empty", () => {
 			const emptyReason = JSON.stringify({ isSafe: true, riskLevel: "safe", reason: "" })
-			expect(judge.parseSafetyResponse(emptyReason)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res1 = judge.parseSafetyResponse(emptyReason)
+			expect(res1.isSafe).toBe(false)
+			expect(res1.riskLevel).toBe("critical")
+			expect(res1.reason).toContain("Missing or empty 'reason'")
 
 			const whitespaceReason = JSON.stringify({ isSafe: true, riskLevel: "safe", reason: "   " })
-			expect(judge.parseSafetyResponse(whitespaceReason)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res2 = judge.parseSafetyResponse(whitespaceReason)
+			expect(res2.isSafe).toBe(false)
+			expect(res2.riskLevel).toBe("critical")
 
 			const missingReason = JSON.stringify({ isSafe: true, riskLevel: "safe" })
-			expect(judge.parseSafetyResponse(missingReason)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res3 = judge.parseSafetyResponse(missingReason)
+			expect(res3.isSafe).toBe(false)
+			expect(res3.riskLevel).toBe("critical")
 		})
 
 		it("returns fallback when root is JSON array", () => {
 			const rawArray = JSON.stringify([{ isSafe: true, riskLevel: "safe", reason: "ok" }])
-			expect(judge.parseSafetyResponse(rawArray)).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+			const res = judge.parseSafetyResponse(rawArray)
+			expect(res.isSafe).toBe(false)
+			expect(res.riskLevel).toBe("critical")
+			expect(res.reason).toContain("Command safety verification failed:")
 		})
 	})
 })
@@ -328,10 +365,29 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: validConfig,
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
 		expect(result.isSafe).toBe(false)
 		expect(result.riskLevel).toBe("critical")
-		expect(result.reason).toContain("Command safety evaluation failed (timeout or network error)")
+		expect(result.reason).toContain("Network connection refused: ECONNREFUSED")
+		expect(result.reason).toContain("Command safety verification failed:")
+	})
+
+	it("returns fail-closed on network errors (DNS, connection refusal)", async () => {
+		const judgeDns = new CommandSafetyJudge({
+			callProviderOverride: async () => {
+				throw new Error("getaddrinfo ENOTFOUND api.openai.com")
+			},
+		})
+
+		const resultDns = await judgeDns.evaluate({
+			command: "npm test",
+			cwd: "/repo",
+			config: validConfig,
+		})
+
+		expect(resultDns.isSafe).toBe(false)
+		expect(resultDns.riskLevel).toBe("critical")
+		expect(resultDns.reason).toContain("getaddrinfo ENOTFOUND api.openai.com")
+		expect(resultDns.reason).toContain("Command safety verification failed:")
 	})
 
 	it("returns fallback result when provider returns malformed JSON", async () => {
@@ -345,7 +401,105 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: validConfig,
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Command safety verification failed:")
+		expect(result.reason).toContain("Invalid or malformed JSON")
+	})
+
+	it("returns fail-closed on empty response from provider", async () => {
+		const judge = new CommandSafetyJudge({
+			callProviderOverride: async () => "",
+		})
+
+		const result = await judge.evaluate({
+			command: "ls -la",
+			config: validConfig,
+		})
+
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Empty or whitespace response")
+	})
+
+	it("returns fail-closed on HTTP 401 Unauthorized", async () => {
+		const judge = new CommandSafetyJudge({
+			callProviderOverride: async () => {
+				const error: any = new Error("Incorrect API key provided")
+				error.status = 401
+				throw error
+			},
+		})
+
+		const result = await judge.evaluate({
+			command: "rm -rf tmp",
+			config: validConfig,
+		})
+
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("401")
+		expect(result.reason).toContain("Incorrect API key provided")
+	})
+
+	it("returns fail-closed on HTTP 403 Forbidden", async () => {
+		const judge = new CommandSafetyJudge({
+			callProviderOverride: async () => {
+				const error: any = new Error("Access denied")
+				error.status = 403
+				throw error
+			},
+		})
+
+		const result = await judge.evaluate({
+			command: "rm -rf tmp",
+			config: validConfig,
+		})
+
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("403")
+		expect(result.reason).toContain("Access denied")
+	})
+
+	it("returns fail-closed on HTTP 429 Rate Limit Exceeded", async () => {
+		const judge = new CommandSafetyJudge({
+			callProviderOverride: async () => {
+				const error: any = new Error("Rate limit reached")
+				error.status = 429
+				throw error
+			},
+		})
+
+		const result = await judge.evaluate({
+			command: "echo test",
+			config: validConfig,
+		})
+
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("429")
+		expect(result.reason).toContain("Rate limit reached")
+	})
+
+	it("returns fail-closed on HTTP 500 Internal Server Error", async () => {
+		const judge = new CommandSafetyJudge({
+			callProviderOverride: async () => {
+				const error: any = new Error("Internal Server Error")
+				error.status = 500
+				throw error
+			},
+		})
+
+		const result = await judge.evaluate({
+			command: "echo test",
+			config: validConfig,
+		})
+
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("500")
+		expect(result.reason).toContain("Internal Server Error")
 	})
 
 	it("returns fallback result on API timeout (>5s)", async () => {
@@ -372,9 +526,9 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: validConfig,
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
 		expect(result.isSafe).toBe(false)
 		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Command safety evaluation timed out after 50ms")
 	})
 
 	it("uses default 5000ms timeout with fake timers", async () => {
@@ -399,7 +553,9 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		await vi.advanceTimersByTimeAsync(5001)
 
 		const result = await evalPromise
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Command safety evaluation timed out after 5000ms")
 	})
 
 	it("returns fallback result when config is missing", async () => {
@@ -408,7 +564,9 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			command: "git status",
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Command safety configuration is missing")
 	})
 
 	it("returns fallback result when provider or modelId is missing", async () => {
@@ -418,7 +576,9 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: { enabled: true, provider: "", modelId: "" },
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("Model configuration missing (provider or modelId)")
 	})
 
 	it("returns fallback result when apiKey is missing for non-local provider", async () => {
@@ -428,7 +588,9 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: { enabled: true, provider: "openai", modelId: "gpt-4o" },
 		})
 
-		expect(result).toEqual(SAFETY_EVALUATION_FALLBACK_RESULT)
+		expect(result.isSafe).toBe(false)
+		expect(result.riskLevel).toBe("critical")
+		expect(result.reason).toContain("API key missing for provider 'openai'")
 	})
 
 	it("resolves apiKey from state.apiConfiguration fallback", async () => {

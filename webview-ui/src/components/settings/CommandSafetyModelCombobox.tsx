@@ -13,12 +13,13 @@ import { Button, Input, Popover, PopoverAnchor, PopoverContent } from "@src/comp
 import { useEscapeKey } from "@src/hooks/useEscapeKey"
 import { useRouterModels } from "@src/components/ui/hooks/useRouterModels"
 import { ExtensionStateContext } from "@src/context/ExtensionStateContext"
+import { useAppTranslation } from "@/i18n/TranslationContext"
 
 export const RECOMMENDED_AUDIT_MODELS: Record<string, string[]> = {
 	openai: ["gpt-4o-mini"],
 	anthropic: ["claude-3-5-haiku-20241022"],
 	gemini: ["gemini-2.5-flash", "gemini-2.0-flash"],
-	xkiro: ["deepseek/deepseek-chat", "google/gemini-2.5-flash", "openai/gpt-5-mini"],
+	xkiro: ["deepseek/deepseek-chat", "google/gemini-2.5-flash", "openai/gpt-5-mini", "openai/gpt-4o-mini"],
 	openrouter: ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku", "google/gemini-2.5-flash"],
 }
 
@@ -47,11 +48,13 @@ export const CommandSafetyModelCombobox = ({
 	provider = "openai",
 	value,
 	onChange,
-	placeholder = "np. gpt-4o-mini, claude-3-5-haiku-20241022",
+	placeholder,
 	className,
 	disabled = false,
 	"data-testid": dataTestId = "command-safety-model-id-input",
 }: CommandSafetyModelComboboxProps) => {
+	const { t } = useAppTranslation()
+	const effectivePlaceholder = placeholder ?? t("settings:commandSafetyCombobox.placeholder")
 	const [open, setOpen] = useState(false)
 	const [inputValue, setInputValue] = useState(value || "")
 	const [searchTerm, setSearchTerm] = useState("")
@@ -62,10 +65,13 @@ export const CommandSafetyModelCombobox = ({
 
 	const extensionState = useContext(ExtensionStateContext)
 	const openAiModelInfos = extensionState?.openAiModelInfos
+	const openAiModels = extensionState?.openAiModels
+
+	const normalizedProvider = (provider || "openai").toLowerCase()
 
 	const { data: routerModels } = useRouterModels({
 		provider: "openrouter",
-		enabled: provider === "openrouter",
+		enabled: normalizedProvider === "openrouter",
 	})
 
 	// Sync inputValue with external value prop
@@ -78,14 +84,21 @@ export const CommandSafetyModelCombobox = ({
 		const modelsSet = new Set<string>()
 
 		// Always ensure recommended models for this provider are present
-		const rec = RECOMMENDED_AUDIT_MODELS[provider] || []
+		const rec = RECOMMENDED_AUDIT_MODELS[normalizedProvider] || []
 		rec.forEach((m) => modelsSet.add(m))
 
-		switch (provider) {
+		switch (normalizedProvider) {
 			case "xkiro": {
 				Object.keys(xkiroModels).forEach((m) => modelsSet.add(m))
 				if (openAiModelInfos) {
 					Object.keys(openAiModelInfos).forEach((m) => modelsSet.add(m))
+				}
+				if (openAiModels && Array.isArray(openAiModels)) {
+					openAiModels.forEach((m) => {
+						if (typeof m === "string" && m.trim()) {
+							modelsSet.add(m.trim())
+						}
+					})
 				}
 				break
 			}
@@ -94,14 +107,31 @@ export const CommandSafetyModelCombobox = ({
 				if (openAiModelInfos) {
 					Object.keys(openAiModelInfos).forEach((m) => modelsSet.add(m))
 				}
+				if (openAiModels && Array.isArray(openAiModels)) {
+					openAiModels.forEach((m) => {
+						if (typeof m === "string" && m.trim()) {
+							modelsSet.add(m.trim())
+						}
+					})
+				}
 				break
 			}
 			case "anthropic": {
 				Object.keys(anthropicModels).forEach((m) => modelsSet.add(m))
+				const dynamicAnthropic =
+					(routerModels as any)?.anthropic || (extensionState?.routerModels as any)?.anthropic
+				if (dynamicAnthropic) {
+					Object.keys(dynamicAnthropic).forEach((m) => modelsSet.add(m))
+				}
 				break
 			}
 			case "gemini": {
 				Object.keys(geminiModels).forEach((m) => modelsSet.add(m))
+				const dynamicGemini =
+					(routerModels as any)?.gemini || (extensionState?.routerModels as any)?.gemini
+				if (dynamicGemini) {
+					Object.keys(dynamicGemini).forEach((m) => modelsSet.add(m))
+				}
 				break
 			}
 			case "openrouter": {
@@ -118,11 +148,11 @@ export const CommandSafetyModelCombobox = ({
 		}
 
 		return Array.from(modelsSet)
-	}, [provider, openAiModelInfos, routerModels, extensionState?.routerModels])
+	}, [normalizedProvider, openAiModelInfos, openAiModels, routerModels, extensionState?.routerModels])
 
 	const recommendedModels = useMemo(() => {
-		return RECOMMENDED_AUDIT_MODELS[provider] || []
-	}, [provider])
+		return RECOMMENDED_AUDIT_MODELS[normalizedProvider] || []
+	}, [normalizedProvider])
 
 	const otherModels = useMemo(() => {
 		const recSet = new Set(recommendedModels)
@@ -216,14 +246,22 @@ export const CommandSafetyModelCombobox = ({
 				}
 				setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : allSelectableItems.length - 1))
 			} else if (e.key === "Enter") {
-				if (open && highlightedIndex >= 0 && highlightedIndex < allSelectableItems.length) {
-					e.preventDefault()
-					const item = allSelectableItems[highlightedIndex]
-					if (item.startsWith("__custom__:")) {
-						handleSelect(item.slice(11))
+				e.preventDefault()
+				if (open) {
+					if (highlightedIndex >= 0 && highlightedIndex < allSelectableItems.length) {
+						const item = allSelectableItems[highlightedIndex]
+						if (item.startsWith("__custom__:")) {
+							handleSelect(item.slice(11))
+						} else {
+							handleSelect(item)
+						}
+					} else if (inputValue.trim()) {
+						handleSelect(inputValue.trim())
 					} else {
-						handleSelect(item)
+						setOpen(false)
 					}
+				} else if (inputValue.trim()) {
+					handleSelect(inputValue.trim())
 				}
 			} else if (e.key === "Escape") {
 				if (open) {
@@ -232,7 +270,7 @@ export const CommandSafetyModelCombobox = ({
 				}
 			}
 		},
-		[open, highlightedIndex, allSelectableItems, handleSelect],
+		[open, highlightedIndex, allSelectableItems, handleSelect, inputValue],
 	)
 
 	useEscapeKey(open, () => setOpen(false))
@@ -250,7 +288,7 @@ export const CommandSafetyModelCombobox = ({
 								onChange={handleInputChange}
 								onFocus={handleFocus}
 								onKeyDown={handleKeyDown}
-								placeholder={placeholder}
+								placeholder={effectivePlaceholder}
 								className="w-full pr-8"
 								data-testid={dataTestId}
 								disabled={disabled}
@@ -277,7 +315,7 @@ export const CommandSafetyModelCombobox = ({
 							onChange={handleInputChange}
 							onFocus={handleFocus}
 							onKeyDown={handleKeyDown}
-							placeholder={placeholder}
+							placeholder={effectivePlaceholder}
 							className="w-full pr-8"
 							data-testid={dataTestId}
 							disabled={disabled}
@@ -312,7 +350,7 @@ export const CommandSafetyModelCombobox = ({
 									className="text-xs font-semibold px-2.5 py-1.5 text-vscode-descriptionForeground flex items-center gap-1.5"
 									data-testid="command-safety-recommended-models-header">
 									<Sparkles className="size-3.5 text-vscode-charts-yellow" />
-									<span>Rekomendowane modele audytowe (Szybkie i ekonomiczne)</span>
+									<span>{t("settings:commandSafetyCombobox.recommendedHeader")}</span>
 								</div>
 								{filteredRecommended.map((model, idx) => {
 									const isHighlighted = highlightedIndex === idx
@@ -335,7 +373,7 @@ export const CommandSafetyModelCombobox = ({
 											<div className="flex items-center gap-1.5 truncate mr-2">
 												<span className="font-mono text-xs truncate">{model}</span>
 												<span className="text-[10px] px-1 py-0.2 rounded bg-vscode-badge-background text-vscode-badge-foreground shrink-0">
-													Polecany
+													{t("settings:commandSafetyCombobox.recommendedBadge")}
 												</span>
 											</div>
 											{isSelected && <Check className="size-3.5 shrink-0 opacity-100" />}
@@ -350,7 +388,7 @@ export const CommandSafetyModelCombobox = ({
 							<div>
 								{filteredRecommended.length > 0 && (
 									<div className="text-xs font-semibold px-2.5 py-1.5 text-vscode-descriptionForeground mt-1 border-t border-vscode-dropdown-border/50">
-										<span>Pozostałe modele</span>
+										<span>{t("settings:commandSafetyCombobox.otherHeader")}</span>
 									</div>
 								)}
 								{filteredOther.map((model, idx) => {
@@ -397,7 +435,7 @@ export const CommandSafetyModelCombobox = ({
 									)}>
 									<Plus className="size-3.5 shrink-0" />
 									<span className="truncate">
-										Użyj niestandardowego ID:{" "}
+										{t("settings:commandSafetyCombobox.useCustomId")}{" "}
 										<span className="font-semibold font-mono">&quot;{trimmedSearch}&quot;</span>
 									</span>
 								</div>
@@ -407,7 +445,7 @@ export const CommandSafetyModelCombobox = ({
 						{/* Empty State */}
 						{filteredRecommended.length === 0 && filteredOther.length === 0 && !showCustomOption && (
 							<div className="py-3 px-2 text-center text-xs text-vscode-descriptionForeground">
-								Brak dostępnych modeli
+								{t("settings:commandSafetyCombobox.noModels")}
 							</div>
 						)}
 					</div>

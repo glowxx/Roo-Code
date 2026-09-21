@@ -8,6 +8,23 @@ vi.mock("@/utils/vscode", () => ({
 	},
 }))
 
+vi.mock("@/i18n/TranslationContext", () => ({
+	useAppTranslation: () => ({
+		t: (key: string, options?: any) => {
+			if (key === "chat:effort.label") return `Effort: ${options?.level ?? ""}`
+			if (key === "chat:effort.tooltip") return `Reasoning Effort: ${options?.level ?? ""}`
+			if (key === "chat:effort.title") return "Reasoning Effort"
+			if (key === "chat:effort.off") return "Off"
+			if (key === "chat:effort.minimal") return "Minimal"
+			if (key === "chat:effort.low") return "Low"
+			if (key === "chat:effort.medium") return "Medium"
+			if (key === "chat:effort.high") return "High"
+			if (key === "chat:effort.xhigh") return "XHigh"
+			return key
+		},
+	}),
+}))
+
 const mockSetApiConfiguration = vi.fn()
 
 let mockExtensionState: any = {
