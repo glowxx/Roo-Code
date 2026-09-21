@@ -32,6 +32,9 @@ import {
 	isDynamicProvider,
 	isRetiredProvider,
 	getProviderDefaultModelId,
+	getModelContextWindow,
+	modelSupportsReasoning,
+	getOpenAiModelInfo,
 } from "@roo-code/types"
 
 import { useRouterModels } from "./useRouterModels"
@@ -267,20 +270,28 @@ function getSelectedModel({
 		}
 		case "openai": {
 			const id = apiConfiguration.openAiModelId ?? ""
-			const customInfo = apiConfiguration?.openAiCustomModelInfo
-			const info = customInfo ?? openAiModelInfoSaneDefaults
+			const info = getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo)
 			return { id, info }
 		}
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
-			const info =
-				(xkiroModels as Record<string, ModelInfo>)[id] ?? {
-					maxTokens: 8192,
-					contextWindow: 128_000,
-					supportsImages: true,
-					supportsPromptCache: true,
-					description: `xKiro model: ${id}`,
-				}
+			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
+			const baseInfo = predefinedInfo ?? {
+				maxTokens: 8192,
+				contextWindow: getModelContextWindow(id),
+				supportsImages: true,
+				supportsPromptCache: true,
+				description: `xKiro model: ${id}`,
+			}
+			const contextWindow = getModelContextWindow(id, baseInfo.contextWindow)
+			const supportsReasoningEffort =
+				baseInfo.supportsReasoningEffort ??
+				(modelSupportsReasoning(id, baseInfo) ? true : undefined)
+			const info: ModelInfo = {
+				...baseInfo,
+				contextWindow,
+				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+			}
 			return { id, info }
 		}
 		case "ollama": {

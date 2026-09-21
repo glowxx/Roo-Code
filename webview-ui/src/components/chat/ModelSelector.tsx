@@ -1,7 +1,13 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { Check, X, Sparkles, Cpu, Settings2, Search, Brain, Zap, Bot, Server, Layers, ChevronDown, Pin, Plus, RefreshCw, Loader2, Code2, Eye } from "lucide-react"
 
-import type { ProviderSettings, ProviderName, ModelInfo } from "@roo-code/types"
+import {
+	type ProviderSettings,
+	type ProviderName,
+	type ModelInfo,
+	modelSupportsReasoning,
+	getModelContextWindow,
+} from "@roo-code/types"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useAppTranslation } from "@/i18n/TranslationContext"
@@ -233,10 +239,12 @@ export const isReasoningModel = (id: string, info?: ModelInfo): boolean => {
 		info?.supportsReasoningBudget ||
 		info?.maxThinkingTokens ||
 		info?.reasoningEffort ||
+		modelSupportsReasoning(id, info) ||
 		lower.includes("reasoner") ||
 		lower.includes("reasoning") ||
 		lower.includes("thinking") ||
 		lower.includes("thought") ||
+		lower.includes("gpt-5") ||
 		/(?:^|[\/_\-])r[1-9](?:[\/_\-]|$)/i.test(lower) ||
 		/(?:^|[\/_\-])o[1-9](?:[\/_\-]|$)/i.test(lower) ||
 		lower.includes("claude-3-7") ||
@@ -271,6 +279,11 @@ export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): s
 
 	// OpenAI
 	if (lower.includes("gpt-5-turbo")) return "GPT-5 Turbo"
+	if (lower.includes("gpt-5-mini") || lower.includes("gpt-5.4-mini") || lower.includes("gpt-5.1-mini")) return "GPT-5 Mini"
+	if (lower.includes("gpt-5-nano") || lower.includes("gpt-5.4-nano")) return "GPT-5 Nano"
+	if (lower.includes("gpt-5.1-codex-max")) return "GPT-5.1 Codex Max"
+	if (lower.includes("gpt-5.4")) return "GPT-5.4"
+	if (lower.includes("gpt-5.2")) return "GPT-5.2"
 	if (lower.includes("gpt-5")) return "GPT-5"
 	if (lower.includes("gpt-4-5-preview") || lower.includes("gpt-4.5-preview") || lower.includes("gpt-4.5")) return "GPT-4.5 Preview"
 	if (lower.includes("gpt-4o-mini")) return "GPT-4o Mini"
@@ -488,6 +501,7 @@ export const ModelSelector = ({
 			!!activeModelInfo?.supportsReasoningEffort ||
 			!!activeModelInfo?.supportsReasoningBudget ||
 			!!activeModelInfo?.maxThinkingTokens ||
+			modelSupportsReasoning(activeModelId, activeModelInfo) ||
 			isReasoningModel(activeModelId, activeModelInfo)
 		)
 	}, [activeModelInfo, activeModelId])
@@ -507,9 +521,9 @@ export const ModelSelector = ({
 		if (apiConfiguration?.enableReasoningEffort === true) return "Medium"
 		if (activeModelInfo?.requiredReasoningEffort) return "Medium"
 		if (effort === "none") return "Off"
-		if (activeModelInfo?.supportsReasoningEffort) return "Medium"
+		if (activeModelInfo?.supportsReasoningEffort || modelSupportsReasoning(activeModelId, activeModelInfo)) return "Medium"
 		return "Off"
-	}, [apiConfiguration?.enableReasoningEffort, apiConfiguration?.reasoningEffort, activeModelInfo])
+	}, [apiConfiguration?.enableReasoningEffort, apiConfiguration?.reasoningEffort, activeModelInfo, activeModelId])
 
 	// Switch reasoning effort
 	const handleSelectEffort = useCallback(
@@ -627,6 +641,8 @@ export const ModelSelector = ({
 				{ id: "deepseek/deepseek-reasoner", name: "DeepSeek R1", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 128000, description: "xKiro DeepSeek-R1: Advanced reasoning and Chain of Thought deduction." },
 				{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 200000, description: "xKiro Claude 3.7 Sonnet: Premier hybrid reasoning and coding model." },
 				{ id: "anthropic/claude-3.5-sonnet", name: "Claude 3.5 Sonnet", isReasoning: false, isFast: false, contextWindow: 200000, description: "xKiro Claude 3.5 Sonnet: Industry standard for intelligent coding." },
+				{ id: "openai/gpt-5", name: "GPT-5", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 400000, description: "xKiro GPT-5: OpenAI flagship model with reasoning and 400k context window." },
+				{ id: "openai/gpt-5-mini", name: "GPT-5 Mini", isReasoning: true, isFast: false, isFlagship: false, badge: "Reasoning", contextWindow: 400000, description: "xKiro GPT-5 Mini: Fast, low-cost reasoning model with 400k context window." },
 				{ id: "openai/gpt-4o", name: "GPT-4o", isReasoning: false, isFast: false, isFlagship: true, contextWindow: 128000, description: "xKiro GPT-4o: Versatile flagship multimodal model from OpenAI." },
 				{ id: "openai/o3-mini", name: "o3-mini", isReasoning: true, isFast: false, badge: "Reasoning", contextWindow: 200000, description: "xKiro o3-mini: High-speed reasoning model." },
 				{ id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", isReasoning: false, isFast: false, isFlagship: true, contextWindow: 1000000, description: "xKiro Gemini 2.5 Pro: Next-generation reasoning with 1M context window." },
@@ -637,10 +653,13 @@ export const ModelSelector = ({
 				const existing = result.find((r) => r.id === p.id)
 				if (existing) {
 					if (!existing.description) existing.description = p.description
-					if (!existing.contextWindow) existing.contextWindow = p.contextWindow
+					if (!existing.contextWindow) existing.contextWindow = getModelContextWindow(p.id, p.contextWindow)
 				} else {
 					seenIds.add(p.id)
-					result.push(p)
+					result.push({
+						...p,
+						contextWindow: getModelContextWindow(p.id, p.contextWindow),
+					})
 				}
 			})
 		}
@@ -1040,6 +1059,43 @@ export const ModelSelector = ({
 							</div>
 						</div>
 
+						{/* Reasoning Effort Control (shown prominently at top before search) */}
+						{activeModelSupportsReasoning && (
+							<div
+								data-testid="reasoning-effort-section"
+								className="px-2 py-1.5 rounded bg-vscode-input-background/70 border border-vscode-input-border/60 flex items-center justify-between gap-2 shadow-xs">
+								<div className="flex items-center gap-1.5 flex-shrink-0">
+									<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
+									<span className="text-[11px] font-semibold text-vscode-foreground">Reasoning</span>
+								</div>
+								<div className="flex items-center p-0.5 bg-vscode-input-background rounded border border-vscode-input-border/50 gap-0.5 flex-1 max-w-[190px]">
+									{(["Off", "Low", "Medium", "High"] as const).map((effort) => {
+										const isSelected = currentEffort === effort
+										return (
+											<button
+												key={effort}
+												type="button"
+												data-testid={`reasoning-effort-pill-${effort.toLowerCase()}`}
+												onClick={(e) => {
+													e.stopPropagation()
+													handleSelectEffort(effort)
+												}}
+												className={cn(
+													"flex-1 py-0.5 text-[10.5px] rounded transition-all cursor-pointer text-center font-medium select-none",
+													isSelected
+														? effort === "Off"
+															? "bg-vscode-button-secondaryBackground text-vscode-foreground font-semibold shadow-xs"
+															: "bg-amber-500/25 text-amber-300 font-semibold border border-amber-500/40 shadow-xs"
+														: "text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-vscode-toolbar-hoverBackground/40 border border-transparent",
+												)}>
+												{effort}
+											</button>
+										)
+									})}
+								</div>
+							</div>
+						)}
+
 						{/* Search Bar */}
 						<div className="relative flex items-center">
 							<Search className="absolute left-2 size-3.5 text-vscode-descriptionForeground opacity-60 pointer-events-none" />
@@ -1092,43 +1148,6 @@ export const ModelSelector = ({
 							})}
 						</div>
 					</div>
-
-					{/* Reasoning Effort Control (shown prominently when active model supports reasoning) */}
-					{activeModelSupportsReasoning && (
-						<div
-							data-testid="reasoning-effort-section"
-							className="px-2.5 py-1.5 border-b border-vscode-dropdown-border/60 bg-vscode-dropdown-background/90 flex items-center justify-between gap-2">
-							<div className="flex items-center gap-1.5 flex-shrink-0">
-								<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
-								<span className="text-[11px] font-medium text-vscode-foreground">Reasoning</span>
-							</div>
-							<div className="flex items-center p-0.5 bg-vscode-input-background/80 rounded-md border border-vscode-input-border/50 gap-0.5 flex-1 max-w-[190px]">
-								{(["Off", "Low", "Medium", "High"] as const).map((effort) => {
-									const isSelected = currentEffort === effort
-									return (
-										<button
-											key={effort}
-											type="button"
-											data-testid={`reasoning-effort-pill-${effort.toLowerCase()}`}
-											onClick={(e) => {
-												e.stopPropagation()
-												handleSelectEffort(effort)
-											}}
-											className={cn(
-												"flex-1 py-0.5 text-[10.5px] rounded transition-all cursor-pointer text-center font-medium select-none",
-												isSelected
-													? effort === "Off"
-														? "bg-vscode-button-secondaryBackground text-vscode-foreground font-semibold shadow-xs"
-														: "bg-amber-500/25 text-amber-300 font-semibold border border-amber-500/40 shadow-xs"
-													: "text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-vscode-toolbar-hoverBackground/40 border border-transparent",
-											)}>
-											{effort}
-										</button>
-									)
-								})}
-							</div>
-						</div>
-					)}
 
 					{/* SECTION 1: Models List */}
 					<div className="max-h-[250px] overflow-y-auto py-1 space-y-2">

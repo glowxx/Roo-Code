@@ -1,7 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 
-import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels } from "@roo-code/types"
+import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, getModelContextWindow, modelSupportsReasoning } from "@roo-code/types"
 
 import { ApiStream } from "./transform/stream"
 
@@ -137,17 +137,26 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 			const xkiroModelId =
 				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
 			const defaultInfo = (xkiroModels as Record<string, ModelInfo>)[xkiroModelId]
+			const customInfo = options.openAiCustomModelInfo || defaultInfo
+			const contextWindow = getModelContextWindow(xkiroModelId, customInfo?.contextWindow)
+			const supportsReasoningEffort =
+				customInfo?.supportsReasoningEffort ??
+				(modelSupportsReasoning(xkiroModelId, customInfo) ? true : undefined)
+			const modelInfo: ModelInfo = {
+				...(customInfo || {
+					maxTokens: 8192,
+					supportsImages: true,
+					supportsPromptCache: true,
+				}),
+				contextWindow,
+				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+			}
 			return new OpenAiHandler({
 				...options,
 				openAiBaseUrl: (options as any).xkiroBaseUrl || options.openAiBaseUrl || "https://api.xkiro.com/v1",
 				openAiApiKey: (options as any).xkiroApiKey || options.apiKey || options.openAiApiKey,
 				openAiModelId: xkiroModelId,
-				openAiCustomModelInfo: options.openAiCustomModelInfo || defaultInfo || {
-					maxTokens: 8192,
-					contextWindow: 128000,
-					supportsImages: true,
-					supportsPromptCache: true,
-				},
+				openAiCustomModelInfo: modelInfo,
 				reasoningEffort: options.reasoningEffort,
 			})
 		}

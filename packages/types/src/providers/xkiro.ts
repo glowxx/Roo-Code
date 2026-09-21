@@ -5,6 +5,8 @@ export type XKiroModelId =
 	| "deepseek/deepseek-reasoner"
 	| "anthropic/claude-3.7-sonnet"
 	| "anthropic/claude-3.5-sonnet"
+	| "openai/gpt-5"
+	| "openai/gpt-5-mini"
 	| "openai/gpt-4o"
 	| "openai/o1"
 	| "openai/o3-mini"
@@ -62,6 +64,32 @@ export const xkiroModels = {
 		cacheWritesPrice: 0,
 		cacheReadsPrice: 0,
 		description: "xKiro Claude 3.5 Sonnet: Industry standard for intelligent coding.",
+	},
+	"openai/gpt-5": {
+		maxTokens: 128_000,
+		contextWindow: 400_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0,
+		description: "xKiro GPT-5: OpenAI flagship model with reasoning and 400k context window.",
+	},
+	"openai/gpt-5-mini": {
+		maxTokens: 128_000,
+		contextWindow: 400_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0,
+		description: "xKiro GPT-5 Mini: Fast and cost-effective reasoning model with 400k context window.",
 	},
 	"openai/gpt-4o": {
 		maxTokens: 4096,

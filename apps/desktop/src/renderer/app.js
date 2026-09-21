@@ -42,7 +42,7 @@
 
 	// DOM Elements
 	const workspaceNameEl = document.getElementById("workspace-name")
-	const openFolderBtn = document.getElementById("open-folder-btn") || document.getElementById("sidebar-open-folder-btn")
+	const openFolderBtn = document.getElementById("open-folder-btn")
 	const gitPill = document.getElementById("git-pill")
 	const gitBranchEl = document.getElementById("git-branch")
 	const diffsCountEl = document.getElementById("diffs-count")
@@ -129,12 +129,6 @@
 	// Sidebar Elements & State
 	const sidebarEl = document.getElementById("app-sidebar")
 	const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn")
-	const sidebarCollapseBtn = document.getElementById("sidebar-collapse-btn")
-	const sidebarNewChatBtn = document.getElementById("sidebar-new-chat-btn")
-	const sidebarNewChatLabelEl = document.getElementById("sidebar-new-chat-label")
-	const sidebarOpenFolderBtn = document.getElementById("sidebar-open-folder-btn")
-	const sidebarOpenFolderLabelEl = document.getElementById("sidebar-open-folder-label")
-	const sidebarFilterInput = document.getElementById("sidebar-filter-input")
 	const sidebarProjectsListEl = document.getElementById("sidebar-projects-list")
 	const sidebarProjectsCountEl = document.getElementById("sidebar-projects-count")
 	const sidebarHeaderTitleEl = document.getElementById("sidebar-header-title")
@@ -149,7 +143,6 @@
 	let isSidebarCollapsed = localStorage.getItem("roo-sidebar-collapsed") === "true"
 	let activeTaskId = null
 	const projectExpansions = new Set()
-	let sidebarFilterQuery = ""
 
 	// ==========================================
 	// Desktop Internationalization (i18n)
@@ -221,7 +214,6 @@
 
 			// Sidebar
 			workspaces: "Workspaces",
-			sidebarFilterPlaceholder: "Filter projects & chats...",
 			projectsSection: "PROJECTS",
 			noConversations: "No conversations",
 			newChat: "New Chat",
@@ -298,7 +290,6 @@
 
 			// Sidebar
 			workspaces: "Obszary robocze",
-			sidebarFilterPlaceholder: "Filtruj projekty i czaty...",
 			projectsSection: "PROJEKTY",
 			noConversations: "Brak konwersacji",
 			newChat: "Nowy czat",
@@ -401,15 +392,9 @@
 
 		// 7. Sidebar elements
 		if (sidebarHeaderTitleEl) sidebarHeaderTitleEl.textContent = tDesktop("workspaces")
-		if (sidebarFilterInput) sidebarFilterInput.placeholder = tDesktop("sidebarFilterPlaceholder")
 		if (sidebarProjectsLabelEl) sidebarProjectsLabelEl.textContent = tDesktop("projectsSection")
 		if (sidebarHintTextEl) sidebarHintTextEl.textContent = tDesktop("toggleSidebarHint")
 		if (sidebarToggleBtn) sidebarToggleBtn.title = tDesktop("toggleSidebar")
-		if (sidebarCollapseBtn) sidebarCollapseBtn.title = tDesktop("toggleSidebar")
-		if (sidebarNewChatBtn) sidebarNewChatBtn.title = `${tDesktop("newChat")} (Ctrl+N)`
-		if (sidebarNewChatLabelEl) sidebarNewChatLabelEl.textContent = tDesktop("newChat")
-		if (sidebarOpenFolderBtn) sidebarOpenFolderBtn.title = tDesktop("openWorkspaceFolder")
-		if (sidebarOpenFolderLabelEl) sidebarOpenFolderLabelEl.textContent = tDesktop("openWorkspaceFolder")
 	}
 
 	// Apply initial desktop translations immediately
@@ -519,7 +504,6 @@
 	}
 
 	sidebarToggleBtn?.addEventListener("click", () => toggleSidebar())
-	sidebarCollapseBtn?.addEventListener("click", () => toggleSidebar(true))
 
 	// Global shortcuts: Ctrl+B / Cmd+B (toggle sidebar), Ctrl+N / Cmd+N (new chat)
 	window.addEventListener("keydown", (e) => {
@@ -553,16 +537,6 @@
 			}
 		}
 	}
-
-	// Open folder from sidebar button
-	sidebarOpenFolderBtn?.addEventListener("click", () => {
-		openFolderDialog()
-	})
-
-	// New chat from sidebar button
-	sidebarNewChatBtn?.addEventListener("click", () => {
-		startNewChat()
-	})
 
 	function startNewChat(workspacePath) {
 		if (workspacePath && currentWorkspace?.path && pathNormalize(workspacePath) !== pathNormalize(currentWorkspace.path)) {
@@ -678,16 +652,6 @@
 		sendToServer({ type: "removeRecentWorkspace", path: wsPath })
 	}
 
-	// Filter Input
-	let sidebarFilterDebounce = null
-	sidebarFilterInput?.addEventListener("input", (e) => {
-		clearTimeout(sidebarFilterDebounce)
-		sidebarFilterDebounce = setTimeout(() => {
-			sidebarFilterQuery = (e.target.value || "").trim().toLowerCase()
-			renderSidebar()
-		}, 100)
-	})
-
 	function renderSidebar() {
 		if (!sidebarProjectsListEl) return
 
@@ -739,24 +703,11 @@
 				}
 			}
 
-			// Filter query matching
-			let matchingChats = chats
-			let projectMatches = true
-			if (sidebarFilterQuery) {
-				const nameMatch = wsName.toLowerCase().includes(sidebarFilterQuery)
-				const pathMatch = ws.toLowerCase().includes(sidebarFilterQuery)
-				matchingChats = chats.filter((c) => (c.title || "").toLowerCase().includes(sidebarFilterQuery))
-				projectMatches = nameMatch || pathMatch || matchingChats.length > 0
-			}
-
-			if (!projectMatches) return
-
-			// Auto expand if search is active or set has it or it's active
-			const isExpanded = sidebarFilterQuery ? true : (projectExpansions.has(ws) || (isActive && projectExpansions.size <= 1))
+			const isExpanded = projectExpansions.has(ws) || (isActive && projectExpansions.size <= 1)
 
 			let chatsHtml = ""
-			if (matchingChats.length > 0) {
-				matchingChats.forEach((chat) => {
+			if (chats.length > 0) {
+				chats.forEach((chat) => {
 					const isChatActive = activeTaskId === chat.id
 					chatsHtml += `
 						<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" data-task-id="${escapeHtml(chat.id)}" data-workspace="${escapeHtml(ws)}">

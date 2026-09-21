@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useEvent } from "react-use"
 import DynamicTextArea from "react-textarea-autosize"
-import { VolumeX, Image, WandSparkles, SendHorizontal, X, ListEnd, Square } from "lucide-react"
+import { VolumeX, WandSparkles, SendHorizontal, X, ListEnd, Square } from "lucide-react"
 
 import type { ExtensionMessage, Command } from "@roo-code/types"
 
@@ -71,7 +71,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			selectedImages,
 			setSelectedImages,
 			onSend,
-			onSelectImages,
+			onSelectImages: _onSelectImages,
 			shouldDisableImages,
 			onHeightChange,
 			mode,
@@ -781,17 +781,10 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			processedText = processedText.replace(commandRegexGlobal, (match, commandName) => {
 				// Only highlight if the command exists in the valid commands list
 				if (isValidCommand(commandName)) {
-					// Check if the match starts with a space
-					const startsWithSpace = match.startsWith(" ")
+					const leadingWhitespace = match.match(/^\s/)?.[0] || ""
 					const commandPart = `/${commandName}`
 
-					if (startsWithSpace) {
-						// Keep the space but only highlight the command part
-						return ` <mark class="mention-context-textarea-highlight">${commandPart}</mark>`
-					} else {
-						// Highlight the entire command (starts at beginning of line)
-						return `<mark class="mention-context-textarea-highlight">${commandPart}</mark>`
-					}
+					return `${leadingWhitespace}<mark class="mention-context-textarea-highlight">${commandPart}</mark>`
 				}
 				return match // Return unhighlighted if command is not valid
 			})
@@ -1050,22 +1043,25 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									"break-words",
 									"text-transparent",
 									"overflow-hidden",
-									"font-vscode-font-family",
-									"text-vscode-editor-font-size",
-									"leading-vscode-editor-line-height",
-									isFocused
-										? "border border-vscode-focusBorder outline outline-vscode-focusBorder"
-										: isDraggingOver
-											? "border-2 border-dashed border-vscode-focusBorder"
-											: "border border-transparent",
+									"font-display",
+									"text-base",
+									"leading-normal",
+									"tracking-normal",
+									"border border-transparent",
 									"py-2 pl-2",
-									isEditMode ? "pr-20" : "pr-9",
+									isEditMode ? "pr-20" : "pr-24",
 									"box-border",
+									"m-0",
 									"z-10",
 									"forced-color-adjust-none",
 									"rounded-lg",
 								)}
 								style={{
+									fontFamily: "var(--vscode-font-family)",
+									fontSize: "var(--vscode-font-size)",
+									lineHeight: "1.5",
+									letterSpacing: "normal",
+									border: "1px solid transparent",
 									color: "transparent",
 								}}
 							/>
@@ -1112,15 +1108,16 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								className={cn(
 									"w-full",
 									"text-vscode-input-foreground",
-									"font-vscode-font-family",
-									"text-vscode-editor-font-size",
-									"leading-vscode-editor-line-height",
+									"font-display",
+									"text-base",
+									"leading-normal",
+									"tracking-normal",
 									"cursor-text",
 									"py-2 pl-2",
 									isFocused
 										? "border border-vscode-focusBorder outline outline-vscode-focusBorder"
 										: isDraggingOver
-											? "border-2 border-dashed border-vscode-focusBorder"
+											? "border border-dashed border-vscode-focusBorder"
 											: "border border-transparent",
 									isDraggingOver
 										? "bg-[color-mix(in_srgb,var(--vscode-input-background)_95%,var(--vscode-focusBorder))]"
@@ -1129,45 +1126,29 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									"will-change-background-color",
 									"min-h-[94px]",
 									"box-border",
+									"m-0",
 									"rounded-lg",
 									"resize-none",
 									"overflow-x-hidden",
 									"overflow-y-auto",
-									isEditMode ? "pr-20" : "pr-9",
+									"whitespace-pre-wrap",
+									"break-words",
+									isEditMode ? "pr-20" : "pr-24",
 									"flex-none flex-grow",
 									"z-[2]",
 									"scrollbar-none",
 									"scrollbar-hide",
 								)}
+								style={{
+									fontFamily: "var(--vscode-font-family)",
+									fontSize: "var(--vscode-font-size)",
+									lineHeight: "1.5",
+									letterSpacing: "normal",
+								}}
 								onScroll={() => updateHighlights()}
 							/>
 
-							<div className="absolute bottom-2 right-1 z-30 flex flex-col items-center gap-0">
-								<StandardTooltip content={t("chat:addImages")}>
-									<button
-										aria-label={t("chat:addImages")}
-										disabled={shouldDisableImages}
-										onClick={!shouldDisableImages ? onSelectImages : undefined}
-										className={cn(
-											"relative inline-flex items-center justify-center",
-											"bg-transparent border-none p-1.5",
-											"rounded-md min-w-[28px] min-h-[28px]",
-											"text-vscode-descriptionForeground hover:text-vscode-foreground",
-											"transition-all duration-1000",
-											"cursor-pointer",
-											!shouldDisableImages
-												? "opacity-50 hover:opacity-100 delay-750 pointer-events-auto"
-												: "opacity-0 pointer-events-none duration-200 delay-0",
-											!shouldDisableImages &&
-												"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
-											"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-											!shouldDisableImages && "active:bg-[rgba(255,255,255,0.1)]",
-											shouldDisableImages &&
-												"opacity-40 cursor-not-allowed grayscale-[30%] hover:bg-transparent hover:border-[rgba(255,255,255,0.08)] active:bg-transparent",
-										)}>
-										<Image className="w-4 h-4" />
-									</button>
-								</StandardTooltip>
+							<div className="absolute bottom-2 right-2 z-30 flex items-center gap-1.5">
 								{isEditMode ? (
 									<StandardTooltip content={t("chat:cancel.title")}>
 										<button
@@ -1176,14 +1157,12 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 											onClick={onCancel}
 											className={cn(
 												"relative inline-flex items-center justify-center",
-												"bg-transparent border-none p-1.5",
-												"rounded-md min-w-[28px] min-h-[28px]",
-												"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
-												"transition-all duration-150",
-												"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+												"w-7 h-7 p-1.5 rounded-md",
+												"bg-transparent border-none cursor-pointer",
+												"text-vscode-descriptionForeground hover:text-vscode-foreground",
+												"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
+												"transition-colors duration-150",
 												"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-												"active:bg-[rgba(255,255,255,0.1)]",
-												"cursor-pointer",
 											)}>
 											<X className="w-4 h-4" />
 										</button>
@@ -1196,18 +1175,15 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 											onClick={handleEnhancePrompt}
 											className={cn(
 												"relative inline-flex items-center justify-center",
-												"bg-transparent border-none p-1.5",
-												"rounded-md min-w-[28px] min-h-[28px]",
+												"w-7 h-7 p-1.5 rounded-md",
+												"bg-transparent border-none cursor-pointer",
 												"text-vscode-descriptionForeground hover:text-vscode-foreground",
-												"transition-all duration-1000",
-												"cursor-pointer",
+												"transition-all duration-150",
 												hasInputContent
-													? "opacity-50 hover:opacity-100 delay-750 pointer-events-auto"
-													: "opacity-0 pointer-events-none duration-200 delay-0",
-												hasInputContent &&
-													"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+													? "opacity-60 hover:opacity-100 pointer-events-auto"
+													: "opacity-0 pointer-events-none",
+												"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
 												"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-												hasInputContent && "active:bg-[rgba(255,255,255,0.1)]",
 											)}>
 											<WandSparkles
 												className={cn("w-4 h-4", isEnhancingPrompt && "animate-spin")}
@@ -1224,15 +1200,13 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 											onClick={onEnqueueMessage}
 											className={cn(
 												"relative inline-flex items-center justify-center",
-												"bg-transparent border-none p-1.5",
-												"rounded-md min-w-[28px] min-h-[28px]",
+												"w-7 h-7 p-1.5 rounded-md",
+												"bg-transparent border-none cursor-pointer",
 												"text-vscode-descriptionForeground hover:text-vscode-foreground",
-												"transition-all duration-200",
+												"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
+												"transition-colors duration-150",
 												"opacity-100 hover:opacity-100 pointer-events-auto",
-												"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
 												"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-												"active:bg-[rgba(255,255,255,0.1)]",
-												"cursor-pointer",
 											)}>
 											<ListEnd className="w-4 h-4" />
 										</button>
@@ -1259,26 +1233,24 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 										onClick={isStreaming ? onStop : onSend}
 										className={cn(
 											"relative inline-flex items-center justify-center",
-											"bg-transparent border-none p-1.5",
-											"rounded-full min-w-[28px] min-h-[28px]",
-											"text-vscode-descriptionForeground hover:text-vscode-foreground",
-											"transition-all duration-200",
-											isEditMode || isStreaming || hasInputContent
-												? "opacity-100 hover:opacity-100 pointer-events-auto"
-												: "opacity-0 pointer-events-none",
-											(isEditMode || isStreaming || hasInputContent) &&
-												"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+											"w-7 h-7 p-1.5 rounded-md",
+											"border-none cursor-pointer",
+											"transition-all duration-150",
+											isStreaming
+												? "bg-vscode-button-background hover:bg-vscode-button-hoverBackground text-vscode-button-foreground opacity-100 pointer-events-auto"
+												: cn(
+														"bg-transparent text-vscode-descriptionForeground hover:text-vscode-foreground",
+														"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
+														isEditMode || hasInputContent
+															? "opacity-100 hover:opacity-100 pointer-events-auto"
+															: "opacity-0 pointer-events-none",
+													),
 											"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-											(isEditMode || isStreaming || hasInputContent) &&
-												"active:bg-[rgba(255,255,255,0.1)]",
-											(isEditMode || isStreaming || hasInputContent) && "cursor-pointer",
-											isStreaming &&
-												"bg-vscode-button-background hover:bg-vscode-button-background",
 										)}>
 										{isStreaming ? (
-											<Square className="size-4 stroke-none fill-vscode-button-foreground" />
+											<Square className="w-4 h-4 stroke-none fill-vscode-button-foreground" />
 										) : (
-											<SendHorizontal className="size-4" />
+											<SendHorizontal className="w-4 h-4" />
 										)}
 									</button>
 								</StandardTooltip>
@@ -1287,8 +1259,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							{!inputValue && (
 								<div
 									className={cn(
-										"absolute left-2 z-30 flex items-center h-8 font-vscode-font-family text-vscode-editor-font-size leading-vscode-editor-line-height",
-										isEditMode ? "pr-20" : "pr-9",
+										"absolute left-2 z-30 flex items-center h-8 font-display text-base leading-normal",
+										isEditMode ? "pr-20" : "pr-24",
 									)}
 									style={{
 										bottom: "0.75rem",

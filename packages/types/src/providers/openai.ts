@@ -1,4 +1,4 @@
-import type { ModelInfo } from "../model.js"
+import { type ModelInfo, getModelContextWindow, modelSupportsReasoning } from "../model.js"
 
 // https://openai.com/api/pricing/
 export type OpenAiNativeModelId = keyof typeof openAiNativeModels
@@ -597,6 +597,22 @@ export const openAiModelInfoSaneDefaults: ModelInfo = {
 	supportsPromptCache: false,
 	inputPrice: 0,
 	outputPrice: 0,
+}
+
+/**
+ * Resolves ModelInfo for OpenAI-compatible providers, applying dynamic context window
+ * detection and reasoning capability detection based on model ID and optional overrides.
+ */
+export function getOpenAiModelInfo(modelId?: string, customInfo?: ModelInfo | null): ModelInfo {
+	const base = customInfo ?? openAiModelInfoSaneDefaults
+	const id = modelId ?? ""
+	const contextWindow = getModelContextWindow(id, base.contextWindow)
+	const supportsReasoningEffort = base.supportsReasoningEffort ?? (modelSupportsReasoning(id, base) ? true : undefined)
+	return {
+		...base,
+		contextWindow,
+		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+	}
 }
 
 // https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation

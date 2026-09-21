@@ -1398,4 +1398,26 @@ describe("getOpenAiModels", () => {
 		const res2 = await getOpenAiModels("https://api.example.com/v1", "test-key")
 		expect(res2).toEqual(["model-y"])
 	})
+
+	it("should dynamically detect contextWindow and supportsReasoningEffort in getModel for GPT-5", () => {
+		const handler = new OpenAiHandler({
+			openAiApiKey: "test-key",
+			openAiModelId: "gpt-5",
+		})
+		const model = handler.getModel()
+		expect(model.id).toBe("gpt-5")
+		expect(model.info.contextWindow).toBe(200000)
+		expect(model.info.supportsReasoningEffort).toBe(true)
+	})
+
+	it("should preserve standard contextWindow for non-modern models like gpt-4o", () => {
+		const handler = new OpenAiHandler({
+			openAiApiKey: "test-key",
+			openAiModelId: "gpt-4o",
+		})
+		const model = handler.getModel()
+		expect(model.id).toBe("gpt-4o")
+		expect(model.info.contextWindow).toBe(openAiModelInfoSaneDefaults.contextWindow)
+		expect(model.info.supportsReasoningEffort).toBeUndefined()
+	})
 })

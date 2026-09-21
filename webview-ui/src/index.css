@@ -401,12 +401,17 @@ vscode-dropdown::part(listbox) {
 /* Context mentions */
 
 .mention-context-textarea-highlight {
+	display: inline;
+	vertical-align: baseline;
+	line-height: inherit;
 	background-color: color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent);
 	border-radius: 3px;
-	box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-badge-foreground) 25%, transparent);
 	color: transparent;
 	margin: 0;
 	padding: 0;
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
 }
 
 .mention-context-highlight {

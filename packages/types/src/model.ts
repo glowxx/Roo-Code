@@ -151,3 +151,57 @@ export type ModelInfo = z.infer<typeof modelInfoSchema>
 export type ModelRecord = Record<string, ModelInfo>
 
 export type RouterModels = Record<DynamicProvider | LocalProvider, ModelRecord>
+
+/**
+ * Calculates the context window for a given model ID with smart dynamic detection
+ * for modern model families, respecting base context or provider overrides.
+ *
+ * Rules:
+ * - If modelId contains: gpt-5, o1, o3, o4, claude-3-5, claude-3.5, claude-3-7, claude-3.7 -> minimum limit is 200,000 (200k)
+ * - If modelId contains: gemini -> minimum limit is 1,000,000 (1M)
+ * - If baseContext is provided (from provider context_length or configured contextWindow), it overrides if valid / greater than or equal to minimum.
+ */
+export function getModelContextWindow(modelId: string, baseContext?: number): number {
+	const lower = (modelId || "").toLowerCase()
+	let minLimit = 0
+
+	if (
+		lower.includes("gpt-5") ||
+		lower.includes("o1") ||
+		lower.includes("o3") ||
+		lower.includes("o4") ||
+		lower.includes("claude-3-5") ||
+		lower.includes("claude-3.5") ||
+		lower.includes("claude-3-7") ||
+		lower.includes("claude-3.7")
+	) {
+		minLimit = 200_000
+	} else if (lower.includes("gemini")) {
+		minLimit = 1_000_000
+	}
+
+	if (typeof baseContext === "number" && baseContext > 0) {
+		return Math.max(baseContext, minLimit)
+	}
+
+	return minLimit > 0 ? minLimit : 128_000
+}
+
+/**
+ * Checks whether a model supports reasoning effort based on its ID and optional ModelInfo.
+ * Automatically recognizes modern reasoning models like o1, o3, o4, gpt-5, reasoner, thinking models.
+ */
+export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null): boolean {
+	if (info?.supportsReasoningEffort) {
+		return true
+	}
+	const lower = (modelId || "").toLowerCase()
+	return (
+		lower.includes("o1") ||
+		lower.includes("o3") ||
+		lower.includes("o4") ||
+		lower.includes("gpt-5") ||
+		lower.includes("reasoner") ||
+		lower.includes("thinking")
+	)
+}

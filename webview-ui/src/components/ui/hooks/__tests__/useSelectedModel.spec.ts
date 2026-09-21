@@ -678,6 +678,21 @@ describe("useSelectedModel", () => {
 			expect(result.current.info).toEqual(openAiModelInfoSaneDefaults)
 		})
 
+		it("should dynamically detect contextWindow and reasoning support for gpt-5 in openai provider", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "gpt-5",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("gpt-5")
+			expect(result.current.info?.contextWindow).toBe(200000)
+			expect(result.current.info?.supportsReasoningEffort).toBe(true)
+		})
+
 		it("should return custom model info when provided", () => {
 			const customModelInfo: ModelInfo = {
 				maxTokens: 16384,
@@ -770,6 +785,50 @@ describe("useSelectedModel", () => {
 			expect(result.current.provider).toBe("minimax")
 			expect(result.current.id).toBe("MiniMax-M2.7")
 			expect(result.current.info).toEqual(minimaxModels["MiniMax-M2.7"])
+		})
+	})
+
+	describe("xkiro provider", () => {
+		it("should return predefined model info for openai/gpt-5 with 400k context window and reasoning effort", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "openai/gpt-5",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("xkiro")
+			expect(result.current.id).toBe("openai/gpt-5")
+			expect(result.current.info?.contextWindow).toBe(400000)
+			expect(result.current.info?.supportsReasoningEffort).toBe(true)
+		})
+
+		it("should dynamically calculate contextWindow and reasoning for unlisted modern models", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "custom/gpt-5-turbo",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.id).toBe("custom/gpt-5-turbo")
+			expect(result.current.info?.contextWindow).toBe(200000)
+			expect(result.current.info?.supportsReasoningEffort).toBe(true)
+		})
+
+		it("should assign 1M context window for unlisted Gemini models", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "google/gemini-custom-experimental",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.id).toBe("google/gemini-custom-experimental")
+			expect(result.current.info?.contextWindow).toBe(1000000)
 		})
 	})
 })

@@ -263,6 +263,10 @@ describe("ModelSelector", () => {
 
 	test("isReasoningModel correctly identifies reasoning models", () => {
 		expect(isReasoningModel("openai/o3-mini")).toBe(true)
+		expect(isReasoningModel("openai/gpt-5")).toBe(true)
+		expect(isReasoningModel("gpt-5")).toBe(true)
+		expect(isReasoningModel("openai/gpt-5-mini")).toBe(true)
+		expect(isReasoningModel("my-custom-o4-model")).toBe(true)
 		expect(isReasoningModel("deepseek/deepseek-reasoner")).toBe(true)
 		expect(isReasoningModel("deepseek-r1")).toBe(true)
 		expect(isReasoningModel("anthropic/claude-3.7-sonnet")).toBe(true)
@@ -424,5 +428,28 @@ describe("ModelSelector", () => {
 				reasoningEffort: "high",
 			}),
 		)
+	})
+
+	test("renders reasoning effort section for GPT-5 on xKiro even without explicit ModelInfo reasoning flag", () => {
+		mockSelectedModel = {
+			id: "openai/gpt-5",
+			info: {
+				contextWindow: 400000,
+				maxTokens: 128000,
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiProvider: "xkiro",
+			apiModelId: "openai/gpt-5",
+			xkiroModelId: "openai/gpt-5",
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		expect(screen.getByTestId("reasoning-effort-section")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
 	})
 })

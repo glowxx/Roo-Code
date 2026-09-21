@@ -6,6 +6,9 @@ import {
 	type ModelInfo,
 	azureOpenAiDefaultApiVersion,
 	openAiModelInfoSaneDefaults,
+	getOpenAiModelInfo,
+	getModelContextWindow,
+	modelSupportsReasoning,
 	DEEP_SEEK_DEFAULT_TEMPERATURE,
 	OPENAI_AZURE_AI_INFERENCE_PATH,
 } from "@roo-code/types"
@@ -281,7 +284,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 
 	override getModel() {
 		const id = this.options.openAiModelId ?? ""
-		const info: ModelInfo = this.options.openAiCustomModelInfo ?? openAiModelInfoSaneDefaults
+		const info: ModelInfo = getOpenAiModelInfo(id, this.options.openAiCustomModelInfo)
 		const params = getModelParams({
 			format: "openai",
 			modelId: id,
