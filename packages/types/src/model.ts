@@ -157,80 +157,113 @@ export type RouterModels = Record<DynamicProvider | LocalProvider, ModelRecord>
  * for modern model families, respecting base context or provider overrides.
  *
  * Hierarchy:
- * 1. Provider API metadata / baseContext: if baseContext is a valid number > 0 and NOT the generic
- *    fallback 128k (or if baseContext is greater than the family limit). If baseContext === 128_000
- *    and the model belongs to a higher-limit family (e.g. 200k, 1M, 2M), the family limit takes precedence!
+ * 1. Explicit size indicator in model ID or known next-gen flagship prefixes:
+ *    - 2m pattern -> strictly 2,000,000 (2M).
+ *    - gpt-6 prefix/family, astra suffix/model, 1m pattern -> strictly 1,000,000 (1M).
+ *    - 512k pattern -> strictly 524,288 (512k).
  * 2. Static database of known model families:
  *    - gpt-5, o1, o3, o4, claude-3-5, claude-3.5, claude-3-7, claude-3.7, claude-3-opus, claude-3-sonnet, claude-3-haiku -> strictly 200,000 (200k).
  *    - gemini:
  *      * gemini-1.5-pro, gemini-2.0-pro, gemini-3.0-pro (and Pro variants not shared with Flash) -> strictly 2,000,000 (2M).
  *      * other gemini-1.5, gemini-2.0, gemini-2.5, gemini-3.0 (including Flash) -> strictly 1,000,000 (1M).
  *    - deepseek-chat, deepseek-reasoner (V3/R1) -> 128,000.
- * 3. Unclassified models suggesting next-gen flagship (flagship, opus, ultra, max, pro-max, preview-flagship, v5) -> minimum 200,000.
+ * 3. Unclassified models from modern series (next, ultra, max, pro, flagship, opus, pro-max, preview-flagship, v5, v6) -> minimum 200,000.
  * 4. Sane default fallback -> 128,000.
+ *
+ * Provider metadata / baseContext hierarchy:
+ * - If baseContext is a valid number > 0:
+ *   - Generic 128k default should never suppress higher family/flagship limits.
+ *   - Provider metadata greater than the determined limit takes precedence.
+ *   - Known family/flagship limits take precedence over lower baseContext values.
+ *   - Real metadata for unclassified models (e.g. 32k, 64k) is preserved.
  */
 export function getModelContextWindow(modelId: string, baseContext?: number): number {
 	const lower = (modelId || "").toLowerCase()
 
+	// 1. Explicit size indicators in model ID or next-gen flagship identifiers
+	let patternLimit: number | undefined
+	if (/(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")) {
+		patternLimit = 2_000_000
+	} else if (
+		/(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) ||
+		lower.includes("-1m") ||
+		lower.includes("_1m") ||
+		lower.includes("gpt-6") ||
+		lower.includes("astra")
+	) {
+		patternLimit = 1_000_000
+	} else if (
+		/(?:^|[\/_\-.:])512k(?:[\/_\-.:]|$)/i.test(lower) ||
+		lower.includes("-512k") ||
+		lower.includes("_512k")
+	) {
+		patternLimit = 524_288
+	}
+
 	// 2. Static database of known model families
-	let familyLimit: number | undefined
+	let familyLimit: number | undefined = patternLimit
 
-	if (lower.includes("gemini")) {
-		const isFlash = lower.includes("flash")
-		const is25 = lower.includes("2.5")
-		const isPro = lower.includes("pro")
-		const isSpecific2MPro =
-			lower.includes("1.5-pro") ||
-			lower.includes("1.5.pro") ||
-			lower.includes("2.0-pro") ||
-			lower.includes("2.0.pro") ||
-			lower.includes("3.0-pro") ||
-			lower.includes("3.0.pro") ||
-			lower.includes("3-pro") ||
-			lower.includes("3.pro")
+	if (familyLimit === undefined) {
+		if (lower.includes("gemini")) {
+			const isFlash = lower.includes("flash")
+			const is25 = lower.includes("2.5")
+			const isPro = lower.includes("pro")
+			const isSpecific2MPro =
+				lower.includes("1.5-pro") ||
+				lower.includes("1.5.pro") ||
+				lower.includes("2.0-pro") ||
+				lower.includes("2.0.pro") ||
+				lower.includes("3.0-pro") ||
+				lower.includes("3.0.pro") ||
+				lower.includes("3-pro") ||
+				lower.includes("3.pro")
 
-		if (!isFlash && !is25 && (isSpecific2MPro || isPro)) {
-			familyLimit = 2_000_000
-		} else {
-			familyLimit = 1_000_000
+			if (!isFlash && !is25 && (isSpecific2MPro || isPro)) {
+				familyLimit = 2_000_000
+			} else {
+				familyLimit = 1_000_000
+			}
+		} else if (
+			lower.includes("gpt-5") ||
+			lower.includes("o1") ||
+			lower.includes("o3") ||
+			lower.includes("o4") ||
+			lower.includes("claude-3-5") ||
+			lower.includes("claude-3.5") ||
+			lower.includes("claude-3-7") ||
+			lower.includes("claude-3.7") ||
+			lower.includes("claude-3-opus") ||
+			lower.includes("claude-3.opus") ||
+			lower.includes("claude-3-sonnet") ||
+			lower.includes("claude-3.sonnet") ||
+			lower.includes("claude-3-haiku") ||
+			lower.includes("claude-3.haiku")
+		) {
+			familyLimit = 200_000
+		} else if (
+			lower.includes("deepseek-chat") ||
+			lower.includes("deepseek-reasoner") ||
+			lower.includes("deepseek-v3") ||
+			lower.includes("deepseek-r1")
+		) {
+			familyLimit = 128_000
 		}
-	} else if (
-		lower.includes("gpt-5") ||
-		lower.includes("o1") ||
-		lower.includes("o3") ||
-		lower.includes("o4") ||
-		lower.includes("claude-3-5") ||
-		lower.includes("claude-3.5") ||
-		lower.includes("claude-3-7") ||
-		lower.includes("claude-3.7") ||
-		lower.includes("claude-3-opus") ||
-		lower.includes("claude-3.opus") ||
-		lower.includes("claude-3-sonnet") ||
-		lower.includes("claude-3.sonnet") ||
-		lower.includes("claude-3-haiku") ||
-		lower.includes("claude-3.haiku")
-	) {
-		familyLimit = 200_000
-	} else if (
-		lower.includes("deepseek-chat") ||
-		lower.includes("deepseek-reasoner") ||
-		lower.includes("deepseek-v3") ||
-		lower.includes("deepseek-r1")
-	) {
-		familyLimit = 128_000
 	}
 
 	// 3. New / unclassified models suggesting new-generation flagship
 	let fallbackLimit = familyLimit
 	if (fallbackLimit === undefined) {
 		if (
-			lower.includes("flagship") ||
-			lower.includes("opus") ||
+			lower.includes("next") ||
 			lower.includes("ultra") ||
 			lower.includes("max") ||
+			lower.includes("pro") ||
+			lower.includes("flagship") ||
+			lower.includes("opus") ||
 			lower.includes("pro-max") ||
 			lower.includes("preview-flagship") ||
-			lower.includes("v5")
+			lower.includes("v5") ||
+			lower.includes("v6")
 		) {
 			fallbackLimit = 200_000
 		} else {
@@ -248,7 +281,7 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 			return Math.max(baseContext, fallbackLimit)
 		}
 
-		// Provider metadata greater than the determined limit (e.g. 400k for gpt-5 in xkiro, or custom 1M)
+		// Provider metadata greater than the determined limit (e.g. 400k for gpt-5 in xkiro, or custom 1M/1.05M)
 		if (baseContext > fallbackLimit) {
 			return baseContext
 		}
@@ -279,6 +312,8 @@ export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null)
 		lower.includes("o3") ||
 		lower.includes("o4") ||
 		lower.includes("gpt-5") ||
+		lower.includes("gpt-6") ||
+		lower.includes("astra") ||
 		lower.includes("reasoner") ||
 		lower.includes("thinking")
 	)

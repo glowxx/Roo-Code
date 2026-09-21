@@ -54,7 +54,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { playTts, setTtsEnabled, setTtsSpeed, stopTts } from "../../utils/tts"
 import { searchCommits } from "../../utils/git"
 import { exportSettings, importSettingsWithFeedback } from "../config/importExport"
-import { getOpenAiModels, sortOpenAiModels } from "../../api/providers/openai"
+import { getOpenAiModels, getOpenAiModelsWithInfo, sortOpenAiModels } from "../../api/providers/openai"
 import { getVsCodeLmModels } from "../../api/providers/vscode-lm"
 import { openMention } from "../mentions"
 import { resolveImageMentions } from "../mentions/resolveImageMentions"
@@ -1131,11 +1131,11 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			}
 
 			if (baseUrl) {
-				const openAiModels = await getOpenAiModels(baseUrl, apiKey, openAiHeaders)
+				const { models: openAiModels, modelInfos: openAiModelInfos } = await getOpenAiModelsWithInfo(baseUrl, apiKey, openAiHeaders)
 				if (openAiModels && openAiModels.length > 0) {
 					await provider.setValue("openAiModels", openAiModels)
 					await provider.setGlobalState("openAiModels", openAiModels)
-					provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+					provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 				} else {
 					const cached =
 						(provider.getValue("openAiModels") as string[] | undefined) ??
@@ -1924,12 +1924,12 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 						: (config.openAiApiKey || config.apiKey)
 
 					if (baseUrl && apiKey) {
-						getOpenAiModels(baseUrl, apiKey, config.openAiHeaders)
-							.then(async (openAiModels) => {
+						getOpenAiModelsWithInfo(baseUrl, apiKey, config.openAiHeaders)
+							.then(async ({ models: openAiModels, modelInfos: openAiModelInfos }) => {
 								if (openAiModels && openAiModels.length > 0) {
 									await provider.setValue("openAiModels", openAiModels)
 									await provider.setGlobalState("openAiModels", openAiModels)
-									provider.postMessageToWebview({ type: "openAiModels", openAiModels })
+									provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 								}
 							})
 							.catch((err) => {

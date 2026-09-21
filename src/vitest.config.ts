@@ -7,7 +7,7 @@ const { silent, reporters, onConsoleLog } = resolveVerbosity()
 export default defineConfig({
 	test: {
 		globals: true,
-		setupFiles: ["./vitest.setup.ts"],
+		setupFiles: [path.resolve(__dirname, "./vitest.setup.ts")],
 		watch: false,
 		reporters,
 		silent,

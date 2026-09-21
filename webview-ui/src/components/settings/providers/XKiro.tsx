@@ -75,6 +75,15 @@ export const XKiro = ({ apiConfiguration, setApiConfigurationField }: XKiroProps
 		[setApiConfigurationField, testStatus],
 	)
 
+	const handleCustomContextWindowChange = useCallback(
+		(event: any) => {
+			const val = inputEventTransform(event)
+			const parsed = parseInt(val, 10)
+			setApiConfigurationField("xkiroCustomContextWindow", isNaN(parsed) || parsed <= 0 ? undefined : parsed)
+		},
+		[setApiConfigurationField],
+	)
+
 	const handleTestConnection = useCallback(() => {
 		const apiKey = apiConfiguration?.xkiroApiKey || apiConfiguration?.apiKey || ""
 		const baseUrl = (apiConfiguration?.xkiroBaseUrl || "https://api.xkiro.com/v1").trim().replace(/\/+$/, "")
@@ -131,6 +140,17 @@ export const XKiro = ({ apiConfiguration, setApiConfigurationField }: XKiroProps
 			</VSCodeTextField>
 			<div className="text-sm text-vscode-descriptionForeground -mt-1">
 				Default xKiro endpoint: <code>https://api.xkiro.com/v1</code>
+			</div>
+
+			<VSCodeTextField
+				value={apiConfiguration?.xkiroCustomContextWindow?.toString() || ""}
+				onInput={handleCustomContextWindowChange}
+				placeholder="e.g. 1000000"
+				className="w-full">
+				<label className="block font-medium mb-1">Custom Context Window (Optional)</label>
+			</VSCodeTextField>
+			<div className="text-sm text-vscode-descriptionForeground -mt-1">
+				Override the context window size (in tokens) for custom or newly released models.
 			</div>
 
 			<div className="flex flex-wrap items-center gap-3 pt-1">

@@ -674,17 +674,85 @@ export function sortOpenAiModels(models: string[]): string[] {
 	})
 }
 
-export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiHeaders?: Record<string, string>) {
+export const openAiModelInfoCache = new Map<string, ModelInfo>()
+
+export function getCachedOpenAiModelInfo(modelId: string): ModelInfo | undefined {
+	return openAiModelInfoCache.get(modelId)
+}
+
+export function parseOpenAiModelInfo(rawItem: any): ModelInfo {
+	const id = typeof rawItem === "string" ? rawItem : rawItem?.id || rawItem?.name || ""
+	const contextLength =
+		typeof rawItem?.context_length === "number"
+			? rawItem.context_length
+			: typeof rawItem?.max_context_length === "number"
+				? rawItem.max_context_length
+				: typeof rawItem?.context_window === "number"
+					? rawItem.context_window
+					: undefined
+
+	const maxOutputTokens =
+		typeof rawItem?.max_output_tokens === "number"
+			? rawItem.max_output_tokens
+			: typeof rawItem?.max_tokens === "number"
+				? rawItem.max_tokens
+				: undefined
+
+	const resolvedContextWindow = getModelContextWindow(id, contextLength)
+
+	const pricing = rawItem?.pricing
+	let inputPrice: number | undefined
+	let outputPrice: number | undefined
+	let cacheReadsPrice: number | undefined
+	let cacheWritesPrice: number | undefined
+
+	if (pricing) {
+		inputPrice = typeof pricing.input === "number" ? pricing.input : undefined
+		outputPrice = typeof pricing.output === "number" ? pricing.output : undefined
+		cacheReadsPrice = typeof pricing.cache_read === "number" ? pricing.cache_read : undefined
+		cacheWritesPrice = typeof pricing.cache_write === "number" ? pricing.cache_write : undefined
+	}
+
+	const capabilities = rawItem?.capabilities
+	const supportsImages = typeof capabilities?.vision === "boolean" ? capabilities.vision : true
+	const supportsPromptCache = cacheReadsPrice !== undefined || cacheWritesPrice !== undefined || true
+	const reasoningLevels = rawItem?.reasoning_efforts?.levels
+	const supportsReasoningEffort =
+		(Array.isArray(reasoningLevels) && reasoningLevels.length > 0) ||
+		capabilities?.reasoning ||
+		modelSupportsReasoning(id)
+			? true
+			: undefined
+
+	return {
+		maxTokens: maxOutputTokens ?? 8192,
+		contextWindow: resolvedContextWindow,
+		supportsImages,
+		supportsPromptCache,
+		inputPrice,
+		outputPrice,
+		cacheReadsPrice,
+		cacheWritesPrice,
+		description: rawItem?.display_name ? `${rawItem.display_name} (${id})` : undefined,
+		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+	}
+}
+
+export async function getOpenAiModelsWithInfo(
+	baseUrl?: string,
+	apiKey?: string,
+	openAiHeaders?: Record<string, string>,
+): Promise<{ models: string[]; modelInfos: Record<string, ModelInfo> }> {
 	try {
 		if (!baseUrl) {
-			return []
+			return { models: [], modelInfos: {} }
 		}
 
 		// Trim whitespace from baseUrl to handle cases where users accidentally include spaces
 		const trimmedBaseUrl = baseUrl.trim()
 
 		if (!URL.canParse(trimmedBaseUrl)) {
-			return []
+			return { models: [], modelInfos: {} }
 		}
 
 		const config: Record<string, any> = {
@@ -714,14 +782,32 @@ export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiH
 					? rawData.models
 					: []
 
-		const extractedIds = rawList
-			.map((item: any) => (typeof item === "string" ? item : item?.id || item?.name || ""))
-			.map((id: string) => id.trim())
-			.filter((id: string) => id.length > 0)
+		const modelInfos: Record<string, ModelInfo> = {}
+		const extractedIds: string[] = []
+
+		for (const item of rawList) {
+			const id = (typeof item === "string" ? item : item?.id || item?.name || "").trim()
+			if (id.length > 0) {
+				extractedIds.push(id)
+				if (typeof item === "object" && item !== null) {
+					const parsedInfo = parseOpenAiModelInfo(item)
+					modelInfos[id] = parsedInfo
+					openAiModelInfoCache.set(id, parsedInfo)
+				}
+			}
+		}
 
 		const deduplicated = Array.from(new Set(extractedIds))
-		return sortOpenAiModels(deduplicated)
+		return {
+			models: sortOpenAiModels(deduplicated),
+			modelInfos,
+		}
 	} catch (error) {
-		return []
+		return { models: [], modelInfos: {} }
 	}
+}
+
+export async function getOpenAiModels(baseUrl?: string, apiKey?: string, openAiHeaders?: Record<string, string>) {
+	const result = await getOpenAiModelsWithInfo(baseUrl, apiKey, openAiHeaders)
+	return result.models
 }

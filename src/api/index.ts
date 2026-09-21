@@ -5,6 +5,7 @@ import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, 
 
 import { ApiStream } from "./transform/stream"
 
+import { getCachedOpenAiModelInfo } from "./providers/openai"
 import {
 	AnthropicHandler,
 	AwsBedrockHandler,
@@ -137,8 +138,15 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 			const xkiroModelId =
 				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
 			const defaultInfo = (xkiroModels as Record<string, ModelInfo>)[xkiroModelId]
-			const customInfo = options.openAiCustomModelInfo || defaultInfo
-			const contextWindow = getModelContextWindow(xkiroModelId, customInfo?.contextWindow)
+			const cachedApiInfo = getCachedOpenAiModelInfo(xkiroModelId)
+			const customInfo =
+				(options as any).xkiroCustomModelInfo || options.openAiCustomModelInfo || cachedApiInfo || defaultInfo
+			const customContextWindow =
+				(options as any).xkiroCustomContextWindow || (options as any).customContextWindow
+			const baseContext = customContextWindow || customInfo?.contextWindow
+			const contextWindow = customContextWindow
+				? customContextWindow
+				: getModelContextWindow(xkiroModelId, baseContext)
 			const supportsReasoningEffort =
 				customInfo?.supportsReasoningEffort ??
 				(modelSupportsReasoning(xkiroModelId, customInfo) ? true : undefined)

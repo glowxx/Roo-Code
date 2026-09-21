@@ -5,6 +5,7 @@ export type XKiroModelId =
 	| "deepseek/deepseek-reasoner"
 	| "anthropic/claude-3.7-sonnet"
 	| "anthropic/claude-3.5-sonnet"
+	| "openai/gpt-6-astra"
 	| "openai/gpt-5"
 	| "openai/gpt-5-mini"
 	| "openai/gpt-4o"
@@ -18,6 +19,32 @@ export type XKiroModelId =
 export const xkiroDefaultModelId: XKiroModelId = "deepseek/deepseek-chat"
 
 export const xkiroModels = {
+	"openai/gpt-6-astra": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 10,
+		outputPrice: 50,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 1,
+		description: "xKiro GPT-6 Astra: Next-gen flagship model with 1M context window.",
+	},
+	"gpt-6-astra": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 10,
+		outputPrice: 50,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 1,
+		description: "xKiro GPT-6 Astra: Next-gen flagship model with 1M context window.",
+	},
 	"deepseek/deepseek-chat": {
 		maxTokens: 8192,
 		contextWindow: 128_000,

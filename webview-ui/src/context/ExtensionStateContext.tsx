@@ -182,6 +182,7 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 		customSupportPrompts: customSupportPrompts ?? prevState.customSupportPrompts,
 		experiments,
 		openAiModels: newState.openAiModels ?? prevState.openAiModels ?? [],
+		openAiModelInfos: newState.openAiModelInfos ?? prevState.openAiModelInfos ?? {},
 		commandSafetyConfig: newState.commandSafetyConfig ?? prevState.commandSafetyConfig,
 	}
 }
@@ -259,6 +260,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		includeCurrentCost: true,
 		lockApiConfigAcrossModes: false,
 		openAiModels: [],
+		openAiModelInfos: {},
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -472,6 +474,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 						setState((prevState) => ({
 							...prevState,
 							openAiModels: message.openAiModels,
+							openAiModelInfos: message.openAiModelInfos ?? prevState.openAiModelInfos ?? {},
 						}))
 					}
 					break

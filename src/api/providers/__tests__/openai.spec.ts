@@ -1,6 +1,6 @@
 // npx vitest run api/providers/__tests__/openai.spec.ts
 
-import { OpenAiHandler, getOpenAiModels, sortOpenAiModels } from "../openai"
+import { OpenAiHandler, getOpenAiModels, getOpenAiModelsWithInfo, parseOpenAiModelInfo, sortOpenAiModels } from "../openai"
 import { ApiHandlerOptions } from "../../../shared/api"
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
@@ -1408,6 +1408,78 @@ describe("getOpenAiModels", () => {
 		expect(model.id).toBe("gpt-5")
 		expect(model.info.contextWindow).toBe(200000)
 		expect(model.info.supportsReasoningEffort).toBe(true)
+	})
+
+	it("should dynamically detect 1M contextWindow and reasoning for gpt-6-astra", () => {
+		const handler = new OpenAiHandler({
+			openAiApiKey: "test-key",
+			openAiModelId: "gpt-6-astra",
+		})
+		const model = handler.getModel()
+		expect(model.id).toBe("gpt-6-astra")
+		expect(model.info.contextWindow).toBe(1_000_000)
+		expect(model.info.supportsReasoningEffort).toBe(true)
+	})
+
+	it("should correctly parse xKiro-style model metadata in parseOpenAiModelInfo", () => {
+		const rawModel = {
+			id: "openai/gpt-6-astra",
+			display_name: "GPT-6 Astra",
+			context_length: 1050000,
+			max_output_tokens: 65536,
+			pricing: {
+				currency: "USD",
+				unit: "per_1m_tokens",
+				input: 10,
+				output: 50,
+				cache_read: 1,
+			},
+			capabilities: {
+				vision: true,
+				tools: true,
+				reasoning: true,
+			},
+			reasoning_efforts: {
+				levels: ["low", "medium", "high", "xhigh", "max"],
+				default: "medium",
+			},
+		}
+
+		const parsed = parseOpenAiModelInfo(rawModel)
+		expect(parsed.contextWindow).toBe(1050000)
+		expect(parsed.maxTokens).toBe(65536)
+		expect(parsed.inputPrice).toBe(10)
+		expect(parsed.outputPrice).toBe(50)
+		expect(parsed.cacheReadsPrice).toBe(1)
+		expect(parsed.supportsImages).toBe(true)
+		expect(parsed.supportsReasoningEffort).toBe(true)
+		expect(parsed.description).toBe("GPT-6 Astra (openai/gpt-6-astra)")
+	})
+
+	it("should return both models and modelInfos in getOpenAiModelsWithInfo", async () => {
+		const mockResponse = {
+			data: {
+				data: [
+					{
+						id: "openai/gpt-6-astra",
+						context_length: 1050000,
+						max_output_tokens: 65536,
+					},
+					{
+						id: "deepseek/deepseek-chat",
+						context_length: 128000,
+					},
+				],
+			},
+		}
+		vi.mocked(axios.get).mockResolvedValueOnce(mockResponse)
+
+		const result = await getOpenAiModelsWithInfo("https://api.xkiro.com/v1", "test-key")
+		expect(result.models).toContain("openai/gpt-6-astra")
+		expect(result.models).toContain("deepseek/deepseek-chat")
+		expect(result.modelInfos["openai/gpt-6-astra"]).toBeDefined()
+		expect(result.modelInfos["openai/gpt-6-astra"].contextWindow).toBe(1050000)
+		expect(result.modelInfos["openai/gpt-6-astra"].maxTokens).toBe(65536)
 	})
 
 	it("should preserve standard contextWindow for non-modern models like gpt-4o", () => {

@@ -2,6 +2,28 @@ import { describe, it, expect } from "vitest"
 import { getModelContextWindow } from "../model.js"
 
 describe("getModelContextWindow", () => {
+	describe("Rule 1: Explicit size indicators and next-gen prefixes", () => {
+		it("assigns 1M to gpt-6, astra, and 1m models", () => {
+			expect(getModelContextWindow("gpt-6-astra")).toBe(1_000_000)
+			expect(getModelContextWindow("openai/gpt-6-astra")).toBe(1_000_000)
+			expect(getModelContextWindow("gpt-6")).toBe(1_000_000)
+			expect(getModelContextWindow("gpt-6-mini")).toBe(1_000_000)
+			expect(getModelContextWindow("custom-provider/astra-reasoner")).toBe(1_000_000)
+			expect(getModelContextWindow("qwen3-coder-1m")).toBe(1_000_000)
+			expect(getModelContextWindow("deepseek-v3-1m")).toBe(1_000_000)
+		})
+
+		it("assigns 2M to models with 2m pattern", () => {
+			expect(getModelContextWindow("custom-model-2m")).toBe(2_000_000)
+			expect(getModelContextWindow("openai/codex-2m-preview")).toBe(2_000_000)
+		})
+
+		it("assigns 524288 to models with 512k pattern", () => {
+			expect(getModelContextWindow("custom-model-512k")).toBe(524_288)
+			expect(getModelContextWindow("open-weights-512k-context")).toBe(524_288)
+		})
+	})
+
 	describe("Rule 2: Known model families", () => {
 		it("assigns 200k to gpt-5, o1, o3, o4 models", () => {
 			expect(getModelContextWindow("gpt-5")).toBe(200_000)
@@ -46,12 +68,15 @@ describe("getModelContextWindow", () => {
 	})
 
 	describe("Rule 3: Unclassified next-gen flagship models", () => {
-		it("assigns minimum 200k to unclassified models with flagship keywords", () => {
+		it("assigns minimum 200k to unclassified models with modern series keywords", () => {
 			expect(getModelContextWindow("custom-provider/ultra-llm")).toBe(200_000)
 			expect(getModelContextWindow("new-coder-max")).toBe(200_000)
 			expect(getModelContextWindow("super-model-pro-max")).toBe(200_000)
 			expect(getModelContextWindow("experimental-v5")).toBe(200_000)
+			expect(getModelContextWindow("experimental-v6")).toBe(200_000)
 			expect(getModelContextWindow("cool-model-flagship")).toBe(200_000)
+			expect(getModelContextWindow("some-next-model")).toBe(200_000)
+			expect(getModelContextWindow("acme-model-pro")).toBe(200_000)
 		})
 	})
 

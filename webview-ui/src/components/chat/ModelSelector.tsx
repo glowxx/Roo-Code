@@ -279,6 +279,7 @@ export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): s
 	if (lower.includes("claude-3-opus")) return "Claude 3 Opus"
 
 	// OpenAI
+	if (lower.includes("gpt-6-astra") || lower.includes("gpt-6")) return "GPT-6 Astra"
 	if (lower.includes("gpt-5-turbo")) return "GPT-5 Turbo"
 	if (lower.includes("gpt-5-mini") || lower.includes("gpt-5.4-mini") || lower.includes("gpt-5.1-mini")) return "GPT-5 Mini"
 	if (lower.includes("gpt-5-nano") || lower.includes("gpt-5.4-nano")) return "GPT-5 Nano"
@@ -414,6 +415,7 @@ export const ModelSelector = ({
 		setApiConfiguration,
 		routerModels,
 		openAiModels,
+		openAiModelInfos,
 		listApiConfigMeta: extListApiConfigMeta,
 		pinnedApiConfigs: extPinnedApiConfigs,
 		togglePinnedApiConfig: extTogglePinnedApiConfig,
@@ -570,10 +572,12 @@ export const ModelSelector = ({
 										? "Vision"
 										: undefined
 
+						const dynamicContext = openAiModelInfos?.[id]?.contextWindow
+
 						result.push({
 							id,
 							name: cleanModelDisplayName(id),
-							contextWindow: getModelContextWindow(id),
+							contextWindow: getModelContextWindow(id, dynamicContext),
 							isReasoning,
 							isFast,
 							isCoder,
@@ -592,6 +596,7 @@ export const ModelSelector = ({
 				{ id: "deepseek/deepseek-reasoner", name: "DeepSeek R1", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 128000, description: "xKiro DeepSeek-R1: Advanced reasoning and Chain of Thought deduction." },
 				{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 200000, description: "xKiro Claude 3.7 Sonnet: Premier hybrid reasoning and coding model." },
 				{ id: "anthropic/claude-3.5-sonnet", name: "Claude 3.5 Sonnet", isReasoning: false, isFast: false, contextWindow: 200000, description: "xKiro Claude 3.5 Sonnet: Industry standard for intelligent coding." },
+				{ id: "openai/gpt-6-astra", name: "GPT-6 Astra", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 1000000, description: "xKiro GPT-6 Astra: Next-gen flagship model with 1M context window." },
 				{ id: "openai/gpt-5", name: "GPT-5", isReasoning: true, isFast: false, isFlagship: true, badge: "Reasoning", contextWindow: 400000, description: "xKiro GPT-5: OpenAI flagship model with reasoning and 400k context window." },
 				{ id: "openai/gpt-5-mini", name: "GPT-5 Mini", isReasoning: true, isFast: false, isFlagship: false, badge: "Reasoning", contextWindow: 400000, description: "xKiro GPT-5 Mini: Fast, low-cost reasoning model with 400k context window." },
 				{ id: "openai/gpt-4o", name: "GPT-4o", isReasoning: false, isFast: false, isFlagship: true, contextWindow: 128000, description: "xKiro GPT-4o: Versatile flagship multimodal model from OpenAI." },
@@ -718,7 +723,7 @@ export const ModelSelector = ({
 		result.sort(compareModels)
 
 		return result
-	}, [activeProvider, routerModels, openAiModels, activeModelId, activeModelInfo])
+	}, [activeProvider, routerModels, openAiModels, openAiModelInfos, activeModelId, activeModelInfo])
 
 	// Filter models by category and search query
 	const filteredModels = useMemo(() => {
@@ -836,7 +841,10 @@ export const ModelSelector = ({
 			delete updatedConfig.modelMaxThinkingTokens
 
 			// Ensure openAiCustomModelInfo is immediately updated with the correct contextWindow
-			const resolvedContextWindow = targetModelItem?.contextWindow || getModelContextWindow(modelId)
+			const resolvedContextWindow =
+				targetModelItem?.contextWindow ||
+				openAiModelInfos?.[modelId]?.contextWindow ||
+				getModelContextWindow(modelId)
 			if (provider === "openai" || provider === "xkiro" || updatedConfig.openAiCustomModelInfo) {
 				updatedConfig.openAiCustomModelInfo = {
 					...(updatedConfig.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
@@ -857,7 +865,7 @@ export const ModelSelector = ({
 			setOpen(false)
 			setSearchQuery("")
 		},
-		[apiConfiguration, extCurrentApiConfigName, setApiConfiguration, availableModels, routerModels],
+		[apiConfiguration, extCurrentApiConfigName, setApiConfiguration, availableModels, routerModels, openAiModelInfos],
 	)
 
 	// Select custom model with sanitization

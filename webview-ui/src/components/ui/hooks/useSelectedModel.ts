@@ -277,14 +277,16 @@ function getSelectedModel({
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
 			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
-			const baseInfo = predefinedInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
+			const customOverride = (apiConfiguration as any).xkiroCustomContextWindow || (apiConfiguration as any).customContextWindow
+			const baseInfo = predefinedInfo ?? (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
 				maxTokens: 8192,
 				contextWindow: getModelContextWindow(id),
 				supportsImages: true,
 				supportsPromptCache: true,
 				description: `xKiro model: ${id}`,
 			}
-			const contextWindow = getModelContextWindow(id, baseInfo.contextWindow)
+			const baseContext = customOverride || baseInfo.contextWindow
+			const contextWindow = customOverride ? customOverride : getModelContextWindow(id, baseContext)
 			const supportsReasoningEffort =
 				baseInfo.supportsReasoningEffort ??
 				(modelSupportsReasoning(id, baseInfo) ? true : undefined)
