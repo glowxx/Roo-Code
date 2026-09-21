@@ -6,7 +6,6 @@ import { VSCodeButton, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import {
 	type ProviderSettings,
 	type ModelInfo,
-	type ReasoningEffort,
 	type OrganizationAllowList,
 	type ExtensionMessage,
 	azureOpenAiDefaultApiVersion,
@@ -20,7 +19,6 @@ import { convertHeadersToObject } from "../utils/headers"
 import { inputEventTransform, noTransform } from "../transforms"
 import { ModelPicker } from "../ModelPicker"
 import { R1FormatSetting } from "../R1FormatSetting"
-import { ThinkingBudget } from "../ThinkingBudget"
 
 type OpenAICompatibleProps = {
 	apiConfiguration: ProviderSettings
@@ -238,45 +236,7 @@ export const OpenAICompatible = ({
 				)}
 			</div>
 
-			<div className="flex flex-col gap-1">
-				<Checkbox
-					checked={apiConfiguration.enableReasoningEffort ?? false}
-					onChange={(checked: boolean) => {
-						setApiConfigurationField("enableReasoningEffort", checked)
 
-						if (!checked) {
-							const { reasoningEffort: _, ...openAiCustomModelInfo } =
-								apiConfiguration.openAiCustomModelInfo || openAiModelInfoSaneDefaults
-
-							setApiConfigurationField("openAiCustomModelInfo", openAiCustomModelInfo)
-						}
-					}}>
-					{t("settings:providers.setReasoningLevel")}
-				</Checkbox>
-				{!!apiConfiguration.enableReasoningEffort && (
-					<ThinkingBudget
-						apiConfiguration={{
-							...apiConfiguration,
-							reasoningEffort: apiConfiguration.openAiCustomModelInfo?.reasoningEffort,
-						}}
-						setApiConfigurationField={(field, value) => {
-							if (field === "reasoningEffort") {
-								const openAiCustomModelInfo =
-									apiConfiguration.openAiCustomModelInfo || openAiModelInfoSaneDefaults
-
-								setApiConfigurationField("openAiCustomModelInfo", {
-									...openAiCustomModelInfo,
-									reasoningEffort: value as ReasoningEffort,
-								})
-							}
-						}}
-						modelInfo={{
-							...(apiConfiguration.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
-							supportsReasoningEffort: ["low", "medium", "high", "xhigh"],
-						}}
-					/>
-				)}
-			</div>
 			<div className="flex flex-col gap-3">
 				<div className="text-sm text-vscode-descriptionForeground whitespace-pre-line">
 					{t("settings:providers.customModel.capabilities")}

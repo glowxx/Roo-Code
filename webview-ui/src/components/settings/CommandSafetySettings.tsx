@@ -1,11 +1,12 @@
-import { HTMLAttributes, useCallback } from "react"
-import type { CommandSafetyConfig } from "@roo-code/types"
-import { DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE } from "@roo-code/types"
+import { HTMLAttributes, useCallback, useMemo } from "react"
+import type { CommandSafetyConfig, ProviderSettings } from "@roo-code/types"
+import { DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE, resolveProviderApiKey } from "@roo-code/types"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { ShieldCheck, RotateCcw } from "lucide-react"
+import { ShieldCheck, RotateCcw, Check, AlertTriangle } from "lucide-react"
 
 import { cn } from "@src/lib/utils"
 import {
+	Badge,
 	Button,
 	Input,
 	Select,
@@ -19,23 +20,38 @@ import {
 import { SectionHeader } from "./SectionHeader"
 import { Section } from "./Section"
 import { SearchableSetting } from "./SearchableSetting"
+import { CommandSafetyModelCombobox } from "./CommandSafetyModelCombobox"
 
 interface CommandSafetySettingsProps extends Omit<HTMLAttributes<HTMLDivElement>, "onChange"> {
+	apiConfiguration?: ProviderSettings
 	commandSafetyConfig?: CommandSafetyConfig
 	onChange: (config: CommandSafetyConfig) => void
 }
 
+const PROVIDER_NAMES: Record<string, string> = {
+	openai: "OpenAI",
+	anthropic: "Anthropic",
+	openrouter: "OpenRouter",
+	xkiro: "xKiro",
+	gemini: "Google Gemini",
+}
+
 export const CommandSafetySettings = ({
+	apiConfiguration,
 	commandSafetyConfig,
 	onChange,
 	className,
 	...props
 }: CommandSafetySettingsProps) => {
-	const config: CommandSafetyConfig = commandSafetyConfig ?? {
-		enabled: false,
-		provider: "openai",
-		modelId: "",
-	}
+	const config: CommandSafetyConfig = useMemo(
+		() =>
+			commandSafetyConfig ?? {
+				enabled: false,
+				provider: "openai",
+				modelId: "",
+			},
+		[commandSafetyConfig],
+	)
 
 	const updateField = useCallback(
 		<K extends keyof CommandSafetyConfig>(field: K, value: CommandSafetyConfig[K]) => {
@@ -46,6 +62,13 @@ export const CommandSafetySettings = ({
 		},
 		[config, onChange],
 	)
+
+	const currentProvider = config.provider || "openai"
+	const inheritedApiKey = resolveProviderApiKey(currentProvider, apiConfiguration)
+	const hasDedicatedApiKey = Boolean(config.apiKey && config.apiKey.trim().length > 0)
+	const hasInheritedApiKey = Boolean(inheritedApiKey && inheritedApiKey.trim().length > 0)
+
+	const providerDisplayName = PROVIDER_NAMES[currentProvider.toLowerCase()] || currentProvider
 
 	return (
 		<div className={cn("space-y-4", className)} {...props}>
@@ -98,18 +121,17 @@ export const CommandSafetySettings = ({
 						</Select>
 					</SearchableSetting>
 
-					{/* Model ID input */}
+					{/* Model ID selector */}
 					<SearchableSetting
 						settingId="command-safety-model-id"
 						section="autoApprove"
 						label="ID Modelu Bezpieczeństwa (Model ID)">
 						<label className="block text-sm font-medium mb-1">ID Modelu (Model ID)</label>
-						<Input
-							type="text"
+						<CommandSafetyModelCombobox
+							provider={config.provider || "openai"}
 							value={config.modelId || ""}
-							onChange={(e) => updateField("modelId", e.target.value)}
+							onChange={(modelId) => updateField("modelId", modelId)}
 							placeholder="np. gpt-4o-mini, claude-3-5-haiku-20241022"
-							className="w-full"
 							data-testid="command-safety-model-id-input"
 						/>
 					</SearchableSetting>
@@ -119,15 +141,38 @@ export const CommandSafetySettings = ({
 						settingId="command-safety-api-key"
 						section="autoApprove"
 						label="Dedykowany Klucz API (Dedicated API Key)">
-						<label className="block text-sm font-medium mb-1">Klucz API (Opcjonalny)</label>
+						<div className="flex items-center justify-between mb-1">
+							<label className="block text-sm font-medium">Klucz API (Opcjonalny)</label>
+							{!hasDedicatedApiKey && hasInheritedApiKey && (
+								<Badge
+									variant="outline"
+									className="flex items-center gap-1.5 text-xs text-green-500 border-green-500/30 bg-green-500/10 font-normal"
+									data-testid="command-safety-inherited-badge">
+									<Check className="size-3 text-green-500" />
+									<span>{`Pobrano z konfiguracji ${providerDisplayName} (Gotowy)`}</span>
+								</Badge>
+							)}
+						</div>
 						<Input
 							type="password"
 							value={config.apiKey || ""}
 							onChange={(e) => updateField("apiKey", e.target.value)}
-							placeholder="Klucz API (opcjonalnie)"
+							placeholder={
+								!hasDedicatedApiKey && hasInheritedApiKey
+									? "(Odziedziczono z profilu głównego)"
+									: "Klucz API (opcjonalnie)"
+							}
 							className="w-full"
 							data-testid="command-safety-api-key-input"
 						/>
+						{!hasDedicatedApiKey && !hasInheritedApiKey && (
+							<div
+								className="flex items-center gap-1.5 text-amber-500 text-xs mt-1.5"
+								data-testid="command-safety-api-key-warning">
+								<AlertTriangle className="size-3.5 shrink-0" />
+								<span>{`Brak klucza API dla ${providerDisplayName}. Wprowadź klucz tutaj lub w sekcji Dostawcy.`}</span>
+							</div>
+						)}
 						<div className="text-vscode-descriptionForeground text-xs mt-1">
 							Opcjonalny dedykowany klucz API. Jeśli pozostanie pusty, zostanie użyty klucz z głównej konfiguracji wybranego dostawcy.
 						</div>

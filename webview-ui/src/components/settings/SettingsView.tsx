@@ -1065,6 +1065,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 												id="section-commandSafety"
 												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
 												<CommandSafetySettings
+													apiConfiguration={cachedState.apiConfiguration}
 													commandSafetyConfig={commandSafetyConfig}
 													onChange={(newConfig) =>
 														setCachedStateField("commandSafetyConfig", newConfig)
