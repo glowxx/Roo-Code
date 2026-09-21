@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react"
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 
 import {
 	type ProviderSettings,
@@ -31,6 +31,10 @@ import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 
 export interface ExtensionStateContextType extends ExtensionState {
+	isLoading?: boolean
+	setIsLoading?: (value: boolean) => void
+	isSwitching?: boolean
+	setIsSwitching?: (value: boolean) => void
 	historyPreviewCollapsed?: boolean // Add the new state property
 	didHydrateState: boolean
 	showWelcome: boolean
@@ -272,6 +276,59 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [includeTaskHistoryInEnhance, setIncludeTaskHistoryInEnhance] = useState(true)
 	const [includeCurrentTime, setIncludeCurrentTime] = useState(true)
 	const [includeCurrentCost, setIncludeCurrentCost] = useState(true)
+	const [isLoading, setIsLoadingState] = useState(false)
+	const [isSwitching, setIsSwitchingState] = useState(false)
+	const defensiveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+	const clearDefensiveTimeout = useCallback(() => {
+		if (defensiveTimeoutRef.current) {
+			clearTimeout(defensiveTimeoutRef.current)
+			defensiveTimeoutRef.current = null
+		}
+	}, [])
+
+	const resetToIdle = useCallback(() => {
+		clearDefensiveTimeout()
+		setIsLoadingState(false)
+		setIsSwitchingState(false)
+	}, [clearDefensiveTimeout])
+
+	const armDefensiveTimeout = useCallback(() => {
+		clearDefensiveTimeout()
+		defensiveTimeoutRef.current = setTimeout(() => {
+			resetToIdle()
+		}, 1000)
+	}, [clearDefensiveTimeout, resetToIdle])
+
+	const setIsLoading = useCallback(
+		(loading: boolean) => {
+			setIsLoadingState(loading)
+			if (loading) {
+				armDefensiveTimeout()
+			} else {
+				clearDefensiveTimeout()
+			}
+		},
+		[armDefensiveTimeout, clearDefensiveTimeout],
+	)
+
+	const setIsSwitching = useCallback(
+		(switching: boolean) => {
+			setIsSwitchingState(switching)
+			if (switching) {
+				armDefensiveTimeout()
+			} else {
+				clearDefensiveTimeout()
+			}
+		},
+		[armDefensiveTimeout, clearDefensiveTimeout],
+	)
+
+	useEffect(() => {
+		return () => {
+			clearDefensiveTimeout()
+		}
+	}, [clearDefensiveTimeout])
 
 	const setListApiConfigMeta = useCallback(
 		(value: ProviderSettingsEntry[]) => setState((prevState) => ({ ...prevState, listApiConfigMeta: value })),
@@ -291,7 +348,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const handleMessage = useCallback(
 		(event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
-			switch (message.type) {
+			try {
+				switch (message.type) {
 				case "state": {
 					const newState = message.state ?? {}
 					setState((prevState) => mergeExtensionState(prevState, newState))
@@ -327,6 +385,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					break
 				}
 				case "action": {
+					const action = message.action as any
+					if (action === "clearTask" || action === "switchWorkspace") {
+						resetToIdle()
+					}
 					if (message.action === "toggleAutoApprove") {
 						// Toggle the auto-approval state
 						setState((prevState) => {
@@ -336,6 +398,11 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 							return { ...prevState, autoApprovalEnabled: newValue }
 						})
 					}
+					break
+				}
+				case "showTaskWithId" as any:
+				case "switchWorkspace" as any: {
+					setIsSwitching(true)
 					break
 				}
 				case "theme": {
@@ -445,9 +512,20 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					break
 				}
 			}
-		},
-		[setListApiConfigMeta],
-	)
+		} finally {
+			if (
+				message.type === "state" ||
+				message.type === "taskHistoryUpdated" ||
+				message.type === "taskHistoryItemUpdated" ||
+				message.type === "workspaceUpdated" ||
+				(message.type === "action" && ((message.action as any) === "clearTask" || (message.action as any) === "switchWorkspace"))
+			) {
+				resetToIdle()
+			}
+		}
+	},
+	[setListApiConfigMeta, resetToIdle],
+)
 
 	useEffect(() => {
 		window.addEventListener("message", handleMessage)
@@ -462,6 +540,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 
 	const contextValue: ExtensionStateContextType = {
 		...state,
+		isLoading,
+		setIsLoading,
+		isSwitching,
+		setIsSwitching,
 		reasoningBlockCollapsed: state.reasoningBlockCollapsed ?? true,
 		didHydrateState,
 		showWelcome,

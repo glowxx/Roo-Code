@@ -465,13 +465,15 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 	}, [messages.length])
 
-	// Reset UI states when task changes. Scroll lifecycle is handled by
-	// useScrollLifecycle which has its own effect keyed on taskTs.
 	useEffect(() => {
 		setExpandedRows({})
 		everVisibleMessagesTsRef.current.clear()
 		setCurrentFollowUpTs(null)
 		setIsCondensing(false)
+
+		if (!task?.ts) {
+			setSendingDisabled(false)
+		}
 
 		if (autoApproveTimeoutRef.current) {
 			clearTimeout(autoApproveTimeoutRef.current)
@@ -567,7 +569,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 		// Only reset message-specific state, preserving mode.
 		setInputValue("")
-		setSendingDisabled(true)
+		setSendingDisabled(false)
 		setSelectedImages([])
 		setClineAsk(undefined)
 		setEnableButtons(false)
@@ -1808,7 +1810,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				inputValue={inputValue}
 				setInputValue={setInputValue}
 				sendingDisabled={sendingDisabled || isProfileDisabled}
-				selectApiConfigDisabled={sendingDisabled && clineAsk !== "api_req_failed"}
+				selectApiConfigDisabled={isStreaming}
 				placeholderText={placeholderText}
 				selectedImages={selectedImages}
 				setSelectedImages={setSelectedImages}

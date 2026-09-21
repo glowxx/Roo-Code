@@ -632,7 +632,10 @@
 
 	async function selectWorkspaceFolder(wsPath) {
 		if (!wsPath) return
+		activeTaskId = null
 		projectExpansions.add(wsPath)
+		forwardToWebview({ type: "action", action: "switchWorkspace", workspacePath: wsPath })
+		forwardToWebview({ type: "action", action: "clearTask" })
 		try {
 			const resp = await fetch("/api/workspace", {
 				method: "POST",
