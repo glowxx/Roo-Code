@@ -10,6 +10,8 @@ dist/
 out/
 out-*/
 build/
+!apps/desktop/build/
+!apps/desktop/build/**
 bin/
 release/
 apps/desktop/release/
