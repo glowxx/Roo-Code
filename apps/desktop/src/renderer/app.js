@@ -15,6 +15,7 @@
 	let isCodeWrapped = false
 	let isSvgSourceView = false
 	let currentDesktopTab = "chat"
+	let latestExtensionState = null
 	try {
 		const saved = localStorage.getItem("roo-quick-api-config")
 		if (saved) currentApiConfig = JSON.parse(saved)
@@ -69,6 +70,13 @@
 	const tabLabelTerminal = document.getElementById("tab-label-terminal")
 	const tabLabelFiles = document.getElementById("tab-label-files")
 	const tabLabelSettings = document.getElementById("tab-label-settings")
+
+	// Settings Modal elements
+	const openSettingsBtn = document.getElementById("open-settings-btn")
+	const settingsModalBackdrop = document.getElementById("settings-modal-backdrop")
+	const closeSettingsModalBtn = document.getElementById("close-settings-modal-btn")
+	const settingsWebviewFrame = document.getElementById("settings-webview-frame")
+	const settingsModalTitleText = document.getElementById("settings-modal-title-text")
 
 	// API Modal elements
 	const apiModalBackdrop = document.getElementById("api-modal-backdrop")
@@ -348,6 +356,9 @@
 		if (tabLabelTerminal) tabLabelTerminal.textContent = tDesktop("tabTerminal")
 		if (tabLabelFiles) tabLabelFiles.textContent = tDesktop("tabFiles")
 		if (tabLabelSettings) tabLabelSettings.textContent = tDesktop("tabSettings")
+		if (settingsModalTitleText) settingsModalTitleText.textContent = tDesktop("tabSettings")
+		if (openSettingsBtn) openSettingsBtn.title = tDesktop("tabSettings")
+		if (closeSettingsModalBtn) closeSettingsModalBtn.title = currentLanguage === "pl" ? "Zamknij (Esc)" : "Close (Esc)"
 
 		// 3. Connection badge & status texts
 		if (isConnected) {
@@ -402,22 +413,21 @@
 
 	function switchDesktopTab(targetTab, origin = "user", values = null) {
 		if (!targetTab) return
+		if (targetTab === "settings") {
+			openSettingsModal()
+			return
+		}
 		// Loop guard / idempotency check
 		if (currentDesktopTab === targetTab) return
 
 		currentDesktopTab = targetTab
 
-		// Update nav tabs active styling
+		// Update nav tabs active styling (main tabs: chat, diffs, terminal, files)
 		tabs.forEach((t) => t.classList.toggle("active", t.getAttribute("data-tab") === targetTab))
 
-		// Update panels active styling:
-		// "chat" and "settings" both live inside the webview in #tab-chat
+		// Update panels active styling (chat, diffs, terminal, files)
 		panels.forEach((p) => {
-			if (targetTab === "settings" || targetTab === "chat") {
-				p.classList.toggle("active", p.id === "tab-chat")
-			} else {
-				p.classList.toggle("active", p.id === `tab-${targetTab}`)
-			}
+			p.classList.toggle("active", p.id === `tab-${targetTab}`)
 		})
 
 		// If switching to files tab and files tree is empty or requires refresh, load files
@@ -430,14 +440,7 @@
 
 		// If user clicked in desktop shell, notify webview with origin: "sync"
 		if (origin === "user") {
-			if (targetTab === "settings") {
-				forwardToWebview({
-					type: "switchTab",
-					tab: "settings",
-					origin: "sync",
-					values: values || { section: "providers" },
-				})
-			} else if (targetTab === "chat") {
+			if (targetTab === "chat") {
 				forwardToWebview({
 					type: "switchTab",
 					tab: "chat",
@@ -538,17 +541,20 @@
 		}
 	}
 
-	function startNewChat(workspacePath) {
-		if (workspacePath && currentWorkspace?.path && pathNormalize(workspacePath) !== pathNormalize(currentWorkspace.path)) {
-			selectWorkspaceFolder(workspacePath).then(() => {
-				forwardToWebview({ type: "action", action: "chatButtonClicked" })
-				forwardToWebview({ type: "clearTask" })
-				switchDesktopTab("chat", "user")
-			})
-			return
+	async function startNewChat(workspacePath) {
+		if (workspacePath && (!currentWorkspace?.path || pathNormalize(workspacePath) !== pathNormalize(currentWorkspace.path))) {
+			await selectWorkspaceFolder(workspacePath)
 		}
+		activeTaskId = null
+		renderSidebar()
+
+		sendToServer({ type: "newChat", workspacePath })
+		sendToServer({ type: "webviewMessage", message: { type: "clearTask" } })
+
 		forwardToWebview({ type: "action", action: "chatButtonClicked" })
-		forwardToWebview({ type: "clearTask" })
+		forwardToWebview({ type: "action", action: "clearTask" })
+		forwardToWebview({ type: "action", action: "focusInput" })
+
 		switchDesktopTab("chat", "user")
 	}
 
@@ -749,7 +755,7 @@
 							<span class="project-path" title="${escapeHtml(ws)}">${escapeHtml(ws)}</span>
 						</div>
 						<div class="project-actions">
-							<button class="project-action-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}">
+							<button class="project-action-btn project-new-chat-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}">
 								<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 									<line x1="12" y1="5" x2="12" y2="19"/>
 									<line x1="5" y1="12" x2="19" y2="12"/>
@@ -811,6 +817,7 @@
 
 		sidebarProjectsListEl.querySelectorAll("[data-action='new-chat-in-ws']").forEach((btn) => {
 			btn.addEventListener("click", (e) => {
+				e.preventDefault()
 				e.stopPropagation()
 				const ws = btn.getAttribute("data-workspace")
 				if (ws) startNewChat(ws)

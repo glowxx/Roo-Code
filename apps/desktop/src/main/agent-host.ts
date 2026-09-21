@@ -355,6 +355,17 @@ export class DesktopAgentHost extends EventEmitter {
 		this.sendToExtension({ type: "showTaskWithId", text: taskId } as any)
 	}
 
+	public async clearTask(): Promise<void> {
+		if (this.provider && typeof (this.provider as any).clearTask === "function") {
+			try {
+				await (this.provider as any).clearTask()
+			} catch (err) {
+				console.warn("[DesktopAgentHost] provider.clearTask error:", err)
+			}
+		}
+		this.sendToExtension({ type: "clearTask" } as any)
+	}
+
 	public sendToExtension(message: WebviewMessage): void {
 		this.emit("webviewMessage", message)
 	}

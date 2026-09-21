@@ -277,108 +277,29 @@ describe("ModelSelector", () => {
 		expect(isReasoningModel("openai/gpt-4o")).toBe(false)
 	})
 
-	test("does not render reasoning effort section when active model does not support reasoning", () => {
+	test("does not render reasoning effort section in popover as it has been moved to dedicated toolbar button", () => {
+		mockSelectedModel = {
+			id: "openai/o3-mini",
+			info: {
+				contextWindow: 200000,
+				maxTokens: 100000,
+				supportsReasoningEffort: true,
+				reasoningEffort: "medium",
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "medium",
+			enableReasoningEffort: true,
+		}
+
 		render(<ModelSelector />)
 		const trigger = screen.getByTestId("model-selector-trigger")
 		fireEvent.click(trigger)
 
 		expect(screen.queryByTestId("reasoning-effort-section")).not.toBeInTheDocument()
-	})
-
-	test("renders reasoning effort section with pills when active model supports reasoning", () => {
-		mockSelectedModel = {
-			id: "openai/o3-mini",
-			info: {
-				contextWindow: 200000,
-				maxTokens: 100000,
-				supportsReasoningEffort: true,
-				reasoningEffort: "medium",
-			},
-		}
-		mockExtensionState.apiConfiguration = {
-			...mockExtensionState.apiConfiguration,
-			apiModelId: "openai/o3-mini",
-			xkiroModelId: "openai/o3-mini",
-			reasoningEffort: "medium",
-			enableReasoningEffort: true,
-		}
-
-		render(<ModelSelector />)
-		const trigger = screen.getByTestId("model-selector-trigger")
-		fireEvent.click(trigger)
-
-		expect(screen.getByTestId("reasoning-effort-section")).toBeInTheDocument()
-		expect(screen.getByTestId("reasoning-effort-pill-off")).toBeInTheDocument()
-		expect(screen.getByTestId("reasoning-effort-pill-low")).toBeInTheDocument()
-		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
-		expect(screen.getByTestId("reasoning-effort-pill-high")).toBeInTheDocument()
-	})
-
-	test("selecting a reasoning effort pill immediately updates apiConfiguration and synchronizes via IPC", () => {
-		mockSelectedModel = {
-			id: "openai/o3-mini",
-			info: {
-				contextWindow: 200000,
-				maxTokens: 100000,
-				supportsReasoningEffort: true,
-				reasoningEffort: "medium",
-			},
-		}
-		mockExtensionState.apiConfiguration = {
-			...mockExtensionState.apiConfiguration,
-			apiModelId: "openai/o3-mini",
-			xkiroModelId: "openai/o3-mini",
-			reasoningEffort: "medium",
-			enableReasoningEffort: true,
-		}
-
-		render(<ModelSelector />)
-		const trigger = screen.getByTestId("model-selector-trigger")
-		fireEvent.click(trigger)
-
-		// Click "High"
-		const highPill = screen.getByTestId("reasoning-effort-pill-high")
-		fireEvent.click(highPill)
-
-		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
-			expect.objectContaining({
-				reasoningEffort: "high",
-				enableReasoningEffort: true,
-			}),
-		)
-
-		expect(vscode.postMessage).toHaveBeenCalledWith(
-			expect.objectContaining({
-				type: "upsertApiConfiguration",
-				text: "default",
-				apiConfiguration: expect.objectContaining({
-					reasoningEffort: "high",
-					enableReasoningEffort: true,
-				}),
-			}),
-		)
-
-		// Click "Off"
-		const offPill = screen.getByTestId("reasoning-effort-pill-off")
-		fireEvent.click(offPill)
-
-		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
-			expect.objectContaining({
-				reasoningEffort: "disable",
-				enableReasoningEffort: false,
-			}),
-		)
-
-		expect(vscode.postMessage).toHaveBeenCalledWith(
-			expect.objectContaining({
-				type: "upsertApiConfiguration",
-				text: "default",
-				apiConfiguration: expect.objectContaining({
-					reasoningEffort: "disable",
-					enableReasoningEffort: false,
-				}),
-			}),
-		)
 	})
 
 	test("switching to a reasoning model preserves reasoningEffort", () => {
@@ -428,28 +349,5 @@ describe("ModelSelector", () => {
 				reasoningEffort: "high",
 			}),
 		)
-	})
-
-	test("renders reasoning effort section for GPT-5 on xKiro even without explicit ModelInfo reasoning flag", () => {
-		mockSelectedModel = {
-			id: "openai/gpt-5",
-			info: {
-				contextWindow: 400000,
-				maxTokens: 128000,
-			},
-		}
-		mockExtensionState.apiConfiguration = {
-			...mockExtensionState.apiConfiguration,
-			apiProvider: "xkiro",
-			apiModelId: "openai/gpt-5",
-			xkiroModelId: "openai/gpt-5",
-		}
-
-		render(<ModelSelector />)
-		const trigger = screen.getByTestId("model-selector-trigger")
-		fireEvent.click(trigger)
-
-		expect(screen.getByTestId("reasoning-effort-section")).toBeInTheDocument()
-		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
 	})
 })

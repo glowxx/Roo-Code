@@ -29,6 +29,7 @@ import { getModelMaxOutputTokens } from "@roo/api"
 import Thumbnails from "../common/Thumbnails"
 import { ModeSelector } from "./ModeSelector"
 import { ModelSelector } from "./ModelSelector"
+import { ReasoningEffortButton } from "./ReasoningEffortButton"
 import { AutoApproveDropdown } from "./AutoApproveDropdown"
 import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
 import ContextMenu from "./ContextMenu"
@@ -1301,7 +1302,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<ModelSelector
 							disabled={selectApiConfigDisabled}
 							triggerTestId="dropdown-trigger"
-							triggerClassName="min-w-0 max-w-[240px] text-ellipsis overflow-hidden flex-1"
+							triggerClassName="min-w-0 max-w-[220px] w-auto inline-flex items-center text-ellipsis overflow-hidden px-2.5 py-1"
 							currentConfigId={currentConfigId}
 							displayName={displayName}
 							listApiConfigMeta={listApiConfigMeta || []}
@@ -1311,6 +1312,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							onToggleLockApiConfig={handleToggleLockApiConfig}
 							onApiConfigChange={handleApiConfigChange}
 						/>
+						<ReasoningEffortButton disabled={selectApiConfigDisabled} />
 						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden shrink-0" />
 						{!isEditMode && contextWindow > 0 && (
 							<ContextWindowProgress

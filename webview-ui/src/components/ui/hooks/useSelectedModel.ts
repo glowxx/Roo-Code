@@ -271,12 +271,13 @@ function getSelectedModel({
 		case "openai": {
 			const id = apiConfiguration.openAiModelId ?? ""
 			const info = getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo)
-			return { id, info }
+			const contextWindow = getModelContextWindow(id, info?.contextWindow)
+			return { id, info: info ? { ...info, contextWindow } : info }
 		}
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
 			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
-			const baseInfo = predefinedInfo ?? {
+			const baseInfo = predefinedInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
 				maxTokens: 8192,
 				contextWindow: getModelContextWindow(id),
 				supportsImages: true,

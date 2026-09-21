@@ -739,6 +739,110 @@ describe("useSelectedModel", () => {
 			expect(result.current.id).toBe("custom-model-no-tools")
 			expect(result.current.info).toEqual(customModelInfo)
 		})
+
+		it("should immediately assign 200k (200 000) context window for Claude 3.7 Sonnet", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "anthropic/claude-3.7-sonnet",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("anthropic/claude-3.7-sonnet")
+			expect(result.current.info?.contextWindow).toBe(200000)
+		})
+
+		it("should assign 200k for Claude 3.7 Sonnet even when openAiCustomModelInfo has default 128k contextWindow", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "claude-3-7-sonnet",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("claude-3-7-sonnet")
+			expect(result.current.info?.contextWindow).toBe(200000)
+		})
+
+		it("should assign 200k context window for GPT-5 in OpenAI and not drop to 128k", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "gpt-5",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("gpt-5")
+			expect(result.current.info?.contextWindow).toBe(200000)
+		})
+
+		it("should assign 1M (1 000 000) context window for Gemini 2.5 Flash", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "google/gemini-2.5-flash",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("google/gemini-2.5-flash")
+			expect(result.current.info?.contextWindow).toBe(1000000)
+		})
+
+		it("should assign 2M (2 000 000) context window for Gemini 1.5 Pro", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "google/gemini-1.5-pro",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("google/gemini-1.5-pro")
+			expect(result.current.info?.contextWindow).toBe(2000000)
+		})
+
+		it("should assign 200k (200 000) context window for o3-mini", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "openai/o3-mini",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("openai")
+			expect(result.current.id).toBe("openai/o3-mini")
+			expect(result.current.info?.contextWindow).toBe(200000)
+		})
 	})
 
 	describe("minimax provider", () => {
@@ -802,6 +906,24 @@ describe("useSelectedModel", () => {
 			expect(result.current.id).toBe("openai/gpt-5")
 			expect(result.current.info?.contextWindow).toBe(400000)
 			expect(result.current.info?.supportsReasoningEffort).toBe(true)
+		})
+
+		it("should assign 400k context window for openai/gpt-5 in xKiro even if openAiCustomModelInfo has default 128k contextWindow", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "openai/gpt-5",
+				openAiCustomModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					contextWindow: 128000,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.provider).toBe("xkiro")
+			expect(result.current.id).toBe("openai/gpt-5")
+			expect(result.current.info?.contextWindow).toBe(400000)
 		})
 
 		it("should dynamically calculate contextWindow and reasoning for unlisted modern models", () => {

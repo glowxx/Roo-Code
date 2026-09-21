@@ -65,23 +65,24 @@
 						</svg>
 						<span id="tab-label-files">Files</span>
 					</button>
-					<button class="nav-tab" id="nav-settings-btn" data-tab="settings" title="Settings">
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<circle cx="12" cy="12" r="3"></circle>
-							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-						</svg>
-						<span id="tab-label-settings">Settings</span>
-					</button>
 				</nav>
 			</div>
 
-			<!-- Right Status & Controls: Engine connection indicator & Window controls -->
+			<!-- Right Status & Controls: Engine connection indicator, Settings action & Window controls -->
 			<div class="header-right">
 				<!-- Core Engine Connection Indicator -->
 				<div class="engine-connection-badge status-connected" id="engine-connection-badge" title="Core Engine Connection Status">
 					<span class="connection-dot"></span>
 					<span class="connection-text" id="engine-connection-text">Connected</span>
 				</div>
+
+				<button class="header-action-btn" id="open-settings-btn" title="Settings">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="12" r="3"></circle>
+						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+					</svg>
+					<span id="tab-label-settings">Settings</span>
+				</button>
 
 				<!-- Desktop System Window Controls (Minimize, Maximize, Close) -->
 				<div class="window-controls">
@@ -241,8 +242,8 @@
 					<aside class="files-sidebar">
 						<div class="sidebar-header">
 							<span class="sidebar-title" id="files-sidebar-title">Project Files</span>
-							<input type="text" id="files-search" class="files-search-input" placeholder="Search project files...">
 						</div>
+						<input type="text" id="files-search" class="files-search-input" placeholder="Search project files...">
 						<div class="files-tree" id="files-tree">
 							<div class="empty-state" id="files-tree-empty">Loading file tree...</div>
 						</div>
@@ -393,6 +394,27 @@
 					<button class="btn btn-ghost" id="cancel-api-modal-btn">Cancel</button>
 					<button class="btn btn-primary" id="save-api-config-btn">Save & Apply</button>
 				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Full Settings Modal Window / Overlay -->
+	<div id="settings-modal-backdrop" class="modal-backdrop hidden">
+		<div class="settings-modal-window">
+			<div class="settings-modal-header">
+				<div class="settings-modal-title">
+					<span class="codicon codicon-settings">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="3"></circle>
+							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+						</svg>
+					</span>
+					<span id="settings-modal-title-text">Ustawienia</span>
+				</div>
+				<button id="close-settings-modal-btn" class="modal-close-btn" title="Zamknij (Esc)">&times;</button>
+			</div>
+			<div class="settings-modal-body">
+				<iframe id="settings-webview-frame" class="settings-webview-iframe" title="Roo Code Settings"></iframe>
 			</div>
 		</div>
 	</div>

@@ -59,6 +59,7 @@ export type DesktopClientMessage =
 	| { type: "clearTerminalLogs" }
 	| { type: "getSidebarData" }
 	| { type: "switchChat"; taskId: string; workspacePath?: string }
+	| { type: "newChat"; workspacePath?: string }
 	| { type: "removeRecentWorkspace"; path: string }
 
 export type DesktopServerMessage =

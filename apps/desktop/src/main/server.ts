@@ -1565,6 +1565,31 @@ window.addEventListener("keydown", function(e) {
 					}
 					await agentHost.showTaskWithId(clientMsg.taskId)
 					broadcastSidebarData()
+				} else if (clientMsg.type === "newChat") {
+					if (clientMsg.workspacePath && fs.existsSync(clientMsg.workspacePath)) {
+						try {
+							const normReq = path.normalize(path.resolve(clientMsg.workspacePath))
+							const curWs = agentHost.getWorkspace()
+							if (!curWs || path.normalize(path.resolve(curWs)) !== normReq) {
+								await agentHost.setWorkspace(normReq)
+								saveDesktopConfig({ lastWorkspacePath: normReq })
+								const folderScan = scanWorkspace(normReq)
+								const newWs: WorkspaceInfo = {
+									path: normReq,
+									name: path.basename(normReq),
+									branch: getGitBranch(normReq),
+									files: folderScan.files,
+									directories: folderScan.directories,
+								}
+								broadcast({ type: "workspaceInfo", workspace: newWs })
+								broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+							}
+						} catch (err) {
+							safeSend(ws, { type: "error", message: `Failed to switch workspace: ${String(err)}` })
+						}
+					}
+					await agentHost.clearTask()
+					broadcastSidebarData()
 				} else if (clientMsg.type === "removeRecentWorkspace") {
 					const curCfg = loadDesktopConfig()
 					const normRemove = path.normalize(path.resolve(clientMsg.path))

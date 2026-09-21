@@ -7,6 +7,7 @@ import {
 	type ModelInfo,
 	modelSupportsReasoning,
 	getModelContextWindow,
+	openAiModelInfoSaneDefaults,
 } from "@roo-code/types"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -495,57 +496,6 @@ export const ModelSelector = ({
 		return cleanModelDisplayName(activeModelId, activeModelInfo)
 	}, [activeModelId, activeModelInfo])
 
-	// Check if the selected model supports reasoning
-	const activeModelSupportsReasoning = useMemo(() => {
-		return (
-			!!activeModelInfo?.supportsReasoningEffort ||
-			!!activeModelInfo?.supportsReasoningBudget ||
-			!!activeModelInfo?.maxThinkingTokens ||
-			modelSupportsReasoning(activeModelId, activeModelInfo) ||
-			isReasoningModel(activeModelId, activeModelInfo)
-		)
-	}, [activeModelInfo, activeModelId])
-
-	// Current reasoning effort state
-	const currentEffort: "Off" | "Low" | "Medium" | "High" = useMemo(() => {
-		if (
-			apiConfiguration?.enableReasoningEffort === false ||
-			apiConfiguration?.reasoningEffort === "disable"
-		) {
-			return "Off"
-		}
-		const effort = (apiConfiguration?.reasoningEffort || activeModelInfo?.reasoningEffort)?.toLowerCase()
-		if (effort === "low" || effort === "minimal") return "Low"
-		if (effort === "medium") return "Medium"
-		if (effort === "high" || effort === "xhigh") return "High"
-		if (apiConfiguration?.enableReasoningEffort === true) return "Medium"
-		if (activeModelInfo?.requiredReasoningEffort) return "Medium"
-		if (effort === "none") return "Off"
-		if (activeModelInfo?.supportsReasoningEffort || modelSupportsReasoning(activeModelId, activeModelInfo)) return "Medium"
-		return "Off"
-	}, [apiConfiguration?.enableReasoningEffort, apiConfiguration?.reasoningEffort, activeModelInfo, activeModelId])
-
-	// Switch reasoning effort
-	const handleSelectEffort = useCallback(
-		(effort: "Off" | "Low" | "Medium" | "High") => {
-			const updatedConfig: ProviderSettings = {
-				...apiConfiguration,
-				...(effort === "Off"
-					? { reasoningEffort: "disable" as any, enableReasoningEffort: false }
-					: { reasoningEffort: effort.toLowerCase() as any, enableReasoningEffort: true }),
-			}
-
-			setApiConfiguration(updatedConfig)
-
-			vscode.postMessage({
-				type: "upsertApiConfiguration",
-				text: extCurrentApiConfigName || "default",
-				apiConfiguration: updatedConfig,
-			})
-		},
-		[apiConfiguration, extCurrentApiConfigName, setApiConfiguration],
-	)
-
 	// Available models for the current provider
 	const availableModels = useMemo<ModelItem[]>(() => {
 		const result: ModelItem[] = []
@@ -623,6 +573,7 @@ export const ModelSelector = ({
 						result.push({
 							id,
 							name: cleanModelDisplayName(id),
+							contextWindow: getModelContextWindow(id),
 							isReasoning,
 							isFast,
 							isCoder,
@@ -884,6 +835,15 @@ export const ModelSelector = ({
 			delete updatedConfig.modelMaxTokens
 			delete updatedConfig.modelMaxThinkingTokens
 
+			// Ensure openAiCustomModelInfo is immediately updated with the correct contextWindow
+			const resolvedContextWindow = targetModelItem?.contextWindow || getModelContextWindow(modelId)
+			if (provider === "openai" || provider === "xkiro" || updatedConfig.openAiCustomModelInfo) {
+				updatedConfig.openAiCustomModelInfo = {
+					...(updatedConfig.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+					contextWindow: resolvedContextWindow,
+				}
+			}
+
 			// Update state locally immediately
 			setApiConfiguration(updatedConfig)
 
@@ -1058,43 +1018,6 @@ export const ModelSelector = ({
 								</span>
 							</div>
 						</div>
-
-						{/* Reasoning Effort Control (shown prominently at top before search) */}
-						{activeModelSupportsReasoning && (
-							<div
-								data-testid="reasoning-effort-section"
-								className="px-2 py-1.5 rounded bg-vscode-input-background/70 border border-vscode-input-border/60 flex items-center justify-between gap-2 shadow-xs">
-								<div className="flex items-center gap-1.5 flex-shrink-0">
-									<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
-									<span className="text-[11px] font-semibold text-vscode-foreground">Reasoning</span>
-								</div>
-								<div className="flex items-center p-0.5 bg-vscode-input-background rounded border border-vscode-input-border/50 gap-0.5 flex-1 max-w-[190px]">
-									{(["Off", "Low", "Medium", "High"] as const).map((effort) => {
-										const isSelected = currentEffort === effort
-										return (
-											<button
-												key={effort}
-												type="button"
-												data-testid={`reasoning-effort-pill-${effort.toLowerCase()}`}
-												onClick={(e) => {
-													e.stopPropagation()
-													handleSelectEffort(effort)
-												}}
-												className={cn(
-													"flex-1 py-0.5 text-[10.5px] rounded transition-all cursor-pointer text-center font-medium select-none",
-													isSelected
-														? effort === "Off"
-															? "bg-vscode-button-secondaryBackground text-vscode-foreground font-semibold shadow-xs"
-															: "bg-amber-500/25 text-amber-300 font-semibold border border-amber-500/40 shadow-xs"
-														: "text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-vscode-toolbar-hoverBackground/40 border border-transparent",
-												)}>
-												{effort}
-											</button>
-										)
-									})}
-								</div>
-							</div>
-						)}
 
 						{/* Search Bar */}
 						<div className="relative flex items-center">
