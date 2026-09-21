@@ -215,6 +215,77 @@ describe("ReasoningEffortButton", () => {
 		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
 	})
 
+	test("dynamically renders only the specified levels and Off when supportsReasoningEffort is an array", () => {
+		mockSelectedModel = {
+			id: "google/gemini-3-pro-preview",
+			info: {
+				contextWindow: 1000000,
+				supportsReasoningEffort: ["low", "high"],
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "google/gemini-3-pro-preview",
+			xkiroModelId: "google/gemini-3-pro-preview",
+			reasoningEffort: "high",
+			enableReasoningEffort: true,
+		}
+
+		render(<ReasoningEffortButton />)
+
+		const trigger = screen.getByTestId("reasoning-effort-trigger")
+		expect(trigger).toBeInTheDocument()
+		expect(trigger).toHaveTextContent("Effort: High")
+
+		fireEvent.click(trigger)
+
+		expect(screen.getByTestId("reasoning-effort-section")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-off")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-low")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-high")).toBeInTheDocument()
+		expect(screen.queryByTestId("reasoning-effort-pill-medium")).not.toBeInTheDocument()
+	})
+
+	test("dynamically renders only the specified levels and Off when reasoningEffortLevels is defined", () => {
+		mockSelectedModel = {
+			id: "custom/extended-reasoning-model",
+			info: {
+				contextWindow: 400000,
+				reasoningEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+			},
+		}
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "custom/extended-reasoning-model",
+			reasoningEffort: "xhigh",
+			enableReasoningEffort: true,
+		}
+
+		render(<ReasoningEffortButton />)
+
+		const trigger = screen.getByTestId("reasoning-effort-trigger")
+		expect(trigger).toBeInTheDocument()
+		expect(trigger).toHaveTextContent("Effort: XHigh")
+
+		fireEvent.click(trigger)
+
+		expect(screen.getByTestId("reasoning-effort-pill-off")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-minimal")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-low")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-medium")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-high")).toBeInTheDocument()
+		expect(screen.getByTestId("reasoning-effort-pill-xhigh")).toBeInTheDocument()
+
+		// Clicking minimal sets reasoningEffort to "minimal"
+		fireEvent.click(screen.getByTestId("reasoning-effort-pill-minimal"))
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reasoningEffort: "minimal",
+				enableReasoningEffort: true,
+			}),
+		)
+	})
+
 	test("disabled prop disables the trigger button", () => {
 		mockSelectedModel = {
 			id: "openai/o3-mini",

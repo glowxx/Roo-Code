@@ -59,11 +59,24 @@ describe("getModelContextWindow", () => {
 			expect(getModelContextWindow("google/gemini-custom-experimental")).toBe(1_000_000)
 		})
 
-		it("assigns 128k to DeepSeek Chat and Reasoner", () => {
+		it("assigns 128k to gpt-4o, gpt-4o-mini, gpt-4-turbo models", () => {
+			expect(getModelContextWindow("gpt-4o")).toBe(128_000)
+			expect(getModelContextWindow("openai/gpt-4o")).toBe(128_000)
+			expect(getModelContextWindow("gpt-4o-mini")).toBe(128_000)
+			expect(getModelContextWindow("openai/gpt-4o-mini")).toBe(128_000)
+			expect(getModelContextWindow("gpt-4-turbo")).toBe(128_000)
+			expect(getModelContextWindow("openai/gpt-4-turbo")).toBe(128_000)
+		})
+
+		it("assigns 128k to DeepSeek Chat and Reasoner by default, supporting 64k when specified", () => {
 			expect(getModelContextWindow("deepseek-chat")).toBe(128_000)
 			expect(getModelContextWindow("deepseek-reasoner")).toBe(128_000)
 			expect(getModelContextWindow("deepseek/deepseek-chat")).toBe(128_000)
 			expect(getModelContextWindow("deepseek/deepseek-reasoner")).toBe(128_000)
+			expect(getModelContextWindow("deepseek-chat", 64_000)).toBe(64_000)
+			expect(getModelContextWindow("deepseek-reasoner", 64_000)).toBe(64_000)
+			expect(getModelContextWindow("deepseek/deepseek-chat", 64_000)).toBe(64_000)
+			expect(getModelContextWindow("deepseek/deepseek-reasoner", 64_000)).toBe(64_000)
 		})
 	})
 
@@ -96,9 +109,15 @@ describe("getModelContextWindow", () => {
 			expect(getModelContextWindow("openai/o3-mini", 128_000)).toBe(200_000)
 		})
 
-		it("allows provider metadata greater than family limit to take precedence", () => {
+		it("allows provider metadata greater than family limit to take precedence for non-Claude models", () => {
 			expect(getModelContextWindow("openai/gpt-5", 400_000)).toBe(400_000)
-			expect(getModelContextWindow("claude-3.7-sonnet", 1_000_000)).toBe(1_000_000)
+		})
+
+		it("keeps Claude family strictly at 200k even if provider metadata reports higher baseContext", () => {
+			expect(getModelContextWindow("claude-3.7-sonnet", 1_000_000)).toBe(200_000)
+			expect(getModelContextWindow("anthropic/claude-3.5-sonnet", 1_000_000)).toBe(200_000)
+			expect(getModelContextWindow("claude-sonnet-4", 1_000_000)).toBe(200_000)
+			expect(getModelContextWindow("claude-opus-4", 2_000_000)).toBe(200_000)
 		})
 
 		it("preserves real metadata from provider for unclassified models", () => {

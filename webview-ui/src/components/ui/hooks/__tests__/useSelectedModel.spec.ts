@@ -952,5 +952,31 @@ describe("useSelectedModel", () => {
 			expect(result.current.id).toBe("google/gemini-custom-experimental")
 			expect(result.current.info?.contextWindow).toBe(1000000)
 		})
+
+		it("should give xkiroCustomContextWindow absolute priority over model default context window", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "anthropic/claude-3.7-sonnet",
+				xkiroCustomContextWindow: 750000,
+			} as any
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.info?.contextWindow).toBe(750000)
+		})
+
+		it("should give xkiroCustomContextWindow absolute priority even on other providers", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "openai",
+				openAiModelId: "gpt-4o",
+				xkiroCustomContextWindow: 500000,
+			} as any
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.info?.contextWindow).toBe(500000)
+		})
 	})
 })

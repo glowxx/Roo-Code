@@ -91,6 +91,9 @@ export const modelInfoSchema = z.object({
 	supportsReasoningEffort: z
 		.union([z.boolean(), z.array(z.enum(["disable", "none", "minimal", "low", "medium", "high", "xhigh"]))])
 		.optional(),
+	reasoningEffortLevels: z
+		.array(z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]))
+		.optional(),
 	requiredReasoningEffort: z.boolean().optional(),
 	preserveReasoning: z.boolean().optional(),
 	supportedParameters: z.array(modelParametersSchema).optional(),
@@ -157,138 +160,167 @@ export type RouterModels = Record<DynamicProvider | LocalProvider, ModelRecord>
  * for modern model families, respecting base context or provider overrides.
  *
  * Hierarchy:
- * 1. Explicit size indicator in model ID or known next-gen flagship prefixes:
- *    - 2m pattern -> strictly 2,000,000 (2M).
- *    - gpt-6 prefix/family, astra suffix/model, 1m pattern -> strictly 1,000,000 (1M).
- *    - 512k pattern -> strictly 524,288 (512k).
- * 2. Static database of known model families:
- *    - gpt-5, o1, o3, o4, claude-3-5, claude-3.5, claude-3-7, claude-3.7, claude-3-opus, claude-3-sonnet, claude-3-haiku -> strictly 200,000 (200k).
- *    - gemini:
- *      * gemini-1.5-pro, gemini-2.0-pro, gemini-3.0-pro (and Pro variants not shared with Flash) -> strictly 2,000,000 (2M).
- *      * other gemini-1.5, gemini-2.0, gemini-2.5, gemini-3.0 (including Flash) -> strictly 1,000,000 (1M).
- *    - deepseek-chat, deepseek-reasoner (V3/R1) -> 128,000.
- * 3. Unclassified models from modern series (next, ultra, max, pro, flagship, opus, pro-max, preview-flagship, v5, v6) -> minimum 200,000.
- * 4. Sane default fallback -> 128,000.
+ * 1. Claude / Anthropic family:
+ *    - Always 200,000 tokens (claude, anthropic, sonnet, opus, haiku regardless of version 3.5, 3.7, 4, 5).
+ *    - Provider / router baseContext > 200k cannot inflate Claude context window (explicit custom override takes precedence outside).
+ * 2. 1M+ models (explicit patterns and known families):
+ *    - Explicit '2m' pattern or Gemini 2M pro variants (1.5-pro, 2.0-pro, 3.0-pro, not flash/2.5) -> 2,000,000.
+ *    - Explicit '1m' pattern, 'astra', 'gpt-6' or Gemini family (1.5, 2.0, 2.5, 3.0) -> 1,000,000.
+ * 3. 512k explicit pattern -> 524,288.
+ * 4. OpenAI o-series & GPT family:
+ *    - o1, o3, o4, gpt-5 -> 200,000 (provider metadata > 200k like 400k takes precedence).
+ *    - gpt-4o, gpt-4o-mini, gpt-4-turbo -> 128,000.
+ * 5. DeepSeek family:
+ *    - deepseek-chat, deepseek-reasoner (V3/R1) -> 128,000 by default, supporting 64,000 when specified by provider.
+ * 6. Unclassified models from modern series (next, ultra, max, pro, flagship, pro-max, preview-flagship, v5, v6) -> minimum 200,000.
+ * 7. Sane default fallback -> 128,000.
  *
  * Provider metadata / baseContext hierarchy:
  * - If baseContext is a valid number > 0:
+ *   - For Claude: strictly 200,000 (never inflated by router/provider metadata).
+ *   - For DeepSeek: supports 64,000 if provided, otherwise defaults to 128,000 (or higher if valid).
  *   - Generic 128k default should never suppress higher family/flagship limits.
- *   - Provider metadata greater than the determined limit takes precedence.
+ *   - Provider metadata greater than the determined limit takes precedence (except Claude).
  *   - Known family/flagship limits take precedence over lower baseContext values.
  *   - Real metadata for unclassified models (e.g. 32k, 64k) is preserved.
  */
 export function getModelContextWindow(modelId: string, baseContext?: number): number {
 	const lower = (modelId || "").toLowerCase()
 
-	// 1. Explicit size indicators in model ID or next-gen flagship identifiers
-	let patternLimit: number | undefined
-	if (/(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")) {
-		patternLimit = 2_000_000
-	} else if (
-		/(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) ||
-		lower.includes("-1m") ||
-		lower.includes("_1m") ||
-		lower.includes("gpt-6") ||
-		lower.includes("astra")
-	) {
-		patternLimit = 1_000_000
-	} else if (
-		/(?:^|[\/_\-.:])512k(?:[\/_\-.:]|$)/i.test(lower) ||
-		lower.includes("-512k") ||
-		lower.includes("_512k")
-	) {
-		patternLimit = 524_288
+	// 1. Claude / Anthropic family: ALWAYS 200,000
+	// Routers / providers reporting > 200k baseContext must not inflate Claude
+	const isClaude =
+		lower.includes("claude") ||
+		lower.includes("anthropic") ||
+		lower.includes("sonnet") ||
+		lower.includes("opus") ||
+		lower.includes("haiku")
+
+	if (isClaude) {
+		return 200_000
 	}
 
-	// 2. Static database of known model families
-	let familyLimit: number | undefined = patternLimit
+	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra)
+	// or the Gemini family (gemini-1.5, gemini-2.0, gemini-2.5, gemini-3.0)
+	const is2mPattern = /(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")
+	const is1mPattern = /(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-1m") || lower.includes("_1m")
+	const isAstraOrGpt6 = lower.includes("astra") || lower.includes("gpt-6")
+	const isGemini = lower.includes("gemini")
 
-	if (familyLimit === undefined) {
-		if (lower.includes("gemini")) {
-			const isFlash = lower.includes("flash")
-			const is25 = lower.includes("2.5")
-			const isPro = lower.includes("pro")
-			const isSpecific2MPro =
-				lower.includes("1.5-pro") ||
-				lower.includes("1.5.pro") ||
-				lower.includes("2.0-pro") ||
-				lower.includes("2.0.pro") ||
-				lower.includes("3.0-pro") ||
-				lower.includes("3.0.pro") ||
-				lower.includes("3-pro") ||
-				lower.includes("3.pro")
+	if (is2mPattern) {
+		const limit = 2_000_000
+		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
+	}
 
-			if (!isFlash && !is25 && (isSpecific2MPro || isPro)) {
-				familyLimit = 2_000_000
-			} else {
-				familyLimit = 1_000_000
+	if (isGemini) {
+		const isFlash = lower.includes("flash")
+		const is25 = lower.includes("2.5")
+		const isPro = lower.includes("pro")
+		const isSpecific2MPro =
+			lower.includes("1.5-pro") ||
+			lower.includes("1.5.pro") ||
+			lower.includes("2.0-pro") ||
+			lower.includes("2.0.pro") ||
+			lower.includes("3.0-pro") ||
+			lower.includes("3.0.pro") ||
+			lower.includes("3-pro") ||
+			lower.includes("3.pro")
+
+		const limit = !isFlash && !is25 && (isSpecific2MPro || isPro) ? 2_000_000 : 1_000_000
+		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
+	}
+
+	if (is1mPattern || isAstraOrGpt6) {
+		const limit = 1_000_000
+		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
+	}
+
+	// 3. 512k pattern
+	if (/(?:^|[\/_\-.:])512k(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-512k") || lower.includes("_512k")) {
+		const limit = 524_288
+		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
+	}
+
+	// 4. OpenAI o-series & GPT family
+	const isOpenAi200k =
+		lower.includes("gpt-5") ||
+		/(?:^|[\/_\-.:])o[134](?:[\/_\-.:]|$)/i.test(lower) ||
+		lower.includes("o1") ||
+		lower.includes("o3") ||
+		lower.includes("o4")
+
+	if (isOpenAi200k) {
+		const limit = 200_000
+		if (typeof baseContext === "number" && baseContext > 0) {
+			if (baseContext === 128_000) {
+				return limit
 			}
-		} else if (
-			lower.includes("gpt-5") ||
-			lower.includes("o1") ||
-			lower.includes("o3") ||
-			lower.includes("o4") ||
-			lower.includes("claude-3-5") ||
-			lower.includes("claude-3.5") ||
-			lower.includes("claude-3-7") ||
-			lower.includes("claude-3.7") ||
-			lower.includes("claude-3-opus") ||
-			lower.includes("claude-3.opus") ||
-			lower.includes("claude-3-sonnet") ||
-			lower.includes("claude-3.sonnet") ||
-			lower.includes("claude-3-haiku") ||
-			lower.includes("claude-3.haiku")
-		) {
-			familyLimit = 200_000
-		} else if (
-			lower.includes("deepseek-chat") ||
-			lower.includes("deepseek-reasoner") ||
-			lower.includes("deepseek-v3") ||
-			lower.includes("deepseek-r1")
-		) {
-			familyLimit = 128_000
+			if (baseContext > limit) {
+				return baseContext
+			}
+			return limit
 		}
+		return limit
 	}
 
-	// 3. New / unclassified models suggesting new-generation flagship
-	let fallbackLimit = familyLimit
-	if (fallbackLimit === undefined) {
-		if (
-			lower.includes("next") ||
-			lower.includes("ultra") ||
-			lower.includes("max") ||
-			lower.includes("pro") ||
-			lower.includes("flagship") ||
-			lower.includes("opus") ||
-			lower.includes("pro-max") ||
-			lower.includes("preview-flagship") ||
-			lower.includes("v5") ||
-			lower.includes("v6")
-		) {
-			fallbackLimit = 200_000
-		} else {
-			// 4. Sane default fallback
-			fallbackLimit = 128_000
+	const isOpenAi128k = lower.includes("gpt-4o") || lower.includes("gpt-4-turbo")
+	if (isOpenAi128k) {
+		const limit = 128_000
+		if (typeof baseContext === "number" && baseContext > 0) {
+			if (baseContext > limit) {
+				return baseContext
+			}
+			return baseContext
 		}
+		return limit
 	}
 
-	// 1. Deterministic hierarchy with provider metadata
-	const hasValidBase = typeof baseContext === "number" && baseContext > 0
+	// 5. DeepSeek family: deepseek-chat, deepseek-reasoner (V3/R1) -> 64 000 / 128 000 (default 128k, supporting 64k)
+	const isDeepSeek =
+		lower.includes("deepseek-chat") ||
+		lower.includes("deepseek-reasoner") ||
+		lower.includes("deepseek-v3") ||
+		lower.includes("deepseek-r1")
 
-	if (hasValidBase) {
+	if (isDeepSeek) {
+		if (typeof baseContext === "number" && baseContext > 0) {
+			if (baseContext === 64_000) {
+				return 64_000
+			}
+			if (baseContext === 128_000) {
+				return 128_000
+			}
+			if (baseContext > 128_000) {
+				return baseContext
+			}
+			return baseContext
+		}
+		return 128_000
+	}
+
+	// 6. Unclassified models from modern flagship series
+	const isFlagship =
+		lower.includes("next") ||
+		lower.includes("ultra") ||
+		lower.includes("max") ||
+		lower.includes("pro") ||
+		lower.includes("flagship") ||
+		lower.includes("pro-max") ||
+		lower.includes("preview-flagship") ||
+		lower.includes("v5") ||
+		lower.includes("v6")
+
+	const fallbackLimit = isFlagship ? 200_000 : 128_000
+
+	if (typeof baseContext === "number" && baseContext > 0) {
 		// Generic 128k default should never suppress higher family/flagship limits
 		if (baseContext === 128_000) {
 			return Math.max(baseContext, fallbackLimit)
 		}
 
-		// Provider metadata greater than the determined limit (e.g. 400k for gpt-5 in xkiro, or custom 1M/1.05M)
+		// Provider metadata greater than the determined limit takes precedence
 		if (baseContext > fallbackLimit) {
 			return baseContext
-		}
-
-		// If the model belongs to a known family with higher limit, family limit takes precedence
-		if (familyLimit !== undefined) {
-			return Math.max(baseContext, familyLimit)
 		}
 
 		// Real metadata from provider for unclassified models (e.g. 32k, 64k)
@@ -303,7 +335,7 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
  * Automatically recognizes modern reasoning models like o1, o3, o4, gpt-5, reasoner, thinking models.
  */
 export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null): boolean {
-	if (info?.supportsReasoningEffort) {
+	if (info?.supportsReasoningEffort || (info?.reasoningEffortLevels && info.reasoningEffortLevels.length > 0)) {
 		return true
 	}
 	const lower = (modelId || "").toLowerCase()

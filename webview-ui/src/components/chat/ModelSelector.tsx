@@ -45,6 +45,7 @@ export interface ModelItem {
 	isFlagship?: boolean
 	badge?: string
 	description?: string
+	modelInfo?: ModelInfo
 }
 
 export type ModelCategory = "all" | "reasoning" | "fast" | "coder" | "vision" | "default"
@@ -237,6 +238,7 @@ export const isReasoningModel = (id: string, info?: ModelInfo): boolean => {
 	const lower = (id || "").toLowerCase()
 	return !!(
 		info?.supportsReasoningEffort ||
+		(Array.isArray(info?.reasoningEffortLevels) && info.reasoningEffortLevels.length > 0) ||
 		info?.supportsReasoningBudget ||
 		info?.maxThinkingTokens ||
 		info?.reasoningEffort ||
@@ -547,6 +549,7 @@ export const ModelSelector = ({
 					isVision,
 					badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
 					description: info.description,
+					modelInfo: info,
 				})
 			})
 		}
@@ -557,7 +560,7 @@ export const ModelSelector = ({
 				openAiModels.forEach((id) => {
 					if (!seenIds.has(id)) {
 						seenIds.add(id)
-						const isReasoning = isReasoningModel(id)
+						const isReasoning = isReasoningModel(id, openAiModelInfos?.[id])
 						const isFast = isFastModel(id, isReasoning)
 						const isCoder = isCoderModel(id)
 						const isVision = isVisionModel(id)
@@ -583,6 +586,7 @@ export const ModelSelector = ({
 							isCoder,
 							isVision,
 							badge,
+							modelInfo: openAiModelInfos?.[id],
 						})
 					}
 				})
@@ -641,6 +645,7 @@ export const ModelSelector = ({
 							isVision,
 							badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
 							description: info.description,
+							modelInfo: info,
 						})
 					}
 				})
@@ -710,6 +715,7 @@ export const ModelSelector = ({
 				isCoder,
 				isVision,
 				badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
+				modelInfo: activeModelInfo,
 			})
 		}
 
@@ -821,14 +827,16 @@ export const ModelSelector = ({
 				updatedConfig.unboundModelId = modelId
 			}
 
-			// Stop unconditional clearing of reasoningEffort when switching models!
-			// Check if target model supports reasoning; only delete reasoningEffort if it does not.
-			const targetModelInfo =
-				MODELS_BY_PROVIDER[provider]?.[modelId] ||
-				(provider === "openrouter" ? routerModels?.openrouter?.[modelId] : undefined)
+			// Check if target model supports reasoning
 			const targetModelItem = availableModels.find((m) => m.id === modelId)
+			const targetModelInfo =
+				targetModelItem?.modelInfo ||
+				MODELS_BY_PROVIDER[provider]?.[modelId] ||
+				(provider === "openrouter" ? routerModels?.openrouter?.[modelId] : undefined) ||
+				openAiModelInfos?.[modelId]
 			const targetSupportsReasoning =
 				!!targetModelInfo?.supportsReasoningEffort ||
+				(Array.isArray(targetModelInfo?.reasoningEffortLevels) && targetModelInfo.reasoningEffortLevels.length > 0) ||
 				!!targetModelInfo?.supportsReasoningBudget ||
 				!!targetModelInfo?.maxThinkingTokens ||
 				!!targetModelItem?.isReasoning ||
@@ -836,6 +844,42 @@ export const ModelSelector = ({
 
 			if (!targetSupportsReasoning) {
 				delete updatedConfig.reasoningEffort
+				updatedConfig.enableReasoningEffort = false
+			} else {
+				// Target model supports reasoning - handle clamping
+				const rawAllowed =
+					targetModelInfo?.reasoningEffortLevels ||
+					(Array.isArray(targetModelInfo?.supportsReasoningEffort)
+						? targetModelInfo.supportsReasoningEffort
+						: undefined)
+
+				const allowedLevels =
+					rawAllowed && Array.isArray(rawAllowed) && rawAllowed.length > 0
+						? rawAllowed.filter((l) => l !== "none" && l !== "disable")
+						: undefined
+
+				const currentEffort = updatedConfig.reasoningEffort?.toLowerCase()
+				if (currentEffort && currentEffort !== "disable") {
+					if (allowedLevels && allowedLevels.length > 0) {
+						const isAllowed = allowedLevels.some((l) => l.toLowerCase() === currentEffort)
+						if (!isAllowed) {
+							// Clamp to "medium" if allowed, or first available
+							const hasMedium = allowedLevels.some((l) => l.toLowerCase() === "medium")
+							const clamped = hasMedium
+								? "medium"
+								: allowedLevels[0].toLowerCase()
+							updatedConfig.reasoningEffort = clamped as any
+							updatedConfig.enableReasoningEffort = true
+						}
+					} else if (targetModelInfo?.supportsReasoningEffort === true) {
+						// Standard levels: low, medium, high
+						const standardLevels = ["low", "medium", "high"]
+						if (!standardLevels.includes(currentEffort)) {
+							updatedConfig.reasoningEffort = "medium"
+							updatedConfig.enableReasoningEffort = true
+						}
+					}
+				}
 			}
 			delete updatedConfig.modelMaxTokens
 			delete updatedConfig.modelMaxThinkingTokens

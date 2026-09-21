@@ -327,7 +327,7 @@ describe("ModelSelector", () => {
 		)
 	})
 
-	test("switching to a non-reasoning model deletes reasoningEffort", () => {
+	test("switching to a non-reasoning model deletes reasoningEffort and sets enableReasoningEffort to false", () => {
 		mockExtensionState.apiConfiguration = {
 			...mockExtensionState.apiConfiguration,
 			apiModelId: "openai/o3-mini",
@@ -345,8 +345,109 @@ describe("ModelSelector", () => {
 		fireEvent.click(v3Items[v3Items.length - 1])
 
 		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				enableReasoningEffort: false,
+			}),
+		)
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
 			expect.not.objectContaining({
 				reasoningEffort: "high",
+			}),
+		)
+	})
+
+	test("switching to a model with restricted levels clamps effort to medium if allowed", () => {
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/gpt-5.1-codex-max",
+			xkiroModelId: "openai/gpt-5.1-codex-max",
+			reasoningEffort: "xhigh",
+			enableReasoningEffort: true,
+		}
+		mockExtensionState.openAiModels = ["custom/restricted-model-medium"]
+		mockExtensionState.openAiModelInfos = {
+			"custom/restricted-model-medium": {
+				contextWindow: 128000,
+				supportsReasoningEffort: ["low", "medium"],
+			},
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const targetItem = screen.getByText("restricted-model-medium")
+		fireEvent.click(targetItem)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "custom/restricted-model-medium",
+				reasoningEffort: "medium",
+				enableReasoningEffort: true,
+			}),
+		)
+	})
+
+	test("switching to a model with restricted levels clamps effort to first available if medium is not allowed", () => {
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "medium",
+			enableReasoningEffort: true,
+		}
+		mockExtensionState.openAiModels = ["custom/restricted-model-low-high"]
+		mockExtensionState.openAiModelInfos = {
+			"custom/restricted-model-low-high": {
+				contextWindow: 128000,
+				supportsReasoningEffort: ["low", "high"],
+			},
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const targetItem = screen.getByText("restricted-model-low-high")
+		fireEvent.click(targetItem)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "custom/restricted-model-low-high",
+				reasoningEffort: "low",
+				enableReasoningEffort: true,
+			}),
+		)
+	})
+
+	test("switching to a model with reasoningEffortLevels clamps effort to first available if medium is not allowed", () => {
+		mockExtensionState.apiConfiguration = {
+			...mockExtensionState.apiConfiguration,
+			apiModelId: "openai/o3-mini",
+			xkiroModelId: "openai/o3-mini",
+			reasoningEffort: "high",
+			enableReasoningEffort: true,
+		}
+		mockExtensionState.openAiModels = ["custom/minimal-low-model"]
+		mockExtensionState.openAiModelInfos = {
+			"custom/minimal-low-model": {
+				contextWindow: 128000,
+				reasoningEffortLevels: ["minimal", "low"],
+			},
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const targetItem = screen.getByText("minimal-low-model")
+		fireEvent.click(targetItem)
+
+		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiModelId: "custom/minimal-low-model",
+				reasoningEffort: "minimal",
+				enableReasoningEffort: true,
 			}),
 		)
 	})

@@ -3,7 +3,7 @@ import { useEvent } from "react-use"
 import DynamicTextArea from "react-textarea-autosize"
 import { VolumeX, WandSparkles, SendHorizontal, X, ListEnd, Square } from "lucide-react"
 
-import type { ExtensionMessage, Command } from "@roo-code/types"
+import { type ExtensionMessage, type Command, getModelContextWindow } from "@roo-code/types"
 
 import { mentionRegex, mentionRegexGlobal, commandRegexGlobal, unescapeSpaces } from "@roo/context-mentions"
 import { WebviewMessage } from "@roo/WebviewMessage"
@@ -109,7 +109,9 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		} = useExtensionState()
 
 		const { id: modelId, info: model } = useSelectedModel(apiConfiguration)
-		const contextWindow = model?.contextWindow || 0
+		const customContextOverride =
+			(apiConfiguration as any)?.xkiroCustomContextWindow || (apiConfiguration as any)?.customContextWindow
+		const contextWindow = customContextOverride || model?.contextWindow || getModelContextWindow(modelId)
 		const maxTokens = useMemo(
 			() =>
 				model

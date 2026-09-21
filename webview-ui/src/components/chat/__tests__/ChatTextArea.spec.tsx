@@ -1305,6 +1305,56 @@ describe("ChatTextArea", () => {
 
 			expect(screen.queryByTestId("context-tokens-count")).not.toBeInTheDocument()
 		})
+
+		it("should prioritize xkiroCustomContextWindow over model default context window", () => {
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [],
+				openedTabs: [],
+				taskHistory: [],
+				cwd: "/test/workspace",
+				commands: [],
+				apiConfiguration: {
+					apiProvider: "anthropic",
+					apiModelId: "claude-3-7-sonnet-20250219",
+					xkiroCustomContextWindow: 500000,
+				},
+			})
+
+			render(<ChatTextArea {...defaultProps} contextTokens={2500} />)
+
+			expect(screen.getByTestId("context-window-size")).toHaveTextContent("500.0k")
+		})
+
+		it("should display updated context window size when model changes regardless of task history", () => {
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [],
+				openedTabs: [],
+				taskHistory: [
+					{
+						id: "old-task",
+						ts: 1234567890,
+						task: "old task with claude",
+						tokensIn: 100,
+						tokensOut: 200,
+						cacheWrites: 0,
+						cacheReads: 0,
+						totalCost: 0.01,
+						apiProvider: "anthropic",
+						modelId: "claude-3-7-sonnet-20250219",
+					},
+				],
+				cwd: "/test/workspace",
+				commands: [],
+				apiConfiguration: {
+					apiProvider: "gemini",
+					apiModelId: "gemini-2.0-flash",
+				},
+			})
+
+			render(<ChatTextArea {...defaultProps} contextTokens={2500} />)
+
+			expect(screen.getByTestId("context-window-size")).toHaveTextContent("1.0m")
+		})
 	})
 })
 

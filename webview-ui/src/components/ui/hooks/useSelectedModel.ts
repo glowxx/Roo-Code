@@ -105,10 +105,19 @@ export const useSelectedModel = (apiConfiguration?: ProviderSettings) => {
 				})
 			: { id: getProviderDefaultModelId(activeProvider ?? "openrouter"), info: undefined }
 
+	const customContextOverride =
+		(apiConfiguration as any)?.xkiroCustomContextWindow || (apiConfiguration as any)?.customContextWindow
+
+	const resolvedInfo = info
+		? customContextOverride
+			? { ...info, contextWindow: customContextOverride }
+			: info
+		: undefined
+
 	return {
 		provider,
 		id,
-		info,
+		info: resolvedInfo,
 		isLoading:
 			(needRouterModels && routerModels.isLoading) ||
 			(needOpenRouterProviders && openRouterModelProviders.isLoading) ||

@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 import { vscode } from "@/utils/vscode"
 import { isReasoningModel } from "./ModelSelector"
 
-export type ReasoningEffortLevel = "Off" | "Low" | "Medium" | "High"
+export type ReasoningEffortLevel = "Off" | "Low" | "Medium" | "High" | "Minimal" | "XHigh" | string
 
 export interface ReasoningEffortButtonProps {
 	disabled?: boolean
@@ -24,7 +24,19 @@ export interface ReasoningEffortButtonProps {
 	modelInfo?: ModelInfo
 }
 
-const EFFORT_OPTIONS: readonly ReasoningEffortLevel[] = ["Off", "Low", "Medium", "High"]
+export const formatEffortLabel = (level: string): string => {
+	const lower = level.toLowerCase()
+	if (lower === "off") return "Off"
+	if (lower === "none") return "None"
+	if (lower === "minimal") return "Minimal"
+	if (lower === "low") return "Low"
+	if (lower === "medium") return "Medium"
+	if (lower === "high") return "High"
+	if (lower === "xhigh") return "XHigh"
+	return level.charAt(0).toUpperCase() + level.slice(1)
+}
+
+const DEFAULT_EFFORT_OPTIONS: readonly string[] = ["Off", "Low", "Medium", "High"]
 
 export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 	disabled = false,
@@ -47,8 +59,16 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 
 	// Check if the selected model supports reasoning
 	const activeModelSupportsReasoning = useMemo(() => {
+		const supportsEffort =
+			activeModelInfo?.supportsReasoningEffort !== undefined &&
+			activeModelInfo?.supportsReasoningEffort !== false
+		const hasLevels =
+			Array.isArray(activeModelInfo?.reasoningEffortLevels) &&
+			activeModelInfo.reasoningEffortLevels.length > 0
+
 		return !!(
-			activeModelInfo?.supportsReasoningEffort ||
+			supportsEffort ||
+			hasLevels ||
 			activeModelInfo?.supportsReasoningBudget ||
 			activeModelInfo?.maxThinkingTokens ||
 			modelSupportsReasoning(activeModelId, activeModelInfo) ||
@@ -56,8 +76,26 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 		)
 	}, [activeModelInfo, activeModelId])
 
+	// Dynamically determine available effort options
+	const effortOptions = useMemo<string[]>(() => {
+		const rawLevels =
+			activeModelInfo?.reasoningEffortLevels ||
+			(Array.isArray(activeModelInfo?.supportsReasoningEffort)
+				? activeModelInfo.supportsReasoningEffort
+				: undefined)
+
+		if (rawLevels && Array.isArray(rawLevels) && rawLevels.length > 0) {
+			const positiveLevels = rawLevels
+				.filter((lvl) => lvl !== "disable" && lvl !== "none")
+				.map((lvl) => formatEffortLabel(lvl))
+			return ["Off", ...positiveLevels]
+		}
+
+		return [...DEFAULT_EFFORT_OPTIONS]
+	}, [activeModelInfo?.reasoningEffortLevels, activeModelInfo?.supportsReasoningEffort])
+
 	// Current reasoning effort state
-	const currentEffort: ReasoningEffortLevel = useMemo(() => {
+	const currentEffort: string = useMemo(() => {
 		if (
 			apiConfiguration?.enableReasoningEffort === false ||
 			apiConfiguration?.reasoningEffort === "disable"
@@ -65,22 +103,43 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 			return "Off"
 		}
 		const effort = (apiConfiguration?.reasoningEffort || activeModelInfo?.reasoningEffort)?.toLowerCase()
-		if (effort === "low" || effort === "minimal") return "Low"
-		if (effort === "medium") return "Medium"
-		if (effort === "high" || effort === "xhigh") return "High"
-		if (apiConfiguration?.enableReasoningEffort === true) return "Medium"
-		if (activeModelInfo?.requiredReasoningEffort) return "Medium"
 		if (effort === "none") return "Off"
-		if (activeModelInfo?.supportsReasoningEffort || modelSupportsReasoning(activeModelId, activeModelInfo)) return "Medium"
+
+		if (effort) {
+			const match = effortOptions.find((opt) => opt.toLowerCase() === effort)
+			if (match) return match
+			if (effort === "minimal" && effortOptions.includes("Minimal")) return "Minimal"
+			if (effort === "low" && effortOptions.includes("Low")) return "Low"
+			if (effort === "medium" && effortOptions.includes("Medium")) return "Medium"
+			if (effort === "high" && effortOptions.includes("High")) return "High"
+			if (effort === "xhigh" && effortOptions.includes("XHigh")) return "XHigh"
+		}
+
+		if (
+			apiConfiguration?.enableReasoningEffort === true ||
+			activeModelInfo?.requiredReasoningEffort ||
+			activeModelInfo?.supportsReasoningEffort ||
+			modelSupportsReasoning(activeModelId, activeModelInfo)
+		) {
+			return effortOptions.includes("Medium") ? "Medium" : effortOptions[1] || "Off"
+		}
+
 		return "Off"
-	}, [apiConfiguration?.enableReasoningEffort, apiConfiguration?.reasoningEffort, activeModelInfo, activeModelId])
+	}, [
+		apiConfiguration?.enableReasoningEffort,
+		apiConfiguration?.reasoningEffort,
+		activeModelInfo,
+		activeModelId,
+		effortOptions,
+	])
 
 	// Switch reasoning effort
 	const handleSelectEffort = useCallback(
-		(effort: ReasoningEffortLevel) => {
+		(effort: string) => {
+			const isOff = effort.toLowerCase() === "off" || effort.toLowerCase() === "disable"
 			const updatedConfig: ProviderSettings = {
 				...apiConfiguration,
-				...(effort === "Off"
+				...(isOff
 					? { reasoningEffort: "disable" as any, enableReasoningEffort: false }
 					: { reasoningEffort: effort.toLowerCase() as any, enableReasoningEffort: true }),
 			}
@@ -133,8 +192,8 @@ export const ReasoningEffortButton: React.FC<ReasoningEffortButtonProps> = ({
 						<Brain className="size-3.5 text-amber-400 flex-shrink-0" />
 						<span>Reasoning Effort</span>
 					</div>
-					{EFFORT_OPTIONS.map((effort) => {
-						const isSelected = currentEffort === effort
+					{effortOptions.map((effort) => {
+						const isSelected = currentEffort.toLowerCase() === effort.toLowerCase()
 						return (
 							<button
 								key={effort}
