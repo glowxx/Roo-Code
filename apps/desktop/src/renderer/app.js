@@ -985,16 +985,33 @@
 		}, 150)
 	})
 
-	// Setup Bidirectional Bridge with Iframe
+	// Setup Bidirectional Bridge with Iframes
 	window.addEventListener("message", (event) => {
 		if (event.data?.type === "toggleSidebar") {
 			toggleSidebar()
 			return
 		}
-		// Only listen to messages from the webview iframe
-		if (event.source === webviewFrame?.contentWindow) {
+		const isFromMainWebview = event.source === webviewFrame?.contentWindow
+		const isFromSettingsWebview = Boolean(settingsWebviewFrame?.contentWindow && event.source === settingsWebviewFrame.contentWindow)
+
+		// Listen to messages from both webview iframes
+		if (isFromMainWebview || isFromSettingsWebview) {
 			const data = event.data
 			if (data) {
+				if (isFromSettingsWebview && data.type === "webviewDidLaunch") {
+					const theme = localStorage.getItem("roo-theme") || "linear-dark"
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "languageChange", language: currentLanguage }, "*")
+					if (latestExtensionState) {
+						settingsWebviewFrame.contentWindow?.postMessage({ type: "state", state: latestExtensionState }, "*")
+					}
+					settingsWebviewFrame.contentWindow?.postMessage({
+						type: "switchTab",
+						tab: "settings",
+						origin: "sync",
+						values: { section: "providers" },
+					}, "*")
+				}
 				if (data.type === "languageChange" && data.language) {
 					const newLang = (data.language === "pl" || data.language.startsWith("pl")) ? "pl" : "en"
 					if (newLang !== currentLanguage) {
@@ -1003,28 +1020,43 @@
 						applyDesktopTranslations(currentLanguage)
 					}
 				}
-				if (data.type === "state" && data.state?.language) {
-					const newLang = (data.state.language === "pl" || data.state.language.startsWith("pl")) ? "pl" : "en"
-					if (newLang !== currentLanguage) {
-						currentLanguage = newLang
-						localStorage.setItem("roo-language", currentLanguage)
-						applyDesktopTranslations(currentLanguage)
+				if (data.type === "state" && data.state) {
+					latestExtensionState = { ...(latestExtensionState || {}), ...data.state }
+					if (data.state.language) {
+						const newLang = (data.state.language === "pl" || data.state.language.startsWith("pl")) ? "pl" : "en"
+						if (newLang !== currentLanguage) {
+							currentLanguage = newLang
+							localStorage.setItem("roo-language", currentLanguage)
+							applyDesktopTranslations(currentLanguage)
+						}
 					}
 				}
 				if (data.type === "themeChange" && data.theme) {
 					applyDesktopTheme(data.theme)
 				}
 				if (data.type === "switchTab" && data.tab) {
+					if (isFromSettingsWebview && data.tab === "chat") {
+						closeSettingsModal()
+						return
+					}
+					if (data.tab === "settings") {
+						openSettingsModal()
+						return
+					}
 					switchDesktopTab(data.tab, "sync")
 					return
 				}
 				if (data.type === "action" && data.action) {
 					if (data.action === "chatButtonClicked" || (data.action === "switchTab" && data.tab === "chat")) {
+						if (isFromSettingsWebview) {
+							closeSettingsModal()
+							return
+						}
 						switchDesktopTab("chat", "sync")
 						return
 					}
 					if (data.action === "settingsButtonClicked" || (data.action === "switchTab" && data.tab === "settings")) {
-						switchDesktopTab("settings", "sync")
+						openSettingsModal()
 						return
 					}
 				}
@@ -1040,6 +1072,9 @@
 	function forwardToWebview(msg) {
 		if (webviewFrame?.contentWindow) {
 			webviewFrame.contentWindow.postMessage(msg, "*")
+		}
+		if (settingsWebviewFrame?.contentWindow && settingsWebviewFrame.getAttribute("src")) {
+			settingsWebviewFrame.contentWindow.postMessage(msg, "*")
 		}
 	}
 
@@ -1134,6 +1169,7 @@
 			case "extensionMessage":
 				forwardToWebview(msg.message)
 				if (msg.message?.type === "state" && msg.message.state) {
+					latestExtensionState = { ...(latestExtensionState || {}), ...msg.message.state }
 					if (msg.message.state.language) {
 						const newLang = (msg.message.state.language === "pl" || msg.message.state.language.startsWith("pl")) ? "pl" : "en"
 						if (newLang !== currentLanguage) {
@@ -2218,8 +2254,48 @@
 		}
 	}
 
+	function openSettingsModal() {
+		if (!settingsModalBackdrop) return
+		settingsModalBackdrop.classList.remove("hidden")
+
+		if (settingsWebviewFrame) {
+			const theme = localStorage.getItem("roo-theme") || "linear-dark"
+			const sendInitSettings = () => {
+				try {
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "languageChange", language: currentLanguage }, "*")
+					if (latestExtensionState) {
+						settingsWebviewFrame.contentWindow?.postMessage({ type: "state", state: latestExtensionState }, "*")
+					}
+					settingsWebviewFrame.contentWindow?.postMessage({
+						type: "switchTab",
+						tab: "settings",
+						origin: "sync",
+						values: { section: "providers" },
+					}, "*")
+				} catch (err) {
+					console.warn("[SettingsModal] Failed to post init message to settings frame:", err)
+				}
+			}
+
+			if (!settingsWebviewFrame.getAttribute("src") || settingsWebviewFrame.getAttribute("src") === "") {
+				settingsWebviewFrame.addEventListener("load", () => {
+					setTimeout(sendInitSettings, 50)
+				}, { once: true })
+				settingsWebviewFrame.src = "/webview/index.html"
+			} else {
+				sendInitSettings()
+			}
+		}
+	}
+
+	function closeSettingsModal() {
+		if (!settingsModalBackdrop) return
+		settingsModalBackdrop.classList.add("hidden")
+	}
+
 	function openSettingsTab() {
-		switchDesktopTab("settings", "user", { section: "providers" })
+		openSettingsModal()
 	}
 
 	function openApiModal() {
@@ -2385,10 +2461,17 @@
 	}
 
 	// Attach Settings & API Listeners
-	settingsOpenBtn?.addEventListener("click", openSettingsTab)
+	openSettingsBtn?.addEventListener("click", openSettingsModal)
+	settingsOpenBtn?.addEventListener("click", openSettingsModal)
+	closeSettingsModalBtn?.addEventListener("click", closeSettingsModal)
+	settingsModalBackdrop?.addEventListener("click", (e) => {
+		if (e.target === settingsModalBackdrop) {
+			closeSettingsModal()
+		}
+	})
 	openFullSettingsFromModalBtn?.addEventListener("click", () => {
 		closeApiModal()
-		openSettingsTab()
+		openSettingsModal()
 	})
 
 	quickApiBtn?.addEventListener("click", openApiModal)
@@ -2419,8 +2502,14 @@
 	})
 
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && apiModalBackdrop && apiModalBackdrop.style.display === "flex") {
-			closeApiModal()
+		if (e.key === "Escape") {
+			if (settingsModalBackdrop && !settingsModalBackdrop.classList.contains("hidden")) {
+				closeSettingsModal()
+				return
+			}
+			if (apiModalBackdrop && apiModalBackdrop.style.display === "flex") {
+				closeApiModal()
+			}
 		}
 	})
 
