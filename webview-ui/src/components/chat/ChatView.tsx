@@ -21,7 +21,7 @@ import { getApiMetrics } from "@roo/getApiMetrics"
 import { getAllModes } from "@roo/modes"
 import { ProfileValidator } from "@roo/ProfileValidator"
 import { getLatestTodo } from "@roo/todo"
-import { getLatestUserPrompt } from "./utils/userPrompt"
+import { getLatestUserPrompt, getLatestPromptModifiedMessages } from "./utils/userPrompt"
 
 import { vscode } from "@src/utils/vscode"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
@@ -126,6 +126,17 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	// Has to be after api_req_finished are all reduced into api_req_started messages.
 	const apiMetrics = useMemo(() => getApiMetrics(modifiedMessages), [modifiedMessages])
+
+	const latestPromptModifiedMessages = useMemo(
+		() => getLatestPromptModifiedMessages(modifiedMessages, latestUserPrompt, task),
+		[modifiedMessages, latestUserPrompt, task],
+	)
+
+	// Api metrics for the agent's work in response to the latest user prompt.
+	const latestPromptApiMetrics = useMemo(
+		() => getApiMetrics(latestPromptModifiedMessages),
+		[latestPromptModifiedMessages],
+	)
 
 	const [inputValue, setInputValue] = useState("")
 	const inputValueRef = useRef(inputValue)
@@ -1619,17 +1630,20 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					<TaskHeader
 						task={task}
 						latestUserPrompt={latestUserPrompt}
-						tokensIn={apiMetrics.totalTokensIn}
-						tokensOut={apiMetrics.totalTokensOut}
-						cacheWrites={apiMetrics.totalCacheWrites}
-						cacheReads={apiMetrics.totalCacheReads}
-						totalCost={apiMetrics.totalCost}
+						tokensIn={latestPromptApiMetrics.totalTokensIn}
+						tokensOut={latestPromptApiMetrics.totalTokensOut}
+						cacheWrites={latestPromptApiMetrics.totalCacheWrites}
+						cacheReads={latestPromptApiMetrics.totalCacheReads}
+						totalCost={latestPromptApiMetrics.totalCost}
 						aggregatedCost={
-							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
+							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
+							currentTaskItem?.id &&
+							aggregatedCostsMap.has(currentTaskItem.id)
 								? aggregatedCostsMap.get(currentTaskItem.id)!.totalCost
 								: undefined
 						}
 						hasSubtasks={
+							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
 							!!(
 								currentTaskItem?.id &&
 								aggregatedCostsMap.has(currentTaskItem.id) &&
@@ -1638,7 +1652,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						}
 						parentTaskId={currentTaskItem?.parentTaskId}
 						costBreakdown={
-							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
+							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
+							currentTaskItem?.id &&
+							aggregatedCostsMap.has(currentTaskItem.id)
 								? getCostBreakdownIfNeeded(aggregatedCostsMap.get(currentTaskItem.id)!, {
 										own: t("common:costs.own"),
 										subtasks: t("common:costs.subtasks"),

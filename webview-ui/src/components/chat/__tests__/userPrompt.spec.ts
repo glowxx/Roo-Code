@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import type { ClineMessage } from "@roo-code/types"
-import { getLatestUserPrompt } from "../utils/userPrompt"
+import { getLatestUserPrompt, getLatestPromptModifiedMessages } from "../utils/userPrompt"
 
 describe("getLatestUserPrompt", () => {
 	const initialTask: ClineMessage = {
@@ -112,3 +112,109 @@ describe("getLatestUserPrompt", () => {
 		expect(getLatestUserPrompt(undefined)).toBeUndefined()
 	})
 })
+
+describe("getLatestPromptModifiedMessages", () => {
+	const initialTask: ClineMessage = {
+		type: "say",
+		say: "text",
+		ts: 1000,
+		text: "Initial Prompt A",
+	}
+
+	it("returns all modified messages when latestUserPrompt is the initial task", () => {
+		const modifiedMessages: ClineMessage[] = [
+			{ type: "say", say: "api_req_started", ts: 1001, text: '{"cost":0.05}' },
+			{ type: "say", say: "text", ts: 1002, text: "Response to A" },
+		]
+
+		const result = getLatestPromptModifiedMessages(modifiedMessages, initialTask, initialTask)
+		expect(result).toHaveLength(2)
+		expect(result[0].ts).toBe(1001)
+	})
+
+	it("returns only messages after latestUserPrompt in multi-turn conversation", () => {
+		const promptB: ClineMessage = {
+			type: "say",
+			say: "user_feedback",
+			ts: 2000,
+			text: "Feedback B",
+		}
+		const promptC: ClineMessage = {
+			type: "say",
+			say: "user_feedback",
+			ts: 3000,
+			text: "Feedback C",
+		}
+
+		const modifiedMessages: ClineMessage[] = [
+			{ type: "say", say: "api_req_started", ts: 1001, text: '{"cost":0.05}' },
+			{ type: "say", say: "text", ts: 1002, text: "Response to A" },
+			promptB,
+			{ type: "say", say: "api_req_started", ts: 2001, text: '{"cost":0.03}' },
+			{ type: "say", say: "text", ts: 2002, text: "Response to B" },
+			promptC,
+			{ type: "say", say: "api_req_started", ts: 3001, text: '{"cost":0.08}' },
+			{ type: "say", say: "text", ts: 3002, text: "Response to C" },
+		]
+
+		const result = getLatestPromptModifiedMessages(modifiedMessages, promptC, initialTask)
+		expect(result).toHaveLength(2)
+		expect(result[0].ts).toBe(3001)
+		expect(result[1].ts).toBe(3002)
+	})
+
+	it("reverts to prompt B messages when prompt C is removed", () => {
+		const promptB: ClineMessage = {
+			type: "say",
+			say: "user_feedback",
+			ts: 2000,
+			text: "Feedback B",
+		}
+
+		const modifiedMessages: ClineMessage[] = [
+			{ type: "say", say: "api_req_started", ts: 1001, text: '{"cost":0.05}' },
+			{ type: "say", say: "text", ts: 1002, text: "Response to A" },
+			promptB,
+			{ type: "say", say: "api_req_started", ts: 2001, text: '{"cost":0.03}' },
+			{ type: "say", say: "text", ts: 2002, text: "Response to B" },
+		]
+
+		const result = getLatestPromptModifiedMessages(modifiedMessages, promptB, initialTask)
+		expect(result).toHaveLength(2)
+		expect(result[0].ts).toBe(2001)
+		expect(result[1].ts).toBe(2002)
+	})
+
+	it("returns empty array when user feedback has no responses yet", () => {
+		const promptB: ClineMessage = {
+			type: "say",
+			say: "user_feedback",
+			ts: 2000,
+			text: "Feedback B",
+		}
+
+		const modifiedMessages: ClineMessage[] = [
+			{ type: "say", say: "api_req_started", ts: 1001, text: '{"cost":0.05}' },
+			{ type: "say", say: "text", ts: 1002, text: "Response to A" },
+			promptB,
+		]
+
+		const result = getLatestPromptModifiedMessages(modifiedMessages, promptB, initialTask)
+		expect(result).toHaveLength(0)
+	})
+
+	it("returns all modified messages when latestUserPrompt matches initialTask by ts", () => {
+		const modifiedMessages: ClineMessage[] = [
+			{ type: "say", say: "api_req_started", ts: 1001, text: '{"cost":0.05}' },
+		]
+
+		const cloneOfInitial: ClineMessage = { ...initialTask }
+		const result = getLatestPromptModifiedMessages(modifiedMessages, cloneOfInitial, initialTask)
+		expect(result).toHaveLength(1)
+	})
+
+	it("returns empty array when modifiedMessages is empty", () => {
+		expect(getLatestPromptModifiedMessages([], initialTask, initialTask)).toEqual([])
+	})
+})
+

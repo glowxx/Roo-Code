@@ -34,3 +34,43 @@ export function getLatestUserPrompt(messages: ClineMessage[] | undefined): Cline
 
 	return messages[0]
 }
+
+/**
+ * Returns the slice of modified messages corresponding to the agent's work
+ * performed in response to the latest user-authored prompt.
+ *
+ * Traversal logic:
+ * 1. If `latestUserPrompt` is undefined or matches `initialTask` (by reference or `ts`),
+ *    all `modifiedMessages` belong to this prompt.
+ * 2. Otherwise, finds `latestUserPrompt` in `modifiedMessages` (by reference or `ts`).
+ * 3. Returns all messages that come after that prompt (`modifiedMessages.slice(promptIndex + 1)`).
+ * 4. Falls back to `modifiedMessages` if `promptIndex === -1`.
+ *
+ * @param modifiedMessages Consolidated messages array from ChatView
+ * @param latestUserPrompt The latest user-authored ClineMessage
+ * @param initialTask The initial task ClineMessage (messages[0])
+ * @returns Array of ClineMessages representing the work done for the latest prompt
+ */
+export function getLatestPromptModifiedMessages(
+	modifiedMessages: ClineMessage[],
+	latestUserPrompt: ClineMessage | undefined,
+	initialTask: ClineMessage | undefined,
+): ClineMessage[] {
+	if (!modifiedMessages || modifiedMessages.length === 0) {
+		return []
+	}
+
+	if (!latestUserPrompt || !initialTask || latestUserPrompt === initialTask || latestUserPrompt.ts === initialTask.ts) {
+		return modifiedMessages
+	}
+
+	const promptIndex = modifiedMessages.findLastIndex(
+		(m) => m === latestUserPrompt || m.ts === latestUserPrompt.ts,
+	)
+
+	if (promptIndex === -1) {
+		return modifiedMessages
+	}
+
+	return modifiedMessages.slice(promptIndex + 1)
+}
