@@ -1,10 +1,21 @@
 import { logStartupDebug, setupGlobalCrashHandlers } from "./logger.js"
+import { execSync } from "child_process"
+
+if (process.platform === "win32" && !process.env.ROO_TOKEN_AUDIT) {
+	try {
+		const regOut = execSync('reg query "HKCU\\Environment" /v ROO_TOKEN_AUDIT', { encoding: "utf8" })
+		if (regOut.includes("true")) {
+			process.env.ROO_TOKEN_AUDIT = "true"
+		}
+	} catch {}
+}
 
 setupGlobalCrashHandlers("DesktopMain")
 logStartupDebug("=== Roo Code Desktop Starting ===")
 logStartupDebug(`Versions: ${JSON.stringify(process.versions)}`)
 logStartupDebug(`Process argv: ${JSON.stringify(process.argv)}`)
 logStartupDebug(`Cwd: ${process.cwd()}`)
+logStartupDebug(`ROO_TOKEN_AUDIT: ${process.env.ROO_TOKEN_AUDIT}`)
 
 import path from "path"
 import fs from "fs"
