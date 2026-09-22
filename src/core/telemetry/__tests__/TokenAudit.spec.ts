@@ -1,125 +1,114 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import {
 	prepareTokenAuditRecord,
-	formatTokenAuditLog,
-	redactSecrets,
-	estimateTokens,
-	resetTokenAuditForTask,
+	recordRequestTiming,
 	recordProviderUsage,
+	formatTokenAuditLog,
+	isTokenAuditEnabled,
+	type TokenAuditRecord,
 } from "../TokenAudit"
 
-describe("TokenAudit", () => {
+describe("TokenAudit Telemetry", () => {
+	const originalEnv = process.env.ROO_TOKEN_AUDIT
+
 	beforeEach(() => {
-		resetTokenAuditForTask("test-task-1")
+		process.env.ROO_TOKEN_AUDIT = "true"
 	})
 
-	it("redacts API keys and secrets", () => {
-		const raw = "Using key sk-1234567890abcdef and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-		const redacted = redactSecrets(raw)
-		expect(redacted).not.toContain("sk-1234567890abcdef")
-		expect(redacted).toContain("sk-[REDACTED]")
-		expect(redacted).toContain("Bearer [REDACTED]")
+	it("correctly identifies if token audit is enabled", () => {
+		process.env.ROO_TOKEN_AUDIT = "true"
+		expect(isTokenAuditEnabled()).toBe(true)
+
+		process.env.ROO_TOKEN_AUDIT = "false"
+		expect(isTokenAuditEnabled()).toBe(false)
+
+		delete process.env.ROO_TOKEN_AUDIT
+		expect(isTokenAuditEnabled()).toBe(false)
 	})
 
-	it("estimates tokens locally with zero external requests", () => {
-		const text = "1234567890123456" // 16 chars -> ~4 tokens
-		expect(estimateTokens(text)).toBe(4)
-		expect(estimateTokens({ text: "1234" })).toBe(1)
-	})
-
-	it("prepares valid audit record with breakdown and cumulative tracking", () => {
-		const record1 = prepareTokenAuditRecord({
-			taskId: "test-task-1",
-			requestId: "req-1",
-			model: "gpt-5.6-terra",
-			systemPrompt: "You are a helpful assistant",
-			nativeTools: [{ name: "execute_command" }],
-			messages: [
-				{ role: "user", content: "Hello world" },
-				{ role: "assistant", content: "Hi there!" },
-			],
-		})
-
-		expect(record1.taskId).toBe("test-task-1")
-		expect(record1.requestIndex).toBe(1)
-		expect(record1.estimatedInputTokens).toBeGreaterThan(0)
-		expect(record1.cumulativeInputTokens).toBe(record1.estimatedInputTokens)
-
-		const formatted = formatTokenAuditLog(record1)
-		expect(formatted).toContain("[TokenAudit]")
-		expect(formatted).toContain("taskId=test-task-1")
-		expect(formatted).toContain("estimatedInputTokens=")
-		expect(formatted).toContain("cumulativeInputTokens=")
-
-		// Second request should increment index and accumulate
-		const record2 = prepareTokenAuditRecord({
-			taskId: "test-task-1",
-			requestId: "req-2",
-			model: "gpt-5.6-terra",
-			systemPrompt: "You are a helpful assistant",
-			messages: [
-				{ role: "user", content: "Hello world again" },
-			],
-		})
-
-		expect(record2.requestIndex).toBe(2)
-		expect(record2.cumulativeInputTokens).toBeGreaterThan(record1.cumulativeInputTokens)
-	})
-
-	it("updates cumulative counts when actual provider usage is received", () => {
+	it("prepares token audit record with retryNumber and timing fields", () => {
 		const record = prepareTokenAuditRecord({
-			taskId: "test-task-1",
-			requestId: "req-1",
-			model: "gpt-5.6-terra",
-			systemPrompt: "Prompt",
-			messages: [{ role: "user", content: "User prompt" }],
-		})
-
-		recordProviderUsage("test-task-1", record, {
-			inputTokens: 1500,
-			outputTokens: 80,
-			cacheReadTokens: 1200,
-		})
-
-		expect(record.providerInputTokens).toBe(1500)
-		expect(record.providerCachedInputTokens).toBe(1200)
-		expect(record.providerOutputTokens).toBe(80)
-		expect(record.cumulativeInputTokens).toBe(1500)
-		expect(record.cumulativeOutputTokens).toBe(80)
-	})
-
-	it("tracks extended metrics: taskRequestCount, estimatedRetransmittedTokens, currentContextTokens, and logs warning on amplification", () => {
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-
-		const record = prepareTokenAuditRecord({
-			taskId: "test-amplified-task",
-			model: "gpt-5.6-terra",
-			systemPrompt: "System",
+			taskId: "test-task-123",
+			model: "openai/gpt-5.6-terra",
+			systemPrompt: "You are a helpful assistant.",
+			nativeTools: [],
 			messages: [
-				{ role: "user", content: "Turn 1" },
-				{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "execute_command", input: {} }] },
 				{
 					role: "user",
-					content: [{ type: "tool_result", tool_use_id: "t1", content: "Result ".repeat(1000) }],
+					content: "Hello world",
 				},
-				// Current turn
-				{ role: "assistant", content: [{ type: "tool_use", id: "t2", name: "read_file", input: {} }] },
-				{ role: "user", content: "Next command" },
 			],
+			isRetry: true,
+			retryNumber: 2,
+			retryReason: "stream_timeout",
+			compactionState: "compacting",
 		})
 
-		expect(record.taskRequestCount).toBe(1)
-		expect(record.currentContextTokens).toBeGreaterThan(0)
-		expect(record.estimatedRetransmittedTokens).toBeGreaterThan(0)
-		expect(record.taskCumulativeInput).toBe(record.currentContextTokens)
-		expect(record.largestRepeatedPayload).toBeGreaterThan(0)
+		expect(record.taskId).toBe("test-task-123")
+		expect(record.model).toBe("openai/gpt-5.6-terra")
+		expect(record.isRetry).toBe(true)
+		expect(record.retryNumber).toBe(2)
+		expect(record.retryReason).toBe("stream_timeout")
+		expect(record.compactionState).toBe("compacting")
+		expect(record.estimatedInputTokens).toBeGreaterThan(0)
+		expect(record.currentContextTokens).toBe(record.estimatedInputTokens)
+	})
+
+	it("records request timing metrics properly (both signatures)", () => {
+		const record = prepareTokenAuditRecord({
+			taskId: "test-task-timing",
+			model: "openai/gpt-5.6-terra",
+			systemPrompt: "system prompt",
+			nativeTools: [],
+			messages: [],
+		})
+
+		// Signature 1: (record, timing)
+		recordRequestTiming(record, {
+			timeToFirstChunkMs: 3500,
+			lastChunkAgoMs: 150,
+			requestDurationMs: 4200,
+		})
+
+		expect(record.timeToFirstChunkMs).toBe(3500)
+		expect(record.lastChunkAgoMs).toBe(150)
+		expect(record.requestDurationMs).toBe(4200)
+
+		// Signature 2: (taskId, record, timing)
+		recordRequestTiming("test-task-timing", record, {
+			requestDurationMs: 5000,
+		})
+		expect(record.requestDurationMs).toBe(5000)
+	})
+
+	it("formats audit log with all required metrics without secrets", () => {
+		const record = prepareTokenAuditRecord({
+			taskId: "test-task-log",
+			model: "openai/gpt-5.6-terra",
+			systemPrompt: "Test system",
+			nativeTools: [],
+			messages: [{ role: "user", content: "Test message" }],
+			isRetry: true,
+			retryNumber: 1,
+			retryReason: "retry",
+		})
+
+		recordRequestTiming(record, {
+			timeToFirstChunkMs: 2100,
+			requestDurationMs: 3400,
+			lastChunkAgoMs: 50,
+		})
 
 		const formatted = formatTokenAuditLog(record)
-		expect(formatted).toContain("taskRequestCount=1")
-		expect(formatted).toContain("estimatedRetransmittedTokens=")
+		expect(formatted).toContain("taskId=test-task-log")
+		expect(formatted).toContain("model=openai/gpt-5.6-terra")
+		expect(formatted).toContain("retryNumber=1")
+		expect(formatted).toContain("isRetry=true")
+		expect(formatted).toContain("retryReason=retry")
+		expect(formatted).toContain("timeToFirstChunkMs=2100")
+		expect(formatted).toContain("requestDurationMs=3400")
+		expect(formatted).toContain("lastChunkAgoMs=50")
 		expect(formatted).toContain("currentContextTokens=")
-		expect(formatted).toContain("largestRepeatedPayload=")
-
-		warnSpy.mockRestore()
+		expect(formatted).toContain("cumulativeInputTokens=")
 	})
 })

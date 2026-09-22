@@ -29,6 +29,11 @@ export interface TokenAuditRecord {
 
 	isRetry: boolean
 	retryReason: string
+	retryNumber?: number
+
+	requestDurationMs?: number
+	timeToFirstChunkMs?: number
+	lastChunkAgoMs?: number
 
 	compactionState: string
 
@@ -115,6 +120,7 @@ export interface PrepareTokenAuditParams {
 	messages: (Anthropic.Messages.MessageParam | ApiMessage | any)[]
 	isRetry?: boolean
 	retryReason?: string
+	retryNumber?: number
 	compactionState?: string
 }
 
@@ -257,6 +263,7 @@ export function prepareTokenAuditRecord(params: PrepareTokenAuditParams): TokenA
 		largestToolResultBytes,
 		isRetry: !!params.isRetry,
 		retryReason: params.retryReason || "none",
+		retryNumber: params.retryNumber,
 		compactionState: params.compactionState || "none",
 		cumulativeInputTokens: taskStats.input,
 		cumulativeOutputTokens: taskStats.output,
@@ -298,6 +305,11 @@ largestToolResultBytes=${record.largestToolResultBytes}
 
 isRetry=${record.isRetry}
 retryReason=${record.retryReason}
+retryNumber=${record.retryNumber ?? "N/A"}
+
+requestDurationMs=${record.requestDurationMs ?? "N/A"}
+timeToFirstChunkMs=${record.timeToFirstChunkMs ?? "N/A"}
+lastChunkAgoMs=${record.lastChunkAgoMs ?? "N/A"}
 
 compactionState=${record.compactionState}
 
@@ -314,6 +326,54 @@ largestRepeatedPayload=${record.largestRepeatedPayload}`
 export function logTokenAudit(record: TokenAuditRecord): void {
 	if (isTokenAuditEnabled()) {
 		console.log(formatTokenAuditLog(record))
+	}
+}
+
+export function recordRequestTiming(
+	recordOrTaskId: TokenAuditRecord | string,
+	timingOrRecord:
+		| TokenAuditRecord
+		| {
+				requestDurationMs?: number
+				timeToFirstChunkMs?: number
+				lastChunkAgoMs?: number
+		  },
+	timingOpt?: {
+		requestDurationMs?: number
+		timeToFirstChunkMs?: number
+		lastChunkAgoMs?: number
+	},
+): void {
+	const record = typeof recordOrTaskId === "string" ? (timingOrRecord as TokenAuditRecord) : recordOrTaskId
+	const timing =
+		typeof recordOrTaskId === "string"
+			? timingOpt ?? {}
+			: (timingOrRecord as {
+					requestDurationMs?: number
+					timeToFirstChunkMs?: number
+					lastChunkAgoMs?: number
+			  })
+
+	if (!record) return
+
+	if (timing.requestDurationMs !== undefined) {
+		record.requestDurationMs = timing.requestDurationMs
+	}
+	if (timing.timeToFirstChunkMs !== undefined) {
+		record.timeToFirstChunkMs = timing.timeToFirstChunkMs
+	}
+	if (timing.lastChunkAgoMs !== undefined) {
+		record.lastChunkAgoMs = timing.lastChunkAgoMs
+	}
+
+	if (isTokenAuditEnabled()) {
+		console.log(`[TokenAudit:Timing]
+taskId=${record.taskId}
+requestIndex=${record.requestIndex}
+retryNumber=${record.retryNumber ?? 0}
+requestDurationMs=${record.requestDurationMs ?? "N/A"}
+timeToFirstChunkMs=${record.timeToFirstChunkMs ?? "N/A"}
+lastChunkAgoMs=${record.lastChunkAgoMs ?? "N/A"}`)
 	}
 }
 

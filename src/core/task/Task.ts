@@ -133,6 +133,7 @@ import {
 	prepareTokenAuditRecord,
 	logTokenAudit,
 	recordProviderUsage,
+	recordRequestTiming,
 	type TokenAuditRecord,
 } from "../telemetry/TokenAudit"
 import { MessageQueueService } from "../message-queue/MessageQueueService"
@@ -145,6 +146,8 @@ const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
 const FORCED_CONTEXT_REDUCTION_PERCENT = 75 // Keep 75% of context (remove 25%) on context window errors
 const MAX_CONTEXT_WINDOW_RETRIES = 3 // Maximum retries for context window errors
+export const MAX_API_RETRIES = 3 // Maximum retry attempts for API failures (first-chunk and mid-stream)
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000 // 45 seconds of silence between chunks during active streaming
 
 export interface TaskOptions extends CreateTaskOptions {
 	provider: ClineProvider
@@ -1882,10 +1885,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			return
 		}
 
-		await pWaitFor(
-			() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
-			{ timeout: 60000, interval: 100 },
-		)
+		// When auto-triggered from attemptApiRequest, the request is in its pre-flight setup
+		// phase before any streaming has started. Waiting for !isStreaming here causes a
+		// deterministic deadlock when the caller sets isStreaming = true.
+		// Only external/manual triggers need to wait for active generation to complete.
+		if (!autoTriggered) {
+			try {
+				await pWaitFor(
+					() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
+					{ timeout: 60000, interval: 100 },
+				)
+			} catch (error) {
+				console.warn(
+					`[Task#${this.taskId}] compactContext: wait for streaming/locks timed out, proceeding with caution`,
+					error,
+				)
+			}
+		}
 
 		if (this.isCompacting) {
 			if (!autoTriggered) {
@@ -2004,10 +2020,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			throw new Error("Context compaction is already in progress.")
 		}
 
-		await pWaitFor(
-			() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
-			{ timeout: 60000, interval: 100 },
-		)
+		try {
+			await pWaitFor(
+				() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
+				{ timeout: 60000, interval: 100 },
+			)
+		} catch (error) {
+			throw new Error(
+				"Cannot compact context: active streaming or tool execution did not finish within 60 seconds. Please try again when the assistant is idle.",
+			)
+		}
 
 		if (this.isCompacting) {
 			throw new Error("Context compaction is already in progress.")
@@ -3172,38 +3194,67 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				let assistantMessage = ""
 				let reasoningMessage = ""
 				let pendingGroundingSources: GroundingSource[] = []
-				this.isStreaming = true
+				// Note: Do not set this.isStreaming = true here. attemptApiRequest is still
+				// preparing the request and may trigger auto-compaction. Setting it prematurely
+				// causes a deadlock with compactContext. isStreaming is set once the first chunk arrives.
+				let lastChunkTime = performance.now()
 
 				try {
 					const iterator = stream[Symbol.asyncIterator]()
 
-					// Helper to race iterator.next() with abort signal
-					const nextChunkWithAbort = async () => {
+					// Helper to race iterator.next() with abort signal and stream idle watchdog
+					const nextChunkWithAbort = async (enforceIdleTimeout = false) => {
 						const nextPromise = iterator.next()
 
 						// If we have an abort controller, race it with the next chunk
-						if (this.currentRequestAbortController) {
-							const abortPromise = new Promise<never>((_, reject) => {
-								const signal = this.currentRequestAbortController!.signal
+						let abortCleanup: (() => void) | undefined
+						const abortPromise = new Promise<never>((_, reject) => {
+							if (this.currentRequestAbortController) {
+								const signal = this.currentRequestAbortController.signal
 								if (signal.aborted) {
 									reject(new Error("Request cancelled by user"))
 								} else {
-									signal.addEventListener("abort", () => {
-										reject(new Error("Request cancelled by user"))
-									})
+									const onAbort = () => reject(new Error("Request cancelled by user"))
+									signal.addEventListener("abort", onAbort, { once: true })
+									abortCleanup = () => signal.removeEventListener("abort", onAbort)
 								}
-							})
-							return await Promise.race([nextPromise, abortPromise])
-						}
+							}
+						})
 
-						// No abort controller, just return the next chunk normally
-						return await nextPromise
+						// Stream idle watchdog: during active streaming, detect stalled connections
+						// after DEFAULT_STREAM_IDLE_TIMEOUT_MS of complete silence.
+						let idleTimer: NodeJS.Timeout | undefined
+						const idlePromise = enforceIdleTimeout
+							? new Promise<never>((_, reject) => {
+									idleTimer = setTimeout(() => {
+										reject(
+											new Error(
+												`Stream idle timeout: no data received from provider for ${DEFAULT_STREAM_IDLE_TIMEOUT_MS / 1000} seconds`,
+											),
+										)
+									}, DEFAULT_STREAM_IDLE_TIMEOUT_MS)
+							  })
+							: null
+
+						try {
+							const raceList: Promise<any>[] = [nextPromise, abortPromise]
+							if (idlePromise) {
+								raceList.push(idlePromise)
+							}
+							const res = await Promise.race(raceList)
+							lastChunkTime = performance.now()
+							return res
+						} finally {
+							if (idleTimer) clearTimeout(idleTimer)
+							if (abortCleanup) abortCleanup()
+						}
 					}
 
-					let item = await nextChunkWithAbort()
+					let item = await nextChunkWithAbort(false)
+					this.isStreaming = true
 					while (!item.done) {
 						const chunk = item.value
-						item = await nextChunkWithAbort()
+						item = await nextChunkWithAbort(true)
 						if (!chunk) {
 							// Sometimes chunk is undefined, no idea that can cause
 							// it, but this workaround seems to fix it.
@@ -3454,6 +3505,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						}
 					}
 
+					if (isTokenAuditEnabled() && this.currentAuditRecord) {
+						recordRequestTiming(this.taskId, this.currentAuditRecord, {
+							lastChunkAgoMs: performance.now() - lastChunkTime,
+						})
+					}
+
 					// Create a copy of current token values to avoid race conditions
 					const currentTokens = {
 						input: inputTokens,
@@ -3592,6 +3649,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						console.error("Background usage collection failed:", error)
 					})
 				} catch (error) {
+					if (isTokenAuditEnabled() && this.currentAuditRecord) {
+						recordRequestTiming(this.taskId, this.currentAuditRecord, {
+							lastChunkAgoMs: performance.now() - lastChunkTime,
+						})
+					}
+
 					// Abandoned happens when extension is no longer waiting for the
 					// Cline instance to finish aborting (error is thrown here when
 					// any function in the for loop throws due to this.abort).
@@ -3618,28 +3681,48 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								`[Task#${this.taskId}.${this.instanceId}] Stream failed, will retry: ${streamingFailedMessage}`,
 							)
 
-							// Apply exponential backoff similar to first-chunk errors when auto-resubmit is enabled
-							const stateForBackoff = await this.providerRef.deref()?.getState()
-							if (stateForBackoff?.autoApprovalEnabled) {
-								await this.backoffAndAnnounce(currentItem.retryAttempt ?? 0, error)
-
-								// Check if task was aborted during the backoff
-								if (this.abort) {
-									console.log(
-										`[Task#${this.taskId}.${this.instanceId}] Task aborted during mid-stream retry backoff`,
-									)
-									// Abort the entire task
-									this.abortReason = "user_cancelled"
+							const currentRetry = currentItem.retryAttempt ?? 0
+							if (currentRetry >= MAX_API_RETRIES) {
+								console.error(
+									`[Task#${this.taskId}.${this.instanceId}] Max mid-stream retries (${MAX_API_RETRIES}) exceeded: ${streamingFailedMessage}`,
+								)
+								const { response } = await this.ask(
+									"api_req_failed",
+									`Max stream retries (${MAX_API_RETRIES}) exceeded: ${streamingFailedMessage}`,
+								)
+								if (response !== "yesButtonClicked") {
+									this.abortReason = "streaming_failed"
 									await this.abortTask()
 									break
 								}
+								await this.say("api_req_retried")
+								stack.push({
+									userContent: currentUserContent,
+									includeFileDetails: false,
+									retryAttempt: 0,
+								})
+								continue
+							}
+
+							// Apply exponential backoff similar to first-chunk errors
+							await this.backoffAndAnnounce(currentRetry, error)
+
+							// Check if task was aborted during the backoff
+							if (this.abort) {
+								console.log(
+									`[Task#${this.taskId}.${this.instanceId}] Task aborted during mid-stream retry backoff`,
+								)
+								// Abort the entire task
+								this.abortReason = "user_cancelled"
+								await this.abortTask()
+								break
 							}
 
 							// Push the same content back onto the stack to retry, incrementing the retry attempt counter
 							stack.push({
 								userContent: currentUserContent,
 								includeFileDetails: false,
-								retryAttempt: (currentItem.retryAttempt ?? 0) + 1,
+								retryAttempt: currentRetry + 1,
 							})
 
 							// Continue to retry the request
@@ -4621,6 +4704,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.skipPrevResponseIdOnce = false
 
 		// Prepare token audit telemetry if enabled
+		const requestStartTime = performance.now()
 		if (isTokenAuditEnabled()) {
 			this.currentAuditRecord = prepareTokenAuditRecord({
 				taskId: this.taskId,
@@ -4629,6 +4713,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				nativeTools: allTools,
 				messages: cleanConversationHistory,
 				isRetry: (retryAttempt ?? 0) > 0,
+				retryNumber: retryAttempt ?? 0,
 				retryReason: (retryAttempt ?? 0) > 0 ? "retry" : undefined,
 				compactionState: this.isCompacting ? "compacting" : "normal",
 			})
@@ -4666,11 +4751,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 
 			const firstChunk = await Promise.race([firstChunkPromise, abortPromise])
+			if (isTokenAuditEnabled() && this.currentAuditRecord) {
+				const timeToFirstChunkMs = performance.now() - requestStartTime
+				recordRequestTiming(this.taskId, this.currentAuditRecord, {
+					timeToFirstChunkMs,
+				})
+			}
 			yield firstChunk.value
 			this.isWaitingForFirstChunk = false
 		} catch (error) {
 			this.isWaitingForFirstChunk = false
 			this.currentRequestAbortController = undefined
+			if (isTokenAuditEnabled() && this.currentAuditRecord) {
+				const requestDurationMs = performance.now() - requestStartTime
+				recordRequestTiming(this.taskId, this.currentAuditRecord, {
+					requestDurationMs,
+				})
+			}
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 
 			// If it's a context window error and we haven't exceeded max retries for this error type
@@ -4688,6 +4785,22 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (autoApprovalEnabled) {
+				if (retryAttempt >= MAX_API_RETRIES) {
+					console.error(
+						`[Task#attemptApiRequest] Max retries (${MAX_API_RETRIES}) exceeded for task ${this.taskId}.${this.instanceId}. Error: ${error.message}`,
+					)
+					const { response } = await this.ask(
+						"api_req_failed",
+						`Max retries (${MAX_API_RETRIES}) exceeded: ${error.message ?? JSON.stringify(serializeError(error), null, 2)}`,
+					)
+					if (response !== "yesButtonClicked") {
+						throw new Error(`API request failed after ${MAX_API_RETRIES} retries: ${error.message}`)
+					}
+					await this.say("api_req_retried")
+					yield* this.attemptApiRequest(0)
+					return
+				}
+
 				// Apply shared exponential backoff and countdown UX
 				await this.backoffAndAnnounce(retryAttempt, error)
 
