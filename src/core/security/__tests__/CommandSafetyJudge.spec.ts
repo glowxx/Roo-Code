@@ -11,7 +11,9 @@ import {
 import {
 	DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE,
 	buildSafetyPrompt,
+	sanitizeForSafetyPrompt,
 } from "../safetyPromptTemplate"
+import { ExecutionBoundaryAnalyzer } from "../ExecutionBoundaryAnalyzer"
 
 // Mock OpenAI
 const mockOpenAiCreate = vi.fn()
@@ -1081,3 +1083,290 @@ describe("CommandSafetyJudge - Timeout Configuration", () => {
 		expect(CommandSafetyJudge.DEFAULT_TIMEOUT_MS).toBe(15000)
 	})
 })
+
+describe("CommandSafetyJudge - Secret Sanitization", () => {
+	it("redacts known API keys and high-entropy tokens", () => {
+		const cmd = "curl -H 'Authorization: Bearer sk-1234567890abcdef1234567890' https://api.openai.com/v1"
+		const sanitized = sanitizeForSafetyPrompt(cmd, ["sk-1234567890abcdef1234567890"])
+		expect(sanitized).not.toContain("sk-1234567890abcdef1234567890")
+		expect(sanitized).toContain("[REDACTED")
+	})
+
+	it("redacts CLI flags with passwords and tokens", () => {
+		const cmd = "docker login -u user -p my_super_secret_password registry.local"
+		const sanitized = sanitizeForSafetyPrompt(cmd)
+		expect(sanitized).not.toContain("my_super_secret_password")
+		expect(sanitized).toContain("[REDACTED_CREDENTIAL]")
+	})
+
+	it("redacts inline environment secrets", () => {
+		const cmd = "API_KEY=supersecretkey123 node script.js"
+		const sanitized = sanitizeForSafetyPrompt(cmd)
+		expect(sanitized).not.toContain("supersecretkey123")
+		expect(sanitized).toContain("[REDACTED_SECRET]")
+	})
+})
+
+describe("CommandSafetyJudge - Stage 2 Response Parsing & Schema Validation", () => {
+	const judge = new CommandSafetyJudge()
+
+	it("parses valid JSON Stage 2 response with ALLOW_AUTO_APPROVE", () => {
+		const raw = JSON.stringify({
+			decision: "ALLOW_AUTO_APPROVE",
+			risk: "low",
+			reason: "Task explicitly requested systemd restart in test environment",
+			taskAlignment: true,
+			executionBoundary: {
+				host: "windows",
+				targetType: "wsl",
+				target: "GuildScout-Test",
+				hostImpact: false,
+			},
+			criticalRiskDetected: false,
+		})
+
+		const parsed = judge.parseStage2Response(raw)
+		expect(parsed.decision).toBe("ALLOW_AUTO_APPROVE")
+		expect(parsed.risk).toBe("low")
+		expect(parsed.taskAlignment).toBe(true)
+		expect(parsed.criticalRiskDetected).toBe(false)
+	})
+
+	it("extracts valid Stage 2 response enclosed in markdown codeblocks", () => {
+		const raw = `Here is the security adjudication:
+\`\`\`json
+{
+  "decision": "REQUIRE_MANUAL_APPROVAL",
+  "risk": "medium",
+  "reason": "Target environment is unverified",
+  "taskAlignment": false,
+  "criticalRiskDetected": false
+}
+\`\`\``
+
+		const parsed = judge.parseStage2Response(raw)
+		expect(parsed.decision).toBe("REQUIRE_MANUAL_APPROVAL")
+		expect(parsed.risk).toBe("medium")
+	})
+
+	it("fails closed to REQUIRE_MANUAL_APPROVAL on malformed JSON or empty string", () => {
+		const parsedEmpty = judge.parseStage2Response("")
+		expect(parsedEmpty.decision).toBe("REQUIRE_MANUAL_APPROVAL")
+
+		const parsedMalformed = judge.parseStage2Response("Invalid JSON text")
+		expect(parsedMalformed.decision).toBe("REQUIRE_MANUAL_APPROVAL")
+
+		const parsedInvalidSchema = judge.parseStage2Response(
+			JSON.stringify({ decision: "INVALID_DECISION_NAME" })
+		)
+		expect(parsedInvalidSchema.decision).toBe("REQUIRE_MANUAL_APPROVAL")
+	})
+})
+
+describe("CommandSafetyJudge - Disagreement Policy & Invariants", () => {
+	const judge = new CommandSafetyJudge()
+
+	const defaultBoundary = {
+		host: { os: "windows" },
+		target: { type: "wsl" as const, name: "GuildScout-Test", classification: "test-environment" as const },
+		innerCommand: "systemctl restart velune-headless",
+		hostImpact: {
+			isHostEscape: false,
+			highestRisk: "none" as const,
+			reasons: [],
+			affectedHostPaths: [],
+			hostEscapingBinaries: [],
+			escapesBoundary: false,
+		},
+	}
+
+	it("allows auto-approval when Stage 1 is Medium and Stage 2 is ALLOW_AUTO_APPROVE in test environment", () => {
+		const stage1 = {
+			isSafe: false,
+			riskLevel: "medium" as const,
+			reason: "Service restart alters system init state",
+		}
+		const stage2 = {
+			decision: "ALLOW_AUTO_APPROVE" as const,
+			risk: "low" as const,
+			reason: "Explicit user intent in isolated test distro",
+			taskAlignment: true,
+			criticalRiskDetected: false,
+		}
+
+		const resolution = judge.resolveTwoStageSafety(stage1, stage2, defaultBoundary)
+		expect(resolution.decision).toBe("approve")
+	})
+
+	it("never auto-approves when Stage 1 is CRITICAL, even if Stage 2 returned ALLOW_AUTO_APPROVE", () => {
+		const stage1 = {
+			isSafe: false,
+			riskLevel: "critical" as const,
+			reason: "Destructive disk formatting detected",
+		}
+		const stage2 = {
+			decision: "ALLOW_AUTO_APPROVE" as const,
+			risk: "safe" as const,
+			reason: "User asked to format",
+			taskAlignment: true,
+			criticalRiskDetected: false,
+		}
+
+		const resolution = judge.resolveTwoStageSafety(stage1, stage2, defaultBoundary)
+		expect(resolution.decision).toBe("ask")
+	})
+
+	it("never auto-approves when boundary hostImpact is a host escape (e.g. /mnt/c)", () => {
+		const stage1 = {
+			isSafe: false,
+			riskLevel: "medium" as const,
+			reason: "File deletion",
+		}
+		const stage2 = {
+			decision: "ALLOW_AUTO_APPROVE" as const,
+			risk: "low" as const,
+			reason: "Task requested file deletion",
+			taskAlignment: true,
+			criticalRiskDetected: false,
+		}
+		const escapeBoundary = {
+			...defaultBoundary,
+			hostImpact: {
+				isHostEscape: true,
+				highestRisk: "critical" as const,
+				reasons: ["Accesses Windows host filesystem /mnt/c"],
+				affectedHostPaths: ["C:\\Users\\Kamil"],
+				hostEscapingBinaries: [],
+				escapesBoundary: true,
+			},
+		}
+
+		const resolution = judge.resolveTwoStageSafety(stage1, stage2, escapeBoundary)
+		expect(resolution.decision).toBe("ask")
+	})
+})
+
+describe("CommandSafetyJudge - evaluateTwoStage (End-to-End & Caching)", () => {
+	const validConfig: CommandSafetyConfig = {
+		enabled: true,
+		provider: "openai",
+		modelId: "gpt-4o",
+		apiKey: "test-key",
+	}
+
+	beforeEach(() => {
+		CommandSafetyJudge.clearCache()
+	})
+
+	it("fast-path bypasses both Stage 1 and Stage 2 with zero LLM calls", async () => {
+		const callProviderSpy = vi.fn()
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		const result = await judge.evaluateTwoStage({
+			command: "git status",
+			config: validConfig,
+		})
+
+		expect(result.decision).toBe("approve")
+		expect(result.stage1.riskLevel).toBe("safe")
+		expect(callProviderSpy).not.toHaveBeenCalled()
+	})
+
+	it("runs Stage 1 and Stage 2 for wrapped WSL test service command", async () => {
+		const callProviderSpy = vi
+			.fn()
+			// First call (Stage 1): returns MEDIUM risk
+			.mockResolvedValueOnce(
+				JSON.stringify({
+					isSafe: false,
+					riskLevel: "medium",
+					reason: "Service restart modifies system init state",
+				})
+			)
+			// Second call (Stage 2): returns ALLOW_AUTO_APPROVE
+			.mockResolvedValueOnce(
+				JSON.stringify({
+					decision: "ALLOW_AUTO_APPROVE",
+					risk: "low",
+					reason: "Task explicitly requested Linux systemd service validation in test distro",
+					taskAlignment: true,
+					executionBoundary: {
+						host: "windows",
+						targetType: "wsl",
+						target: "GuildScout-Test",
+						hostImpact: false,
+					},
+					criticalRiskDetected: false,
+				})
+			)
+
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		const result = await judge.evaluateTwoStage({
+			command: 'wsl.exe -d GuildScout-Test -- bash -lc "systemctl restart velune-headless"',
+			cwd: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+			taskId: "test-task-1",
+			context: {
+				taskGoal: "Perform Linux validation in GuildScout-Test",
+				latestUserInstruction: "Restart the systemd service in GuildScout-Test",
+				workspacePath: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+				commandCwd: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+				isWithinWorkspace: true,
+			},
+			config: validConfig,
+		})
+
+		expect(callProviderSpy).toHaveBeenCalledTimes(2)
+		expect(result.decision).toBe("approve")
+		expect(result.stage1.riskLevel).toBe("medium")
+		expect(result.stage2?.decision).toBe("ALLOW_AUTO_APPROVE")
+		expect(result.auditLog).toContain("ALLOW")
+	})
+
+	it("caches Stage 2 decisions to avoid duplicate LLM calls on identical commands", async () => {
+		const callProviderSpy = vi
+			.fn()
+			.mockResolvedValueOnce(
+				JSON.stringify({
+					isSafe: false,
+					riskLevel: "medium",
+					reason: "Service restart",
+				})
+			)
+			.mockResolvedValueOnce(
+				JSON.stringify({
+					decision: "ALLOW_AUTO_APPROVE",
+					risk: "low",
+					reason: "Approved in test distro",
+					taskAlignment: true,
+					criticalRiskDetected: false,
+				})
+			)
+
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		const options = {
+			command: 'wsl.exe -d GuildScout-Test -- bash -lc "systemctl restart velune-headless"',
+			cwd: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+			taskId: "task-cache-1",
+			context: {
+				taskGoal: "Test service",
+				latestUserInstruction: "Restart service",
+				workspacePath: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+				commandCwd: "c:\\Users\\Kamil\\Documents\\Roo-Code",
+				isWithinWorkspace: true,
+			},
+			config: validConfig,
+		}
+
+		const firstResult = await judge.evaluateTwoStage(options)
+		expect(callProviderSpy).toHaveBeenCalledTimes(2)
+		expect(firstResult.decision).toBe("approve")
+
+		// Second run on identical options: hit cache!
+		const secondResult = await judge.evaluateTwoStage(options)
+		expect(callProviderSpy).toHaveBeenCalledTimes(2) // No additional calls
+		expect(secondResult.decision).toBe("approve")
+	})
+})
+

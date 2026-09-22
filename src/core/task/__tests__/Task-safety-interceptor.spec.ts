@@ -14,6 +14,7 @@ describe("Task safety interceptor", () => {
 
 	beforeEach(() => {
 		vi.restoreAllMocks()
+		CommandSafetyJudge.clearCache()
 
 		task = Object.create(Task.prototype) as Task
 		;(task as any).abort = false
@@ -388,5 +389,154 @@ describe("Task safety interceptor", () => {
 				recentCommands: ["git status", "cd src", "npm run lint"],
 			}),
 		)
+	})
+
+	it("two-stage auto-approves safe service restart in GuildScout-Test when task context aligns", async () => {
+		;(task as any).metadata = { task: "Perform Linux validation in GuildScout-Test" }
+		;(task as any).clineMessages = [
+			{ ts: 100, type: "say", say: "user_feedback", text: "Restart the velune-headless service in GuildScout-Test" },
+		]
+		defaultState.allowedCommands = ["wsl.exe", "wsl"]
+
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: false,
+			riskLevel: "medium",
+			reason: "Service restart modifies system init state",
+		})
+
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				decision: "ALLOW_AUTO_APPROVE",
+				risk: "low",
+				reason: "Task explicitly requested Linux systemd service validation in test distro",
+				taskAlignment: true,
+				executionBoundary: {
+					host: "windows",
+					targetType: "wsl",
+					target: "GuildScout-Test",
+					hostImpact: false,
+				},
+				criticalRiskDetected: false,
+			}),
+		)
+
+		const saySpy = vi.spyOn(task, "say")
+		const result = await task.ask("command", 'wsl.exe -d GuildScout-Test -- bash -lc "systemctl restart velune-headless"')
+
+		expect(result.response).toBe("yesButtonClicked")
+		expect(saySpy).not.toHaveBeenCalledWith("command_safety_warning", expect.anything())
+	})
+
+	it("blocks WSL command touching Windows host filesystem (/mnt/c) even in test distro", async () => {
+		;(task as any).metadata = { task: "Perform Linux validation in GuildScout-Test" }
+		defaultState.allowedCommands = ["wsl.exe", "wsl"]
+
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: false,
+			riskLevel: "medium",
+			reason: "Directory removal",
+		})
+
+		const saySpy = vi.spyOn(task, "say")
+		const askPromise = task.ask("command", 'wsl.exe -d GuildScout-Test -- bash -lc "rm -rf /mnt/c/Users/Kamil/cache"')
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith(
+			"command_safety_warning",
+			expect.stringContaining("Host impact detected"),
+		)
+
+		task.handleWebviewAskResponse("noButtonClicked")
+		await askPromise
+	})
+
+	it("two-stage auto-approves scoped Docker test command inside container", async () => {
+		;(task as any).metadata = { task: "Run test suite in docker container" }
+		;(task as any).clineMessages = [
+			{ ts: 100, type: "say", say: "user_feedback", text: "Run tests in docker container" },
+		]
+		defaultState.allowedCommands = ["docker"]
+
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: false,
+			riskLevel: "medium",
+			reason: "Runs test suite inside container",
+		})
+
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				decision: "ALLOW_AUTO_APPROVE",
+				risk: "low",
+				reason: "Test command scoped to container",
+				taskAlignment: true,
+				executionBoundary: {
+					host: "windows",
+					targetType: "docker",
+					target: "test-runner",
+					hostImpact: false,
+				},
+				criticalRiskDetected: false,
+			}),
+		)
+
+		const saySpy = vi.spyOn(task, "say")
+		const result = await task.ask("command", "docker exec test-runner npm test")
+
+		expect(result.response).toBe("yesButtonClicked")
+		expect(saySpy).not.toHaveBeenCalledWith("command_safety_warning", expect.anything())
+	})
+
+	it("blocks Docker command with --privileged flag due to host escape invariant", async () => {
+		;(task as any).metadata = { task: "Run container" }
+		defaultState.allowedCommands = ["docker"]
+
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: false,
+			riskLevel: "medium",
+			reason: "Container run with privileged flag",
+		})
+
+		const saySpy = vi.spyOn(task, "say")
+		const askPromise = task.ask("command", "docker run --privileged -it alpine sh")
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith(
+			"command_safety_warning",
+			expect.stringContaining("Host impact detected"),
+		)
+
+		task.handleWebviewAskResponse("noButtonClicked")
+		await askPromise
+	})
+
+	it("fails closed to manual approval when Stage 2 returns malformed JSON", async () => {
+		;(task as any).metadata = { task: "Linux test in GuildScout-Test" }
+		;(task as any).clineMessages = [
+			{ ts: 100, type: "say", say: "user_feedback", text: "Check status in GuildScout-Test" },
+		]
+		defaultState.allowedCommands = ["wsl.exe", "wsl"]
+
+		vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: false,
+			riskLevel: "medium",
+			reason: "Service inspection in distro",
+		})
+
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue("THIS IS NOT JSON")
+
+		const saySpy = vi.spyOn(task, "say")
+		const askPromise = task.ask("command", 'wsl.exe -d GuildScout-Test -- bash -lc "systemctl status test"')
+
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect((task as any).askResponse).toBeUndefined()
+		expect(saySpy).toHaveBeenCalledWith("command_safety_warning", expect.anything())
+
+		task.handleWebviewAskResponse("yesButtonClicked")
+		await askPromise
 	})
 })

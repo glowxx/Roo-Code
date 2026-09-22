@@ -46,6 +46,8 @@ import {
 	isResumableAsk,
 	isSafetyModelConfigured,
 	type SafetyEvaluationResult,
+	type CompactSafetyContext,
+	type TwoStageSafetyResult,
 	QueuedMessage,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -1354,40 +1356,88 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						.slice(-5)
 						.map((m) => m.text!)
 
-					let evaluation: SafetyEvaluationResult
+					// Extract compact safety context from Task
+					const latestUserFeedback = [...this.clineMessages]
+						.reverse()
+						.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
+					const latestUserInstruction = latestUserFeedback?.text || this.metadata?.task || ""
+
+					let activeTodo: CompactSafetyContext["activeTodo"] = undefined
+					if (this.todoList && this.todoList.length > 0) {
+						const inProgressIndex = this.todoList.findIndex((t) => t.status === "in_progress")
+						const activeIndex =
+							inProgressIndex !== -1
+								? inProgressIndex
+								: this.todoList.findIndex((t) => t.status === "pending")
+						if (activeIndex !== -1) {
+							const item = this.todoList[activeIndex]
+							activeTodo = {
+								content: item.content,
+								status: item.status,
+								stepIndex: activeIndex + 1,
+								totalSteps: this.todoList.length,
+							}
+						}
+					}
+
+					const isWithinWorkspace = Boolean(
+						this.workspacePath &&
+							(this.cwd === this.workspacePath ||
+								this.cwd.startsWith(this.workspacePath + path.sep) ||
+								this.cwd.startsWith(this.workspacePath + "/"))
+					)
+
+					const context: CompactSafetyContext = {
+						taskGoal: this.metadata?.task || "",
+						latestUserInstruction,
+						activeTodo,
+						workspacePath: this.workspacePath || this.cwd,
+						commandCwd: this.cwd,
+						isWithinWorkspace,
+						taskMode: this._taskMode,
+						recentCommands,
+					}
+
+					let twoStageResult: TwoStageSafetyResult
 					try {
-						evaluation = await CommandSafetyJudge.evaluate({
+						twoStageResult = await CommandSafetyJudge.evaluateTwoStage({
 							command: text || "",
 							cwd: this.cwd,
+							taskId: this.taskId,
+							context,
 							recentCommands,
 							config: state?.commandSafetyConfig!,
 							state,
 						})
 					} catch (error) {
 						const errorDetail = error instanceof Error ? error.message : String(error)
-						evaluation = {
+						const fallbackStage1: SafetyEvaluationResult = {
 							isSafe: false,
 							riskLevel: "critical",
 							reason: `Command safety verification failed: ${errorDetail || "Unknown error"}. Manual approval required.`,
 						}
+						twoStageResult = {
+							decision: "ask",
+							stage1: fallbackStage1,
+							finalReason: fallbackStage1.reason,
+							auditLog: `[CommandSafety] commandId=${this.taskId} stage1=ERROR target=unknown stage2=ERROR final=MANUAL reason="${fallbackStage1.reason}"`,
+						}
 					}
 
-					if (
-						!evaluation ||
-						evaluation.isSafe === false ||
-						["medium", "high", "critical"].includes(evaluation.riskLevel)
-					) {
-						approval = { decision: "ask" }
-						await this.say("command_safety_warning", JSON.stringify(evaluation || SAFETY_EVALUATION_FALLBACK_RESULT))
-						this.lastMessageTs = askTs
-					} else if (
-						evaluation.isSafe === true &&
-						(evaluation.riskLevel === "safe" || evaluation.riskLevel === "low")
-					) {
+					if (twoStageResult.auditLog) {
+						console.log(twoStageResult.auditLog)
+					}
+
+					if (twoStageResult.decision === "approve") {
 						this.approveAsk()
 					} else {
 						approval = { decision: "ask" }
-						await this.say("command_safety_warning", JSON.stringify(evaluation || SAFETY_EVALUATION_FALLBACK_RESULT))
+						const warningPayload: SafetyEvaluationResult = {
+							isSafe: twoStageResult.stage1?.isSafe ?? false,
+							riskLevel: twoStageResult.stage1?.riskLevel ?? "critical",
+							reason: twoStageResult.finalReason || twoStageResult.stage1?.reason || SAFETY_EVALUATION_FALLBACK_RESULT.reason,
+						}
+						await this.say("command_safety_warning", JSON.stringify(warningPayload))
 						this.lastMessageTs = askTs
 					}
 				} else {

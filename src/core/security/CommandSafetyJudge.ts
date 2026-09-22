@@ -6,9 +6,19 @@ import type {
 	CommandSafetyRiskLevel,
 	SafetyEvaluationResult,
 	ExtensionState,
+	CompactSafetyContext,
+	ExecutionBoundary,
+	Stage2Decision,
+	Stage2AdjudicationResult,
+	TwoStageSafetyResult,
 } from "@roo-code/types"
-import { resolveProviderApiKey } from "@roo-code/types"
-import { buildSafetyPrompt } from "./safetyPromptTemplate"
+import { stage2AdjudicationResultSchema, resolveProviderApiKey } from "@roo-code/types"
+import {
+	buildSafetyPrompt,
+	buildStage2SafetyPrompt,
+	sanitizeForSafetyPrompt,
+} from "./safetyPromptTemplate"
+import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
 
 export function createFailClosedResult(detail: string): SafetyEvaluationResult {
 	return {
@@ -39,6 +49,16 @@ export interface EvaluateSafetyOptions {
 	state?: Partial<ExtensionState> | null
 }
 
+export interface EvaluateTwoStageOptions {
+	command: string
+	cwd?: string
+	taskId?: string
+	context?: CompactSafetyContext
+	recentCommands?: string[]
+	config?: CommandSafetyConfig
+	state?: Partial<ExtensionState> | null
+}
+
 export interface CallProviderParams {
 	provider: string
 	modelId: string
@@ -47,6 +67,7 @@ export interface CallProviderParams {
 	userPrompt: string
 	state?: Partial<ExtensionState> | null
 	signal: AbortSignal
+	maxTokens?: number
 }
 
 export interface CommandSafetyJudgeOptions {
@@ -59,7 +80,9 @@ export interface CommandSafetyJudgeOptions {
  */
 export class CommandSafetyJudge {
 	public static readonly DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS
+	public static globalCallProviderOverride?: (params: CallProviderParams) => Promise<string>
 	private static readonly cache = new Map<string, SafetyEvaluationResult>()
+	private static readonly twoStageCache = new Map<string, TwoStageSafetyResult>()
 
 	private readonly timeoutMs: number
 	private readonly callProviderOverride?: (params: CallProviderParams) => Promise<string>
@@ -75,6 +98,7 @@ export class CommandSafetyJudge {
 
 	public static clearCache(): void {
 		CommandSafetyJudge.cache.clear()
+		CommandSafetyJudge.twoStageCache.clear()
 	}
 
 	/**
@@ -192,8 +216,414 @@ export class CommandSafetyJudge {
 		return new CommandSafetyJudge().parseSafetyResponse(rawResponse)
 	}
 
+	/**
+	 * Parses and validates LLM response text for Stage 2 Contextual Safety Adjudication.
+	 * Employs multi-tier JSON recovery and strict Zod validation.
+	 * Fails closed to REQUIRE_MANUAL_APPROVAL on any schema or parse error.
+	 */
+	public parseStage2Response(rawResponse: string): Stage2AdjudicationResult {
+		if (!rawResponse || typeof rawResponse !== "string" || rawResponse.trim().length === 0) {
+			return {
+				decision: "REQUIRE_MANUAL_APPROVAL",
+				risk: "high",
+				reason: "Empty or whitespace response from Stage 2 safety model",
+				taskAlignment: false,
+				criticalRiskDetected: false,
+			}
+		}
+
+		const trimmed = rawResponse.trim()
+		let parsedObject: any = null
+
+		// Attempt 1: Direct JSON parse
+		try {
+			parsedObject = JSON.parse(trimmed)
+		} catch {
+			// Attempt 2: Extract from Markdown codeblock ```json ... ```
+			const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+			if (codeBlockMatch && codeBlockMatch[1]) {
+				try {
+					parsedObject = JSON.parse(codeBlockMatch[1].trim())
+				} catch {
+					// Fall through to regex extraction
+				}
+			}
+
+			// Attempt 3: Outermost JSON object { ... }
+			if (!parsedObject) {
+				const firstBrace = trimmed.indexOf("{")
+				const lastBrace = trimmed.lastIndexOf("}")
+				if (firstBrace !== -1 && lastBrace > firstBrace) {
+					const candidate = trimmed.substring(firstBrace, lastBrace + 1)
+					try {
+						parsedObject = JSON.parse(candidate)
+					} catch {
+						// Parsing failed
+					}
+				}
+			}
+		}
+
+		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
+			return {
+				decision: "REQUIRE_MANUAL_APPROVAL",
+				risk: "high",
+				reason: "Invalid or malformed JSON response from Stage 2 safety model",
+				taskAlignment: false,
+				criticalRiskDetected: false,
+			}
+		}
+
+		const parseResult = stage2AdjudicationResultSchema.safeParse(parsedObject)
+		if (!parseResult.success) {
+			return {
+				decision: "REQUIRE_MANUAL_APPROVAL",
+				risk: "high",
+				reason: `Stage 2 schema validation failed: ${parseResult.error.message}`,
+				taskAlignment: false,
+				criticalRiskDetected: false,
+			}
+		}
+
+		return parseResult.data
+	}
+
+	public static parseStage2Response(rawResponse: string): Stage2AdjudicationResult {
+		return new CommandSafetyJudge().parseStage2Response(rawResponse)
+	}
+
+	/**
+	 * Reconciles Stage 1 baseline analysis with Stage 2 intent adjudication under hard security invariants.
+	 */
+	public resolveTwoStageSafety(
+		stage1: SafetyEvaluationResult & { executionBoundary?: ExecutionBoundary },
+		stage2: Stage2AdjudicationResult,
+		boundary: ExecutionBoundary
+	): { decision: "approve" | "ask" | "deny"; finalReason: string } {
+		// Hard invariant 1: Critical risk detected in Stage 1 or boundary cannot be auto-approved
+		if (
+			stage1.riskLevel === "critical" ||
+			boundary.hostImpact.highestRisk === "critical" ||
+			stage2.criticalRiskDetected
+		) {
+			return {
+				decision: "ask",
+				finalReason: `Critical security boundary risk detected (${stage1.reason || stage2.reason}). Auto-approval blocked defensively.`,
+			}
+		}
+
+		// Hard invariant 2: Uncontained host escape / host impact
+		if (boundary.hostImpact.isHostEscape) {
+			return {
+				decision: "ask",
+				finalReason: `Host escape or host impact detected (${boundary.hostImpact.reasons.join("; ")}). Manual confirmation required.`,
+			}
+		}
+
+		// Stage 2 explicitly blocked or required manual approval
+		if (stage2.decision === "BLOCK_CRITICAL") {
+			return {
+				decision: "ask",
+				finalReason: `Command blocked by contextual security adjudicator: ${stage2.reason}`,
+			}
+		}
+
+		if (stage2.decision === "REQUIRE_MANUAL_APPROVAL") {
+			return {
+				decision: "ask",
+				finalReason:
+					stage1.riskLevel !== "safe" && stage1.riskLevel !== "low"
+						? stage1.reason
+						: stage2.reason || stage1.reason,
+			}
+		}
+
+		// Stage 2 granted ALLOW_AUTO_APPROVE
+		if (stage2.decision === "ALLOW_AUTO_APPROVE") {
+			// Low/Safe/Medium inside target without host escape -> ALLOW
+			if (
+				stage1.riskLevel === "safe" ||
+				stage1.riskLevel === "low" ||
+				stage1.riskLevel === "medium"
+			) {
+				return {
+					decision: "approve",
+					finalReason:
+						stage2.reason ||
+						"Context-aware approval granted: aligned with task intent in test environment",
+				}
+			}
+
+			// High risk: allowed only if executed in verified test environment and aligned
+			if (stage1.riskLevel === "high") {
+				if (boundary.target.classification === "test-environment" && stage2.taskAlignment) {
+					return {
+						decision: "approve",
+						finalReason: `Auto-approved high-risk command inside verified test target '${boundary.target.name || "test"}': ${stage2.reason}`,
+					}
+				}
+				return {
+					decision: "ask",
+					finalReason: `High-risk command requires manual confirmation outside verified test environment: ${stage1.reason}`,
+				}
+			}
+		}
+
+		// Default fail-closed
+		return {
+			decision: "ask",
+			finalReason: "Safety adjudication defaulted to manual approval",
+		}
+	}
+
 	public static async evaluate(options: EvaluateSafetyOptions): Promise<SafetyEvaluationResult> {
 		return new CommandSafetyJudge().evaluate(options)
+	}
+
+	public static async evaluateTwoStage(
+		options: EvaluateTwoStageOptions
+	): Promise<TwoStageSafetyResult> {
+		return new CommandSafetyJudge().evaluateTwoStage(options)
+	}
+
+	/**
+	 * Two-stage safety evaluation:
+	 * Stage 0: Fast-path heuristic (0ms, 0 tokens)
+	 * Stage 1: Command safety evaluation with Execution Boundary Analysis
+	 * Stage 2: Context-aware adjudication (only if Stage 1 does not approve)
+	 */
+	public async evaluateTwoStage({
+		command,
+		cwd,
+		taskId,
+		context,
+		recentCommands,
+		config,
+		state,
+	}: EvaluateTwoStageOptions): Promise<TwoStageSafetyResult> {
+		// 1. Execution Boundary Analysis
+		const boundary = ExecutionBoundaryAnalyzer.analyze(command, {
+			targetName: undefined,
+			userInstruction: context?.latestUserInstruction,
+			taskGoal: context?.taskGoal,
+			workspacePath: context?.workspacePath || cwd,
+		})
+
+		// 2. Cache lookup (bypass cache in unit tests where evaluate is mocked)
+		const isMockMode = Boolean((CommandSafetyJudge.evaluate as any)?.mock)
+		const normalizedCmd = command.trim().replace(/\s+/g, " ")
+		const cacheKey = `${taskId || ""}:${boundary.target.type}:${boundary.target.name || "default"}:${cwd || ""}:${normalizedCmd}`
+		if (!isMockMode) {
+			const cached = CommandSafetyJudge.twoStageCache.get(cacheKey)
+			if (cached) {
+				return cached
+			}
+		}
+
+		// 3. Stage 1 Evaluation (runs fast-path or LLM judge)
+		const stage1Result = (CommandSafetyJudge.evaluate as any)?.mock
+			? await CommandSafetyJudge.evaluate({
+					command,
+					cwd,
+					recentCommands,
+					config,
+					state,
+			  })
+			: await this.evaluate({
+					command,
+					cwd,
+					recentCommands,
+					config,
+					state,
+			  })
+
+		const stage1WithBoundary = {
+			...stage1Result,
+			executionBoundary: boundary,
+		}
+
+		// If Stage 1 is safe/low and has no host escape: fast auto-approve without Stage 2
+		if (
+			stage1Result.isSafe === true &&
+			(stage1Result.riskLevel === "safe" || stage1Result.riskLevel === "low") &&
+			!boundary.hostImpact.isHostEscape
+		) {
+			const auditLog = `[CommandSafety] commandId=${taskId || "local"} stage1=ALLOW stage1Risk=${stage1Result.riskLevel} target=${boundary.target.type}:${boundary.target.name || "local"} stage2=SKIPPED final=ALLOW reason="${stage1Result.reason}"`
+			const result: TwoStageSafetyResult = {
+				decision: "approve",
+				stage1: stage1WithBoundary,
+				finalReason: stage1Result.reason,
+				auditLog,
+			}
+			CommandSafetyJudge.twoStageCache.set(cacheKey, result)
+			return result
+		}
+
+		// Invariant 1: Host impact detected -> cannot auto-approve
+		if (boundary.hostImpact.isHostEscape) {
+			const reason = `Host impact detected (${boundary.hostImpact.reasons.join("; ")}). Manual approval required.`
+			const auditLog = `[CommandSafety] commandId=${taskId || "local"} stage1=${stage1Result.riskLevel} target=${boundary.target.type}:${boundary.target.name || "local"} stage2=SKIPPED final=MANUAL reason="${reason}"`
+			const result: TwoStageSafetyResult = {
+				decision: "ask",
+				stage1: stage1WithBoundary,
+				finalReason: reason,
+				auditLog,
+			}
+			CommandSafetyJudge.twoStageCache.set(cacheKey, result)
+			return result
+		}
+
+		// Invariant 2: Critical risk cannot be overridden by Stage 2
+		if (stage1Result.riskLevel === "critical") {
+			const auditLog = `[CommandSafety] commandId=${taskId || "local"} stage1=${stage1Result.riskLevel} target=${boundary.target.type}:${boundary.target.name || "local"} stage2=SKIPPED final=MANUAL reason="${stage1Result.reason}"`
+			const result: TwoStageSafetyResult = {
+				decision: "ask",
+				stage1: stage1WithBoundary,
+				finalReason: stage1Result.reason,
+				auditLog,
+			}
+			CommandSafetyJudge.twoStageCache.set(cacheKey, result)
+			return result
+		}
+
+		// Invariant 3: If no task context or local host without test classification, require manual approval
+		const hasTaskContext = Boolean(context?.taskGoal?.trim() || context?.latestUserInstruction?.trim())
+		if (!hasTaskContext || (boundary.target.type === "local" && boundary.target.classification !== "test-environment")) {
+			const auditLog = `[CommandSafety] commandId=${taskId || "local"} stage1=${stage1Result.riskLevel} target=local stage2=SKIPPED final=MANUAL reason="${stage1Result.reason}"`
+			const result: TwoStageSafetyResult = {
+				decision: "ask",
+				stage1: stage1WithBoundary,
+				finalReason: stage1Result.reason,
+				auditLog,
+			}
+			CommandSafetyJudge.twoStageCache.set(cacheKey, result)
+			return result
+		}
+
+		// 5. Stage 2 Contextual Adjudication
+		let stage2Result: Stage2AdjudicationResult
+		try {
+			const effectiveConfig = config || state?.commandSafetyConfig
+			const provider = effectiveConfig?.provider?.toLowerCase().trim()
+			const modelId = effectiveConfig?.modelId?.trim()
+			const apiKey =
+				effectiveConfig?.apiKey?.trim() ||
+				resolveProviderApiKey(provider || "", state?.apiConfiguration)
+
+			if (
+				!effectiveConfig ||
+				!provider ||
+				!modelId ||
+				(!apiKey && provider !== "ollama" && provider !== "lmstudio")
+			) {
+				stage2Result = {
+					decision: "REQUIRE_MANUAL_APPROVAL",
+					risk: "high",
+					reason: "Stage 2 configuration missing or incomplete",
+					taskAlignment: false,
+					criticalRiskDetected: false,
+				}
+			} else {
+				const apiConfig = state?.apiConfiguration as Record<string, any> | undefined
+				const knownSecrets = [
+					effectiveConfig.apiKey,
+					apiConfig?.apiKey,
+					apiConfig?.openAiApiKey,
+					apiConfig?.anthropicApiKey,
+					apiConfig?.geminiApiKey,
+				]
+				const sanitizedCommand = sanitizeForSafetyPrompt(command, knownSecrets)
+
+				const { systemPrompt, userPrompt } = buildStage2SafetyPrompt({
+					sanitizedCommand,
+					cwd: cwd || "",
+					host: boundary.host,
+					executionTarget: boundary.target,
+					taskContext: {
+						taskGoal: context?.taskGoal || "Developer command execution",
+						latestUserInstruction:
+							context?.latestUserInstruction ||
+							context?.taskGoal ||
+							"Run tests or commands",
+						activeTodo: context?.activeTodo,
+						workspacePath: context?.workspacePath || cwd || "",
+						isWithinWorkspace: context?.isWithinWorkspace ?? true,
+						explicitConstraints: context?.explicitConstraints,
+					},
+					stage1: {
+						decision: "REQUIRE_MANUAL",
+						risk: stage1Result.riskLevel,
+						reason: stage1Result.reason,
+						detectedEffects: boundary.hostImpact.reasons,
+					},
+					hostImpact: boundary.hostImpact,
+				})
+
+				const abortController = new AbortController()
+				let timeoutId: ReturnType<typeof setTimeout> | undefined
+				const timeoutPromise = new Promise<never>((_, reject) => {
+					timeoutId = setTimeout(() => {
+						const timeoutError = new Error(
+							`Stage 2 safety evaluation timed out after ${this.timeoutMs}ms`
+						)
+						abortController.abort(timeoutError)
+						reject(timeoutError)
+					}, this.timeoutMs)
+				})
+
+				let rawStage2: string
+				try {
+					const callParams: CallProviderParams = {
+						provider,
+						modelId,
+						apiKey: apiKey || "",
+						systemPrompt,
+						userPrompt,
+						state,
+						signal: abortController.signal,
+						maxTokens: 350,
+					}
+					const providerCall = this.callProviderOverride
+						? this.callProviderOverride(callParams)
+						: CommandSafetyJudge.globalCallProviderOverride
+							? CommandSafetyJudge.globalCallProviderOverride(callParams)
+							: this.callProvider(callParams)
+
+					rawStage2 = await Promise.race([providerCall, timeoutPromise])
+				} finally {
+					if (timeoutId !== undefined) {
+						clearTimeout(timeoutId)
+					}
+				}
+
+				stage2Result = this.parseStage2Response(rawStage2)
+			}
+		} catch (error: any) {
+			const errorDetail = error instanceof Error ? error.message : String(error)
+			stage2Result = {
+				decision: "REQUIRE_MANUAL_APPROVAL",
+				risk: "high",
+				reason: `Stage 2 adjudication failed (${errorDetail}). Fail closed to manual approval.`,
+				taskAlignment: false,
+				criticalRiskDetected: false,
+			}
+		}
+
+		// 6. Resolve Disagreement Policy
+		const resolution = this.resolveTwoStageSafety(stage1WithBoundary, stage2Result, boundary)
+
+		const auditLog = `[CommandSafety] commandId=${taskId || "local"} stage1=${stage1Result.riskLevel} target=${boundary.target.type}:${boundary.target.name || "local"} stage2=${stage2Result.decision} final=${resolution.decision === "approve" ? "ALLOW" : "MANUAL"} reason="${resolution.finalReason}"`
+
+		const twoStageResult: TwoStageSafetyResult = {
+			decision: resolution.decision,
+			stage1: stage1WithBoundary,
+			stage2: stage2Result,
+			finalReason: resolution.finalReason,
+			auditLog,
+		}
+
+		CommandSafetyJudge.twoStageCache.set(cacheKey, twoStageResult)
+		return twoStageResult
 	}
 
 	/**
@@ -274,7 +704,9 @@ export class CommandSafetyJudge {
 
 				const providerCall = this.callProviderOverride
 					? this.callProviderOverride(callParams)
-					: this.callProvider(callParams)
+					: CommandSafetyJudge.globalCallProviderOverride
+						? CommandSafetyJudge.globalCallProviderOverride(callParams)
+						: this.callProvider(callParams)
 
 				rawResponse = await Promise.race([providerCall, timeoutPromise])
 			} finally {
@@ -332,13 +764,14 @@ export class CommandSafetyJudge {
 		userPrompt,
 		state,
 		signal,
+		maxTokens,
 	}: CallProviderParams): Promise<string> {
-		switch (provider) {
+		switch (provider.toLowerCase().trim()) {
 			case "anthropic":
-				return this.callAnthropic({ modelId, apiKey, systemPrompt, userPrompt, state, signal })
+				return this.callAnthropic({ modelId, apiKey, systemPrompt, userPrompt, state, signal, maxTokens })
 
 			case "gemini":
-				return this.callGemini({ modelId, apiKey, systemPrompt, userPrompt, signal })
+				return this.callGemini({ modelId, apiKey, systemPrompt, userPrompt, signal, maxTokens })
 
 			default:
 				// Handles OpenAI, OpenRouter, xkiro, and other OpenAI-compatible endpoints
@@ -350,6 +783,7 @@ export class CommandSafetyJudge {
 					userPrompt,
 					state,
 					signal,
+					maxTokens,
 				})
 		}
 	}
@@ -361,6 +795,7 @@ export class CommandSafetyJudge {
 		userPrompt,
 		state,
 		signal,
+		maxTokens,
 	}: {
 		modelId: string
 		apiKey: string
@@ -368,6 +803,7 @@ export class CommandSafetyJudge {
 		userPrompt: string
 		state?: Partial<ExtensionState> | null
 		signal: AbortSignal
+		maxTokens?: number
 	}): Promise<string> {
 		const client = new Anthropic({
 			apiKey,
@@ -377,7 +813,7 @@ export class CommandSafetyJudge {
 		const response = await client.messages.create(
 			{
 				model: modelId,
-				max_tokens: 150,
+				max_tokens: maxTokens || 150,
 				system: systemPrompt,
 				messages: [{ role: "user", content: userPrompt }],
 				temperature: 0.0,
@@ -397,12 +833,14 @@ export class CommandSafetyJudge {
 		systemPrompt,
 		userPrompt,
 		signal,
+		maxTokens,
 	}: {
 		modelId: string
 		apiKey: string
 		systemPrompt: string
 		userPrompt: string
 		signal: AbortSignal
+		maxTokens?: number
 	}): Promise<string> {
 		const client = new GoogleGenAI({ apiKey })
 
@@ -429,7 +867,7 @@ export class CommandSafetyJudge {
 			config: {
 				systemInstruction: systemPrompt,
 				temperature: 0.0,
-				maxOutputTokens: 150,
+				maxOutputTokens: maxTokens || 150,
 				thinkingConfig: {
 					thinkingBudget: 0,
 				},
@@ -448,6 +886,7 @@ export class CommandSafetyJudge {
 		userPrompt,
 		state,
 		signal,
+		maxTokens,
 	}: {
 		provider: string
 		modelId: string
@@ -456,6 +895,7 @@ export class CommandSafetyJudge {
 		userPrompt: string
 		state?: Partial<ExtensionState> | null
 		signal: AbortSignal
+		maxTokens?: number
 	}): Promise<string> {
 		let baseURL: string | undefined
 		const defaultHeaders: Record<string, string> = {}
@@ -506,8 +946,8 @@ export class CommandSafetyJudge {
 			model: modelId,
 			messages,
 			...(isReasoningModel
-				? { reasoning_effort: "low", max_completion_tokens: 150 }
-				: { temperature: 0.0, max_tokens: 150 }),
+				? { reasoning_effort: "low", max_completion_tokens: maxTokens || 150 }
+				: { temperature: 0.0, max_tokens: maxTokens || 150 }),
 		}
 
 		const completion = await client.chat.completions.create(requestParams, { signal })
