@@ -200,10 +200,20 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 		return 200_000
 	}
 
-	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra)
-	// or the Gemini family (gemini-1.5, gemini-2.0, gemini-2.5, gemini-3.0)
+	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra, gpt-5.6, terra, sol, luna)
+	// or the Gemini family (gemini-1.5, gemini-2.5, gemini-3.0)
 	const is2mPattern = lower.includes("2m") || /(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")
-	const is1mPattern = lower.includes("1m") || /(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-1m") || lower.includes("_1m")
+	const isGpt56OrTerra =
+		lower.includes("gpt-5.6") ||
+		lower.includes("terra") ||
+		lower.includes("sol") ||
+		lower.includes("luna")
+	const is1mPattern =
+		lower.includes("1m") ||
+		/(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) ||
+		lower.includes("-1m") ||
+		lower.includes("_1m") ||
+		isGpt56OrTerra
 	const isAstraOrGpt6 = lower.includes("astra") || lower.includes("gpt-6")
 	const isGemini = lower.includes("gemini")
 
@@ -243,7 +253,7 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 
 	// 4. OpenAI o-series & GPT family
 	const isOpenAi200k =
-		lower.includes("gpt-5") ||
+		(lower.includes("gpt-5") && !lower.includes("gpt-5.6")) ||
 		/(?:^|[\/_\-.:])o[134](?:[\/_\-.:]|$)/i.test(lower) ||
 		lower.includes("o1") ||
 		lower.includes("o3") ||

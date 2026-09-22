@@ -117,6 +117,7 @@ interface ChatRowProps {
 	isStreaming: boolean
 	onToggleExpand: (ts: number) => void
 	onHeightChange: (isTaller: boolean) => void
+	onSetEditingMessage?: (isEditing: boolean) => void
 	onSuggestionClick?: (suggestion: SuggestionItem, event?: React.MouseEvent) => void
 	onBatchFileResponse?: (response: { [key: string]: boolean }) => void
 	onFollowUpUnmount?: () => void
@@ -138,48 +139,68 @@ const ChatRow = memo(
 		const prevHeightRef = useRef(0)
 
 		const [chatrow, { height }] = useSize(
-			<div className="px-3.5 py-2 pr-2">
+			<div className="relative">
 				<ChatRowContent {...props} />
 			</div>,
 		)
 
+		// Check if height has changed and is valid
+		const isInitialRender = prevHeightRef.current === 0
+		const isHeightValid = height !== undefined && height > 0
+
 		useEffect(() => {
-			const isHeightValid = height !== 0 && height !== Infinity
-			// used for partials, command output, etc.
-			// NOTE: it's important we don't distinguish between partial or complete here since our scroll effects in chatview need to handle height change during partial -> complete
-			const isInitialRender = prevHeightRef.current === 0 // prevents scrolling when new element is added since we already scroll for that
-			// height starts off at Infinity
+			// Trigger handleRowHeightChange only on actual height changes, not on initial render
 			if (isLast && isHeightValid && height !== prevHeightRef.current) {
 				if (!isInitialRender) {
 					onHeightChange(height > prevHeightRef.current)
 				}
 				prevHeightRef.current = height
 			}
-		}, [height, isLast, onHeightChange, message])
+		}, [height, isLast, onHeightChange, isInitialRender, isHeightValid])
 
 		// we cannot return null as virtuoso does not support it, so we use a separate visibleMessages array to filter out messages that should not be rendered
 		return chatrow
 	},
-	// memo does shallow comparison of props, so we need to do deep comparison of arrays/objects whose properties might change
-	deepEqual,
+	// Custom comparison function to prevent re-renders unless props actually change
+	(prevProps, nextProps) => {
+		return (
+			prevProps.message === nextProps.message &&
+			prevProps.lastModifiedMessage === nextProps.lastModifiedMessage &&
+			prevProps.isExpanded === nextProps.isExpanded &&
+			prevProps.isLast === nextProps.isLast &&
+			prevProps.onHeightChange === nextProps.onHeightChange &&
+			prevProps.onSetEditingMessage === nextProps.onSetEditingMessage &&
+			prevProps.onToggleExpand === nextProps.onToggleExpand &&
+			prevProps.isStreaming === nextProps.isStreaming &&
+			prevProps.onSuggestionClick === nextProps.onSuggestionClick &&
+			prevProps.onBatchFileResponse === nextProps.onBatchFileResponse &&
+			prevProps.onFollowUpUnmount === nextProps.onFollowUpUnmount &&
+			prevProps.isFollowUpAnswered === nextProps.isFollowUpAnswered &&
+			prevProps.isFollowUpAutoApprovalPaused === nextProps.isFollowUpAutoApprovalPaused &&
+			prevProps.editable === nextProps.editable &&
+			prevProps.hasCheckpoint === nextProps.hasCheckpoint &&
+			prevProps.onJumpToPreviousCheckpoint === nextProps.onJumpToPreviousCheckpoint
+		)
+	},
 )
 
 export default ChatRow
 
 export const ChatRowContent = ({
-	message,
-	lastModifiedMessage,
-	isExpanded,
-	isLast,
-	isStreaming,
-	onToggleExpand,
-	onSuggestionClick,
-	onFollowUpUnmount,
-	onBatchFileResponse,
-	isFollowUpAnswered,
-	isFollowUpAutoApprovalPaused,
-	onJumpToPreviousCheckpoint,
-}: ChatRowContentProps) => {
+		message,
+		lastModifiedMessage,
+		isExpanded,
+		isLast,
+		isStreaming,
+		onToggleExpand,
+		onSetEditingMessage,
+		onSuggestionClick,
+		onFollowUpUnmount,
+		onBatchFileResponse,
+		isFollowUpAnswered,
+		isFollowUpAutoApprovalPaused,
+		onJumpToPreviousCheckpoint,
+	}: ChatRowContentProps) => {
 	const { t, i18n } = useTranslation()
 
 	const { mcpServers, alwaysAllowMcp, currentCheckpoint, mode, apiConfiguration, clineMessages, currentTaskItem } =
@@ -210,27 +231,39 @@ export const ChatRowContent = ({
 		onToggleExpand(message.ts)
 	}, [onToggleExpand, message.ts])
 
+	// Cleanup editing message state on unmount if editing
+	useEffect(() => {
+		return () => {
+			if (isEditing) {
+				onSetEditingMessage?.(false)
+			}
+		}
+	}, [isEditing, onSetEditingMessage])
+
 	// Handle edit button click
 	const handleEditClick = useCallback(() => {
+		onSetEditingMessage?.(true)
 		setIsEditing(true)
 		setEditedContent(message.text || "")
 		setEditImages(message.images || [])
 		setEditMode(mode || "code")
 		// Edit mode is now handled entirely in the frontend
 		// No need to notify the backend
-	}, [message.text, message.images, mode])
+	}, [onSetEditingMessage, message.text, message.images, mode])
 
 	// Handle cancel edit
 	const handleCancelEdit = useCallback(() => {
 		setIsEditing(false)
+		onSetEditingMessage?.(false)
 		setEditedContent(message.text || "")
 		setEditImages(message.images || [])
 		setEditMode(mode || "code")
-	}, [message.text, message.images, mode])
+	}, [onSetEditingMessage, message.text, message.images, mode])
 
 	// Handle save edit
 	const handleSaveEdit = useCallback(() => {
 		setIsEditing(false)
+		onSetEditingMessage?.(false)
 		// Send edited message to backend
 		vscode.postMessage({
 			type: "submitEditedMessage",
@@ -238,7 +271,7 @@ export const ChatRowContent = ({
 			editedMessageContent: editedContent,
 			images: editImages,
 		})
-	}, [message.ts, editedContent, editImages])
+	}, [onSetEditingMessage, message.ts, editedContent, editImages])
 
 	// Handle image selection for editing
 	const handleSelectImages = useCallback(() => {

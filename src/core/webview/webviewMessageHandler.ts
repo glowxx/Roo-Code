@@ -1140,6 +1140,9 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 					await provider.setGlobalState("openAiModels", openAiModels)
 					await provider.setValue("openAiModelInfos", openAiModelInfos)
 					await provider.setGlobalState("openAiModelInfos", openAiModelInfos)
+					if (provider.getCurrentTask() && (isXkiro || requestedProvider === "openai")) {
+						provider.updateTaskApiHandlerIfNeeded(apiConfiguration, { forceRebuild: true })
+					}
 					provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 				} else {
 					const cached =
@@ -1939,6 +1942,9 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 									await provider.setGlobalState("openAiModels", openAiModels)
 									await provider.setValue("openAiModelInfos", openAiModelInfos)
 									await provider.setGlobalState("openAiModelInfos", openAiModelInfos)
+									if (provider.getCurrentTask() && (isXkiro || providerType === "openai")) {
+										provider.updateTaskApiHandlerIfNeeded(config, { forceRebuild: true })
+									}
 									provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 								}
 							})

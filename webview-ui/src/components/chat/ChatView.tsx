@@ -21,6 +21,7 @@ import { getApiMetrics } from "@roo/getApiMetrics"
 import { getAllModes } from "@roo/modes"
 import { ProfileValidator } from "@roo/ProfileValidator"
 import { getLatestTodo } from "@roo/todo"
+import { getLatestUserPrompt } from "./utils/userPrompt"
 
 import { vscode } from "@src/utils/vscode"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
@@ -103,6 +104,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	// task, then the extension is in a bad state and needs to be debugged (see
 	// Cline.abort).
 	const task = useMemo(() => messages.at(0), [messages])
+	const latestUserPrompt = useMemo(() => getLatestUserPrompt(messages), [messages])
 
 	const latestTodos = useMemo(() => {
 		// First check if we have initial todos from the state (for new subtasks)
@@ -870,11 +872,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					switch (message.action!) {
 						case "didBecomeVisible":
 							if (!isHidden && !sendingDisabled && !enableButtons) {
-								textAreaRef.current?.focus()
+								textAreaRef.current?.focus({ preventScroll: true })
 							}
 							break
 						case "focusInput":
-							textAreaRef.current?.focus()
+							textAreaRef.current?.focus({ preventScroll: true })
 							break
 						case "clearTask":
 							handleChatReset()
@@ -1098,7 +1100,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	useDebounceEffect(
 		() => {
 			if (!isHidden && !sendingDisabled && !enableButtons) {
-				textAreaRef.current?.focus()
+				textAreaRef.current?.focus({ preventScroll: true })
 			}
 		},
 		50,
@@ -1314,6 +1316,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		followOutputCallback,
 		atBottomStateChangeCallback,
 		scrollToBottomAuto,
+		setEditingMessage,
 		isAtBottomRef,
 		scrollPhaseRef,
 	} = useScrollLifecycle({
@@ -1474,6 +1477,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					lastModifiedMessage={index === groupedMessages.length - 1 ? modifiedMessages.at(-1) : undefined}
 					isLast={index === groupedMessages.length - 1} // Original direct access
 					onHeightChange={handleRowHeightChange}
+					onSetEditingMessage={setEditingMessage}
 					isStreaming={isStreaming}
 					onSuggestionClick={handleSuggestionClickInRow} // This was already stabilized
 					onBatchFileResponse={handleBatchFileResponse}
@@ -1506,6 +1510,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			modifiedMessages,
 			groupedMessages.length,
 			handleRowHeightChange,
+			setEditingMessage,
 			isStreaming,
 			handleSuggestionClickInRow,
 			handleBatchFileResponse,
@@ -1613,6 +1618,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				<>
 					<TaskHeader
 						task={task}
+						latestUserPrompt={latestUserPrompt}
 						tokensIn={apiMetrics.totalTokensIn}
 						tokensOut={apiMetrics.totalTokensOut}
 						cacheWrites={apiMetrics.totalCacheWrites}

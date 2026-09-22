@@ -179,7 +179,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								const textarea = textAreaRef.current
 
 								// Focus the textarea to ensure it's the active element
-								textarea.focus()
+								textarea.focus({ preventScroll: true })
 
 								// Select all text first
 								textarea.select()
@@ -218,7 +218,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						const newCursorPos = cursorPos + prefix.length + message.text.length + 1
 						setTimeout(() => {
 							if (textAreaRef.current) {
-								textAreaRef.current.focus()
+								textAreaRef.current.focus({ preventScroll: true })
 								textAreaRef.current.setSelectionRange(newCursorPos, newCursorPos)
 							}
 						}, 0)
@@ -260,6 +260,12 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const contextMenuContainerRef = useRef<HTMLDivElement>(null)
 		const [isEnhancingPrompt, setIsEnhancingPrompt] = useState(false)
 		const [isFocused, setIsFocused] = useState(false)
+
+		useEffect(() => {
+			if (isEditMode && textAreaRef.current) {
+				textAreaRef.current.focus({ preventScroll: true })
+			}
+		}, [isEditMode])
 
 		// Use custom hook for prompt history navigation
 		const { handleHistoryNavigation, resetHistoryNavigation, resetOnInputChange } = usePromptHistory({
@@ -418,7 +424,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setTimeout(() => {
 					if (textAreaRef.current) {
 						textAreaRef.current.blur()
-						textAreaRef.current.focus()
+						textAreaRef.current.focus({ preventScroll: true })
 					}
 				}, 0)
 			},
@@ -707,7 +713,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					setTimeout(() => {
 						if (textAreaRef.current) {
 							textAreaRef.current.blur()
-							textAreaRef.current.focus()
+							textAreaRef.current.focus({ preventScroll: true })
 						}
 					}, 0)
 
@@ -1109,7 +1115,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								placeholder={placeholderText}
 								minRows={3}
 								maxRows={15}
-								autoFocus={true}
+								autoFocus={!isEditMode}
 								className={cn(
 									"w-full",
 									"text-vscode-input-foreground",

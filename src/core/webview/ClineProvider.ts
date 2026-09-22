@@ -1379,7 +1379,7 @@ export class ClineProvider
 	 * @param providerSettings The new provider settings to apply
 	 * @param options.forceRebuild Force rebuilding the API handler regardless of provider/model equality
 	 */
-	private updateTaskApiHandlerIfNeeded(
+	public updateTaskApiHandlerIfNeeded(
 		providerSettings: ProviderSettings,
 		options: { forceRebuild?: boolean } = {},
 	): void {

@@ -25,7 +25,12 @@ const HYDRATION_RETRY_WINDOW_MS = 160
 
 export type ScrollPhase = "HYDRATING_PINNED_TO_BOTTOM" | "ANCHORED_FOLLOWING" | "USER_BROWSING_HISTORY"
 
-export type ScrollFollowDisengageSource = "wheel-up" | "row-expansion" | "keyboard-nav-up" | "pointer-scroll-up"
+export type ScrollFollowDisengageSource =
+	| "wheel-up"
+	| "row-expansion"
+	| "keyboard-nav-up"
+	| "pointer-scroll-up"
+	| "message-editing"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,8 +69,10 @@ export interface UseScrollLifecycleReturn {
 	followOutputCallback: () => "auto" | false
 	atBottomStateChangeCallback: (isAtBottom: boolean) => void
 	scrollToBottomAuto: () => void
+	setEditingMessage: (isEditing: boolean) => void
 	isAtBottomRef: React.MutableRefObject<boolean>
 	scrollPhaseRef: React.MutableRefObject<ScrollPhase>
+	isEditingMessageRef: React.MutableRefObject<boolean>
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +113,9 @@ export function useScrollLifecycle({
 	// --- Re-anchor frame ---
 	const reanchorAnimationFrameRef = useRef<number | null>(null)
 
+	// --- Message editing lock ---
+	const isEditingMessageRef = useRef(false)
+
 	// -----------------------------------------------------------------------
 	// Phase transitions
 	// -----------------------------------------------------------------------
@@ -132,6 +142,16 @@ export function useScrollLifecycle({
 			setShowScrollToBottom(true)
 		},
 		[transitionScrollPhase],
+	)
+
+	const setEditingMessage = useCallback(
+		(isEditing: boolean) => {
+			isEditingMessageRef.current = isEditing
+			if (isEditing) {
+				enterUserBrowsingHistory("message-editing")
+			}
+		},
+		[enterUserBrowsingHistory],
 	)
 
 	const cancelReanchorFrame = useCallback(() => {
@@ -260,6 +280,7 @@ export function useScrollLifecycle({
 	const handleRowHeightChange = useCallback(
 		(isTaller: boolean) => {
 			if (
+				isEditingMessageRef.current ||
 				scrollPhaseRef.current === "USER_BROWSING_HISTORY" ||
 				scrollPhaseRef.current === "HYDRATING_PINNED_TO_BOTTOM"
 			) {
@@ -299,6 +320,9 @@ export function useScrollLifecycle({
 	// -----------------------------------------------------------------------
 
 	const followOutputCallback = useCallback((): "auto" | false => {
+		if (isEditingMessageRef.current) {
+			return false
+		}
 		return scrollPhase === "USER_BROWSING_HISTORY" ? false : "auto"
 	}, [scrollPhase])
 
@@ -318,6 +342,9 @@ export function useScrollLifecycle({
 			}
 
 			if (isAtBottom) {
+				if (isEditingMessageRef.current) {
+					return
+				}
 				if (currentPhase === "USER_BROWSING_HISTORY" && isHydratingRef.current) {
 					setShowScrollToBottom(true)
 					return
@@ -483,7 +510,9 @@ export function useScrollLifecycle({
 		followOutputCallback,
 		atBottomStateChangeCallback,
 		scrollToBottomAuto,
+		setEditingMessage,
 		isAtBottomRef,
 		scrollPhaseRef,
+		isEditingMessageRef,
 	}
 }

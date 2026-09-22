@@ -327,4 +327,22 @@ describe("TaskHeader", () => {
 			expect(compactButton).toBeDefined()
 		})
 	})
+
+	describe("Prompt presentation: latestUserPrompt vs task fallback", () => {
+		it("renders task.text when latestUserPrompt is not provided", () => {
+			renderTaskHeader({
+				task: { type: "say", ts: 1000, text: "Initial Task A" },
+			})
+			expect(screen.getByText("Initial Task A")).toBeInTheDocument()
+		})
+
+		it("renders latestUserPrompt.text when provided", () => {
+			renderTaskHeader({
+				task: { type: "say", ts: 1000, text: "Initial Task A" },
+				latestUserPrompt: { type: "say", ts: 1004, text: "Latest User Feedback C" },
+			})
+			expect(screen.getByText("Latest User Feedback C")).toBeInTheDocument()
+			expect(screen.queryByText("Initial Task A")).not.toBeInTheDocument()
+		})
+	})
 })

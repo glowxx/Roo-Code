@@ -54,7 +54,10 @@ function getValidatedModelId(
 	return configuredId && availableModels?.[configuredId] ? configuredId : defaultModelId
 }
 
-export const useSelectedModel = (apiConfiguration?: ProviderSettings) => {
+export const useSelectedModel = (
+	apiConfiguration?: ProviderSettings,
+	openAiModelInfos?: Record<string, ModelInfo>,
+) => {
 	const provider = apiConfiguration?.apiProvider || "openrouter"
 	const activeProvider: ProviderName | undefined = isRetiredProvider(provider) ? undefined : provider
 	const dynamicProvider = activeProvider && isDynamicProvider(activeProvider) ? activeProvider : undefined
@@ -102,6 +105,7 @@ export const useSelectedModel = (apiConfiguration?: ProviderSettings) => {
 					openRouterModelProviders: (openRouterModelProviders.data || {}) as Record<string, ModelInfo>,
 					lmStudioModels: (lmStudioModels.data || undefined) as ModelRecord | undefined,
 					ollamaModels: (ollamaModels.data || undefined) as ModelRecord | undefined,
+					openAiModelInfos,
 				})
 			: { id: getProviderDefaultModelId(activeProvider ?? "openrouter"), info: undefined }
 
@@ -138,6 +142,7 @@ function getSelectedModel({
 	openRouterModelProviders,
 	lmStudioModels,
 	ollamaModels,
+	openAiModelInfos,
 }: {
 	provider: ProviderName
 	apiConfiguration: ProviderSettings
@@ -145,6 +150,7 @@ function getSelectedModel({
 	openRouterModelProviders: Record<string, ModelInfo>
 	lmStudioModels: ModelRecord | undefined
 	ollamaModels: ModelRecord | undefined
+	openAiModelInfos?: Record<string, ModelInfo>
 }): { id: string; info: ModelInfo | undefined } {
 	// the `undefined` case are used to show the invalid selection to prevent
 	// users from seeing the default model if their selection is invalid
@@ -279,22 +285,24 @@ function getSelectedModel({
 		}
 		case "openai": {
 			const id = apiConfiguration.openAiModelId ?? ""
-			const info = getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo)
+			const liveInfo = openAiModelInfos?.[id]
+			const info = liveInfo ?? getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo)
 			const contextWindow = getModelContextWindow(id, info?.contextWindow)
 			return { id, info: info ? { ...info, contextWindow } : info }
 		}
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
 			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
+			const liveInfo = openAiModelInfos?.[id]
 			const customOverride = (apiConfiguration as any).xkiroCustomContextWindow || (apiConfiguration as any).customContextWindow
-			const baseInfo = predefinedInfo ?? (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
+			const baseInfo = predefinedInfo ?? liveInfo ?? (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
 				maxTokens: 8192,
 				contextWindow: getModelContextWindow(id),
 				supportsImages: true,
 				supportsPromptCache: true,
 				description: `xKiro model: ${id}`,
 			}
-			const baseContext = customOverride || baseInfo.contextWindow
+			const baseContext = customOverride || liveInfo?.contextWindow || baseInfo.contextWindow
 			const contextWindow = customOverride ? customOverride : getModelContextWindow(id, baseContext)
 			const supportsReasoningEffort =
 				baseInfo.supportsReasoningEffort ??

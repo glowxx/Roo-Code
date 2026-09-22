@@ -154,6 +154,19 @@ describe("getModelContextWindow", () => {
 				expect(getModelContextWindow(m, 128_000)).toBe(1_000_000)
 			}
 		})
+
+		it("ensures openai/gpt-5.6-terra, sol, and luna resolve to 1M and do not collapse to 200k", () => {
+			const models = ["openai/gpt-5.6-terra", "openai/gpt-5.6-sol", "openai/gpt-5.6-luna", "gpt-5.6-terra"]
+			for (const m of models) {
+				// Cold start without baseContext
+				expect(getModelContextWindow(m)).toBe(1_000_000)
+				// Legacy auto-saved or stale baseContext of 200k or 128k must not suppress 1M
+				expect(getModelContextWindow(m, 200_000)).toBe(1_000_000)
+				expect(getModelContextWindow(m, 128_000)).toBe(1_000_000)
+				// Higher live metadata (e.g. 2M) takes precedence
+				expect(getModelContextWindow(m, 2_000_000)).toBe(2_000_000)
+			}
+		})
 	})
 })
 

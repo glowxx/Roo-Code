@@ -23,6 +23,7 @@ import { LucideIconButton } from "./LucideIconButton"
 
 export interface TaskHeaderProps {
 	task: ClineMessage
+	latestUserPrompt?: ClineMessage
 	tokensIn: number
 	tokensOut: number
 	cacheWrites?: number
@@ -41,6 +42,7 @@ export interface TaskHeaderProps {
 
 const TaskHeader = ({
 	task,
+	latestUserPrompt,
 	tokensIn,
 	tokensOut,
 	cacheWrites,
@@ -57,10 +59,11 @@ const TaskHeader = ({
 	todos,
 }: TaskHeaderProps) => {
 	const { t } = useTranslation()
-	const { apiConfiguration, currentTaskItem, clineMessages } = useExtensionState()
-	const { id: modelId, info: model } = useSelectedModel(apiConfiguration)
+	const { apiConfiguration, currentTaskItem, clineMessages, openAiModelInfos } = useExtensionState()
+	const { id: modelId, info: model } = useSelectedModel(apiConfiguration, openAiModelInfos)
 	const [isTaskExpanded, setIsTaskExpanded] = useState(false)
 
+	const displayPrompt = latestUserPrompt ?? task
 	const textContainerRef = useRef<HTMLDivElement>(null)
 	const textRef = useRef<HTMLDivElement>(null)
 	const customContextOverride =
@@ -179,7 +182,7 @@ const TaskHeader = ({
 							{isTaskExpanded && <span className="font-bold">{t("chat:task.title")}</span>}
 							{!isTaskExpanded && (
 								<div className="flex items-center gap-2 whitespace-nowrap overflow-hidden text-ellipsis">
-									<Mention text={task.text} />
+									<Mention text={displayPrompt.text} />
 								</div>
 							)}
 						</div>
@@ -267,10 +270,10 @@ const TaskHeader = ({
 									WebkitLineClamp: "unset",
 									WebkitBoxOrient: "vertical",
 								}}>
-								<Mention text={task.text} />
+								<Mention text={displayPrompt.text} />
 							</div>
 						</div>
-						{task.images && task.images.length > 0 && <Thumbnails images={task.images} />}
+						{displayPrompt.images && displayPrompt.images.length > 0 && <Thumbnails images={displayPrompt.images} />}
 
 						<div onClick={(e) => e.stopPropagation()}>
 							<TaskActions item={currentTaskItem} buttonsDisabled={buttonsDisabled} />

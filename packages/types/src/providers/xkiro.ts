@@ -6,6 +6,9 @@ export type XKiroModelId =
 	| "anthropic/claude-3.7-sonnet"
 	| "anthropic/claude-3.5-sonnet"
 	| "openai/gpt-6-astra"
+	| "openai/gpt-5.6-terra"
+	| "openai/gpt-5.6-sol"
+	| "openai/gpt-5.6-luna"
 	| "openai/gpt-5"
 	| "openai/gpt-5-mini"
 	| "openai/gpt-4o"
@@ -19,6 +22,45 @@ export type XKiroModelId =
 export const xkiroDefaultModelId: XKiroModelId = "deepseek/deepseek-chat"
 
 export const xkiroModels = {
+	"openai/gpt-5.6-terra": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0,
+		description: "xKiro GPT-5.6 Terra: Next-generation model with 1M context window.",
+	},
+	"openai/gpt-5.6-sol": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0,
+		description: "xKiro GPT-5.6 Sol: Next-generation model with 1M context window.",
+	},
+	"openai/gpt-5.6-luna": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0,
+		description: "xKiro GPT-5.6 Luna: Next-generation model with 1M context window.",
+	},
 	"openai/gpt-6-astra": {
 		maxTokens: 65_536,
 		contextWindow: 1_000_000,
