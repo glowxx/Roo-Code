@@ -1788,7 +1788,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	public static readonly AUTO_COMPACT_THRESHOLD = 0.85
-	public static readonly MAX_WORKING_CONTEXT_TOKENS = 160_000
+	public static readonly DEFAULT_ECONOMIC_CONTEXT_CAP = 200_000
 
 	public checkContextCompactionThreshold(): boolean {
 		const { contextTokens } = this.getTokenUsage()
@@ -1800,8 +1800,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		if (!contextWindow || contextWindow <= 0) {
 			return false
 		}
-		const percentageThreshold = contextWindow * Task.AUTO_COMPACT_THRESHOLD
-		const effectiveThreshold = Math.min(percentageThreshold, Task.MAX_WORKING_CONTEXT_TOKENS)
+		const hardModelLimit = contextWindow * Task.AUTO_COMPACT_THRESHOLD
+
+		// Check if economic cap is bypassed via environment or config
+		const disableEconomicCap =
+			process.env.ROO_DISABLE_ECONOMIC_CAP === "true" ||
+			process.env.ROO_DISABLE_ECONOMIC_CAP === "1"
+
+		if (disableEconomicCap) {
+			return contextTokens >= hardModelLimit
+		}
+
+		// Configurable economic soft cap (default: 200,000 tokens for massive 1M+ models)
+		const customCap = process.env.ROO_MAX_WORKING_CONTEXT_TOKENS
+			? parseInt(process.env.ROO_MAX_WORKING_CONTEXT_TOKENS, 10)
+			: Task.DEFAULT_ECONOMIC_CONTEXT_CAP
+
+		const effectiveThreshold = Math.min(hardModelLimit, customCap)
 		return contextTokens >= effectiveThreshold
 	}
 
