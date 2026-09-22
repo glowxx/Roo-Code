@@ -1,91 +1,51 @@
-name: Enhancement Request
-description: Propose an improvement in plain language focused on user benefit
+name: Feature Request
+description: Propose an enhancement, new feature, or architectural improvement for Roo Code
 labels: ["enhancement"]
-title: "[ENHANCEMENT] "
+title: "[FEATURE] "
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thank you for helping improve Roo Code!
-        Please focus on the problem and the desired behavior in plain language.
+    - type: markdown
+      attributes:
+          value: |
+              Thank you for helping improve Roo Code! Please check existing issues and discussions before submitting:
+              https://github.com/RooCodeInc/Roo-Code/issues
 
-  - type: textarea
-    id: problem
-    attributes:
-      label: Problem (one or two sentences)
-      description: What problem are users facing?
-      placeholder: e.g., "Users often click Copy Run by mistake and duplicate runs unintentionally."
-    validations:
-      required: true
-
-  - type: textarea
-    id: context
-    attributes:
-      label: Context (who is affected and when)
-      description: Who encounters this and in what situation?
-      placeholder: e.g., "Happens when browsing the Runs list; most visible for new users."
-    validations:
-      required: true
-
-  - type: textarea
-    id: desired
-    attributes:
-      label: Desired behavior (conceptual, not technical)
-      description: Describe what should happen in simple terms.
-      placeholder: e.g., "Ask for confirmation before copying a run."
-    validations:
-      required: true
-
-  - type: textarea
-    id: constraints
-    attributes:
-      label: Constraints / preferences (optional)
-      description: Any considerations like performance, accessibility, or UX expectations.
-      placeholder: e.g., "Keep it quick and unobtrusive; keyboard accessible."
-
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: Request checklist
-      options:
-        - label: I've searched existing Issues and Discussions for duplicates
-          required: true
-        - label: This describes a specific problem with clear context and impact
+    - type: textarea
+      id: problem
+      attributes:
+          label: Problem Statement
+          description: What problem are you trying to solve? Is your feature request related to a specific limitation or pain point?
+          placeholder: 'e.g. "I often work across multiple local workspaces simultaneously, but currently have to switch folders manually."'
+      validations:
           required: true
 
-  - type: textarea
-    id: roo-code-tasks
-    attributes:
-      label: Roo Code Task Links (optional)
-      description: If you explored this with Roo Code, share public task links for context.
-      placeholder: Paste your Roo Code share links here, one per line
+    - type: textarea
+      id: proposed-solution
+      attributes:
+          label: Proposed Solution
+          description: Describe the solution or behavior you would like to see. What should happen and how should it work?
+          placeholder: 'e.g. "Add a multi-root workspace tab switcher or persistent workspace manager in the desktop sidebar."'
+      validations:
+          required: true
 
-  - type: markdown
-    attributes:
-      value: |
-        ---
-        Optional: You can stop here if you're just proposing the improvement.
+    - type: textarea
+      id: alternatives
+      attributes:
+          label: Alternatives Considered
+          description: Describe any alternative solutions, workflows, or features you have considered.
+          placeholder: 'e.g. "Opening multiple instances of Roo Code Desktop, but this consumes more memory."'
 
-  - type: textarea
-    id: acceptance-criteria
-    attributes:
-      label: Acceptance criteria (optional)
-      description: Define what “working” looks like with specific, testable outcomes.
-      placeholder: |
-        Given [context]
-        When [user action]
-        Then [expected result]
-        And [additional expectations]
-        But [what should NOT happen]
+    - type: textarea
+      id: additional-context
+      attributes:
+          label: Additional Context
+          description: Add any other context, UI mockups, diagrams, or references to other tools here.
 
-  - type: textarea
-    id: proposed-solution
-    attributes:
-      label: Proposed approach (optional)
-      description: If you have an idea, describe it briefly in plain language.
-
-  - type: textarea
-    id: risks
-    attributes:
-      label: Trade-offs / risks (optional)
-      description: Potential downsides or alternatives considered.
+    - type: checkboxes
+      id: checklist
+      attributes:
+          label: Submission Checklist
+          options:
+              - label: I have searched existing Issues and Discussions for duplicates
+                required: true
+              - label: This proposal describes a clear problem with a well-defined use case
+                required: true
