@@ -34,10 +34,24 @@ export interface TokenAuditRecord {
 
 	cumulativeInputTokens: number
 	cumulativeOutputTokens: number
+
+	taskRequestCount: number
+	taskCumulativeInput: number
+	taskCumulativeOutput: number
+	estimatedRetransmittedTokens: number
+	currentContextTokens: number
+	largestRepeatedPayload: number
 }
 
 // In-memory cumulative tracking per task
-const taskCumulativeUsage = new Map<string, { input: number; output: number; requestCount: number }>()
+interface TaskCumulativeStats {
+	input: number
+	output: number
+	requestCount: number
+	retransmittedTokens: number
+	largestRepeatedPayload: number
+}
+const taskCumulativeUsage = new Map<string, TaskCumulativeStats>()
 
 export function isTokenAuditEnabled(): boolean {
 	return (
@@ -115,7 +129,13 @@ export interface FinalizeTokenAuditParams {
 export function prepareTokenAuditRecord(params: PrepareTokenAuditParams): TokenAuditRecord {
 	const { taskId, requestId = `req-${Date.now()}`, model, systemPrompt, nativeTools = [], mcpTools = [], messages } = params
 
-	const taskStats = taskCumulativeUsage.get(taskId) || { input: 0, output: 0, requestCount: 0 }
+	const taskStats = taskCumulativeUsage.get(taskId) || {
+		input: 0,
+		output: 0,
+		requestCount: 0,
+		retransmittedTokens: 0,
+		largestRepeatedPayload: 0,
+	}
 	taskStats.requestCount += 1
 	taskCumulativeUsage.set(taskId, taskStats)
 
@@ -204,7 +224,19 @@ export function prepareTokenAuditRecord(params: PrepareTokenAuditParams): TokenA
 	const estimatedInputTokens =
 		systemPromptTokens + nativeToolSchemaTokens + mcpSchemaTokens + historyTokens + currentTurnTokens
 
+	const estimatedRetransmittedTokens = Math.max(0, historyTokens)
+	taskStats.retransmittedTokens += estimatedRetransmittedTokens
+	if (largestToolResultBytes > taskStats.largestRepeatedPayload) {
+		taskStats.largestRepeatedPayload = largestToolResultBytes
+	}
 	taskStats.input += estimatedInputTokens
+
+	// Diagnostic warning for high cumulative amplification without stopping task
+	if (taskStats.input >= 1_200_000 || taskStats.retransmittedTokens >= 1_000_000) {
+		console.warn(
+			`[TokenAudit] High cumulative input amplification detected: task ${taskId} has reached ${taskStats.input} cumulative input tokens (${taskStats.retransmittedTokens} estimated retransmitted) across ${taskStats.requestCount} requests.`,
+		)
+	}
 
 	return {
 		taskId,
@@ -228,6 +260,12 @@ export function prepareTokenAuditRecord(params: PrepareTokenAuditParams): TokenA
 		compactionState: params.compactionState || "none",
 		cumulativeInputTokens: taskStats.input,
 		cumulativeOutputTokens: taskStats.output,
+		taskRequestCount: taskStats.requestCount,
+		taskCumulativeInput: taskStats.input,
+		taskCumulativeOutput: taskStats.output,
+		estimatedRetransmittedTokens,
+		currentContextTokens: estimatedInputTokens,
+		largestRepeatedPayload: taskStats.largestRepeatedPayload,
 	}
 }
 
@@ -264,7 +302,13 @@ retryReason=${record.retryReason}
 compactionState=${record.compactionState}
 
 cumulativeInputTokens=${record.cumulativeInputTokens}
-cumulativeOutputTokens=${record.cumulativeOutputTokens}`
+cumulativeOutputTokens=${record.cumulativeOutputTokens}
+taskRequestCount=${record.taskRequestCount}
+taskCumulativeInput=${record.taskCumulativeInput}
+taskCumulativeOutput=${record.taskCumulativeOutput}
+estimatedRetransmittedTokens=${record.estimatedRetransmittedTokens}
+currentContextTokens=${record.currentContextTokens}
+largestRepeatedPayload=${record.largestRepeatedPayload}`
 }
 
 export function logTokenAudit(record: TokenAuditRecord): void {

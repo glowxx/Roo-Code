@@ -478,12 +478,109 @@ describe("Task compactConversation", () => {
 				async *[Symbol.asyncIterator]() {
 					yield { type: "text", text: "Response" }
 				},
+				abort: vi.fn(),
 			} as any)
 
 			const iterator = task.attemptApiRequest(0)
 			await iterator.next()
 
 			expect(compactSpy).not.toHaveBeenCalled()
+		})
+
+		it("triggers ACAC when cumulative drag exceeds 1.2M tokens on large context models after grace period", () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "Initial user task",
+				startTask: false,
+			})
+
+			// 1M context model
+			vi.spyOn(task.api, "getModel").mockReturnValue({
+				id: "gpt-5.6-terra",
+				info: {
+					contextWindow: 1_000_000,
+					maxTokens: 16384,
+					supportsPromptCache: true,
+					supportsImages: true,
+					inputPrice: 1,
+					outputPrice: 6,
+					description: "Terra 1M",
+				},
+			})
+
+			task.apiConversationHistory = [
+				{ role: "user", content: "Initial user task", ts: 1 },
+				{ role: "assistant", content: "Working...", ts: 2 },
+				{ role: "user", content: "Small update", ts: 3 },
+			]
+
+			// Case A: 60k context (<200k cap, <850k hard limit), but spent 1.5M cumulative input across 15 turns
+			vi.spyOn(task, "getTokenUsage").mockReturnValue({
+				totalTokensIn: 1_500_000,
+				totalTokensOut: 10_000,
+				contextTokens: 60_000,
+				totalCost: 1.5,
+			})
+			;(task as any).requestsSinceLastCompaction = 15
+			;(task as any).tokensInAtLastCompaction = 0
+
+			// Cumulative drag trigger fires!
+			expect(task.checkContextCompactionThreshold()).toBe(true)
+
+			// Case B: In grace period (< 10 requests) -> Should defer
+			;(task as any).requestsSinceLastCompaction = 5
+			expect(task.checkContextCompactionThreshold()).toBe(false)
+
+			// Case C: High novelty ratio (user just pasted a huge prompt > 35% of context) -> Should defer
+			;(task as any).requestsSinceLastCompaction = 15
+			task.apiConversationHistory = [
+				{ role: "user", content: "Initial user task", ts: 1 },
+				{ role: "assistant", content: "Working...", ts: 2 },
+				// 30k token prompt pasted in 60k context -> ~50% novelty
+				{ role: "user", content: "X".repeat(120_000), ts: 3 },
+			]
+			expect(task.checkContextCompactionThreshold()).toBe(false)
+		})
+
+		it("triggers ACAC on long plateau (>= 20 requests at >= 60k context)", () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "Initial user task",
+				startTask: false,
+			})
+
+			vi.spyOn(task.api, "getModel").mockReturnValue({
+				id: "gpt-5.6-terra",
+				info: {
+					contextWindow: 1_000_000,
+					maxTokens: 16384,
+					supportsPromptCache: true,
+					supportsImages: true,
+					inputPrice: 1,
+					outputPrice: 6,
+					description: "Terra 1M",
+				},
+			})
+
+			task.apiConversationHistory = [
+				{ role: "user", content: "Initial user task", ts: 1 },
+				{ role: "assistant", content: "Working...", ts: 2 },
+				{ role: "user", content: "Next step", ts: 3 },
+			]
+
+			vi.spyOn(task, "getTokenUsage").mockReturnValue({
+				totalTokensIn: 800_000, // < 1.2M cumulative drag
+				totalTokensOut: 5_000,
+				contextTokens: 65_000, // >= 60k floor
+				totalCost: 0.8,
+			})
+
+			// 21 requests at 65k context -> plateau trigger fires!
+			;(task as any).requestsSinceLastCompaction = 21
+			;(task as any).tokensInAtLastCompaction = 0
+			expect(task.checkContextCompactionThreshold()).toBe(true)
 		})
 
 		it("executes compactContext successfully, updates history and notifies webview", async () => {

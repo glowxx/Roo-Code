@@ -87,4 +87,39 @@ describe("TokenAudit", () => {
 		expect(record.cumulativeInputTokens).toBe(1500)
 		expect(record.cumulativeOutputTokens).toBe(80)
 	})
+
+	it("tracks extended metrics: taskRequestCount, estimatedRetransmittedTokens, currentContextTokens, and logs warning on amplification", () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+		const record = prepareTokenAuditRecord({
+			taskId: "test-amplified-task",
+			model: "gpt-5.6-terra",
+			systemPrompt: "System",
+			messages: [
+				{ role: "user", content: "Turn 1" },
+				{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "execute_command", input: {} }] },
+				{
+					role: "user",
+					content: [{ type: "tool_result", tool_use_id: "t1", content: "Result ".repeat(1000) }],
+				},
+				// Current turn
+				{ role: "assistant", content: [{ type: "tool_use", id: "t2", name: "read_file", input: {} }] },
+				{ role: "user", content: "Next command" },
+			],
+		})
+
+		expect(record.taskRequestCount).toBe(1)
+		expect(record.currentContextTokens).toBeGreaterThan(0)
+		expect(record.estimatedRetransmittedTokens).toBeGreaterThan(0)
+		expect(record.taskCumulativeInput).toBe(record.currentContextTokens)
+		expect(record.largestRepeatedPayload).toBeGreaterThan(0)
+
+		const formatted = formatTokenAuditLog(record)
+		expect(formatted).toContain("taskRequestCount=1")
+		expect(formatted).toContain("estimatedRetransmittedTokens=")
+		expect(formatted).toContain("currentContextTokens=")
+		expect(formatted).toContain("largestRepeatedPayload=")
+
+		warnSpy.mockRestore()
+	})
 })

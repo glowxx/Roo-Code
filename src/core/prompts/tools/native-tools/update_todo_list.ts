@@ -13,6 +13,7 @@ Core Principles:
 - Add new actionable items as they're discovered
 - Only mark a task as completed when fully accomplished
 - Keep all unfinished tasks unless explicitly instructed to remove
+- Tool Pairing: Whenever possible, bundle update_todo_list calls with actionable tool calls (e.g. read_file, execute_command, or file edits) in the same turn rather than invoking it as a solitary request.
 
 Example: Initial task list
 { "todos": "[x] Analyze requirements\\n[x] Design architecture\\n[-] Implement core logic\\n[ ] Write tests\\n[ ] Update documentation" }

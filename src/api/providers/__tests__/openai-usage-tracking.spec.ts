@@ -234,5 +234,41 @@ describe("OpenAiHandler with usage tracking fix", () => {
 			const usageChunks = chunks.filter((chunk) => chunk.type === "usage")
 			expect(usageChunks).toHaveLength(0)
 		})
+
+		it("should correctly extract cached_tokens from prompt_tokens_details (OpenAI / xKiro standard)", async () => {
+			mockCreate.mockImplementationOnce(async () => {
+				return {
+					[Symbol.asyncIterator]: async function* () {
+						yield {
+							choices: [{ delta: { content: "Test response" }, index: 0 }],
+							usage: {
+								prompt_tokens: 6624,
+								completion_tokens: 150,
+								total_tokens: 6774,
+								prompt_tokens_details: {
+									cached_tokens: 5888,
+								},
+							},
+						}
+					},
+				}
+			})
+
+			const stream = handler.createMessage(systemPrompt, messages)
+			const chunks: any[] = []
+			for await (const chunk of stream) {
+				chunks.push(chunk)
+			}
+
+			const usageChunks = chunks.filter((chunk) => chunk.type === "usage")
+			expect(usageChunks).toHaveLength(1)
+			expect(usageChunks[0]).toEqual({
+				type: "usage",
+				inputTokens: 6624,
+				outputTokens: 150,
+				cacheReadTokens: 5888,
+				cacheWriteTokens: undefined,
+			})
+		})
 	})
 })

@@ -126,7 +126,11 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 
 				convertedMessages = [systemMessage, ...convertToOpenAiMessages(messages)]
 
-				if (modelInfo.supportsPromptCache) {
+				// Do not inject Anthropic cache_control headers for native OpenAI / xKiro endpoints.
+				// OpenAI uses automatic prefix caching; injecting and sliding ephemeral markers
+				// mutates historical messages across turns and causes prefix cache misses.
+				const isOpenRouter = this.options.openAiBaseUrl?.includes("openrouter.ai")
+				if (isOpenRouter && modelInfo.supportsPromptCache) {
 					// Note: the following logic is copied from openrouter:
 					// Add cache_control to the last two user messages
 					// (note: this works because we only ever add one user message at a time, but if we added multiple we'd need to mark the user message before the last assistant message)
@@ -273,12 +277,26 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	protected processUsageMetrics(usage: any, _modelInfo?: ModelInfo): ApiStreamUsageChunk {
+		const inputDetails = usage?.prompt_tokens_details ?? usage?.input_tokens_details
+		const cachedFromDetails = inputDetails?.cached_tokens
+		const cacheReadTokens =
+			usage?.cache_read_input_tokens ??
+			usage?.cache_read_tokens ??
+			usage?.cached_tokens ??
+			cachedFromDetails ??
+			undefined
+
+		const cacheWriteTokens =
+			usage?.cache_creation_input_tokens ??
+			inputDetails?.cache_write_tokens ??
+			undefined
+
 		return {
 			type: "usage",
 			inputTokens: usage?.prompt_tokens || 0,
 			outputTokens: usage?.completion_tokens || 0,
-			cacheWriteTokens: usage?.cache_creation_input_tokens || undefined,
-			cacheReadTokens: usage?.cache_read_input_tokens || undefined,
+			cacheWriteTokens,
+			cacheReadTokens,
 		}
 	}
 

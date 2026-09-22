@@ -316,12 +316,20 @@ export class ReadFileTool extends BaseTool<"read_file"> {
 			const startLine = offset1
 			const endLine = offset1 + result.returnedLines - 1
 			const nextOffset = endLine + 1
-			// Put truncation warning at TOP (before content) to match @ mention format
-			output = `IMPORTANT: File content truncated.
+			const isExplicitSlice = entry.limit !== undefined && entry.limit < DEFAULT_LINE_LIMIT
+
+			if (isExplicitSlice) {
+				output = `[Showing requested slice: lines ${startLine}-${endLine} of ${result.totalLines} total lines]
+
+${result.content}`
+			} else {
+				// Default truncation when full file exceeds DEFAULT_LINE_LIMIT
+				output = `IMPORTANT: File content truncated (exceeded limit).
 	Status: Showing lines ${startLine}-${endLine} of ${result.totalLines} total lines.
-	To read more: Use the read_file tool with offset=${nextOffset} and limit=${limit}.
+	To read more: Use the read_file tool with offset=${nextOffset} and limit=${limit} only if subsequent lines are required.
 	
 	${result.content}`
+			}
 		} else if (result.returnedLines === 0) {
 			output = "Note: File is empty"
 		}

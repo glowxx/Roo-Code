@@ -9,8 +9,14 @@ export interface OptimizeEffectiveContextOptions {
 	recentMessagesPreserved?: number
 
 	/**
+	 * Number of warm turns preserved with Type-Aware Retention before entering cold archive.
+	 * Default: 8 turns (16 messages).
+	 */
+	warmTurnsPreserved?: number
+
+	/**
 	 * Maximum bytes for historical ephemeral tool outputs (execute_command, search_files, etc.)
-	 * before truncation applies.
+	 * in warm memory before truncation applies.
 	 * Default: 2048 bytes (2 KB).
 	 */
 	maxHistoricalToolBytes?: number
@@ -51,9 +57,34 @@ export interface OptimizeEffectiveContextOptions {
 	 * Default: 2048 bytes.
 	 */
 	readFileTailBytes?: number
+
+	/**
+	 * Maximum bytes for cold archive ephemeral tool outputs (Zone 2).
+	 * Default: 300 bytes.
+	 */
+	coldMaxEphemeralBytes?: number
+
+	/**
+	 * Maximum bytes for cold archive read_file results (Zone 2).
+	 * Default: 4096 bytes (4 KB head/tail snippet).
+	 */
+	coldMaxReadFileBytes?: number
+
+	/**
+	 * Maximum bytes for cold archive skill documentation (Zone 2).
+	 * Default: 1024 bytes.
+	 */
+	coldMaxSkillBytes?: number
+
+	/**
+	 * Whether to strip redundant <environment_details> from historical user messages.
+	 * Default: true.
+	 */
+	stripHistoricalEnvironmentDetails?: boolean
 }
 
 export const DEFAULT_RECENT_MESSAGES_PRESERVED = 4
+export const DEFAULT_WARM_TURNS_PRESERVED = 8
 export const DEFAULT_MAX_HISTORICAL_TOOL_BYTES = 2048
 export const DEFAULT_MAX_READ_FILE_BYTES = 20480 // 20 KB (~500 lines)
 export const DEFAULT_MAX_SKILL_BYTES = 16384 // 16 KB
@@ -61,6 +92,9 @@ export const DEFAULT_HEAD_BYTES = 400
 export const DEFAULT_TAIL_BYTES = 400
 export const DEFAULT_READ_FILE_HEAD_BYTES = 2048
 export const DEFAULT_READ_FILE_TAIL_BYTES = 2048
+export const DEFAULT_COLD_MAX_EPHEMERAL_BYTES = 300
+export const DEFAULT_COLD_MAX_READ_FILE_BYTES = 4096 // 4 KB
+export const DEFAULT_COLD_MAX_SKILL_BYTES = 1024 // 1 KB
 
 export type ToolResultCategory =
 	| "code_read"
@@ -224,6 +258,54 @@ ${headPreview}
 }
 
 /**
+ * Truncates an ephemeral output to a compact micro-stub for cold archive turns (Zone 2).
+ */
+function truncateEphemeralMicroStub(text: string): string {
+	const totalBytes = Buffer.byteLength(text, "utf8")
+	const lines = text.split("\n")
+	const totalLines = lines.length
+	const exitCodeMatch = text.match(/exit code:?\s*(\d+)/i) || text.match(/Command failed with exit code\s*(\d+)/i)
+	const exitCodeStr = exitCodeMatch ? ` (exit code: ${exitCodeMatch[1]})` : ""
+
+	return `[Historical tool output: ${totalLines} lines, ${totalBytes} bytes${exitCodeStr}. Full output preserved in logs]`
+}
+
+/**
+ * Truncates a source code read to a concise head/tail navigation stub for cold archive turns (Zone 2).
+ */
+function truncateColdCodePayload(text: string, filePath?: string): string {
+	const totalBytes = Buffer.byteLength(text, "utf8")
+	const lines = text.split("\n")
+	const totalLines = lines.length
+	if (totalLines <= 30 && totalBytes <= 4096) {
+		return text
+	}
+	const headLines = lines.slice(0, 15).join("\n")
+	const tailLines = lines.slice(Math.max(15, lines.length - 10)).join("\n")
+	const fileRef = filePath ? ` for '${filePath}'` : ""
+
+	return `[Historical read_file output${fileRef} (cold turn): ${totalLines} lines, ${totalBytes} bytes. To inspect intermediate lines, re-read with offset/limit.]
+--- File Content (Head) ---
+${headLines}
+... [${totalLines} lines total - intermediate code omitted in historical turn. Re-read with offset/limit if editing middle lines] ...
+--- File Content (Tail) ---
+${tailLines}
+[End of truncated file content]`
+}
+
+/**
+ * Truncates large skill documentation to an activation reference stub for cold archive turns (Zone 2).
+ */
+function truncateColdSkillPayload(text: string): string {
+	const lines = text.split("\n")
+	const totalLines = lines.length
+	const totalBytes = Buffer.byteLength(text, "utf8")
+	const firstLine = lines.find((l) => l.trim().length > 0) || "Skill"
+
+	return `[Historical skill documentation (${firstLine.slice(0, 50)}): ${totalLines} lines, ${totalBytes} bytes. Skill instructions active in session]`
+}
+
+/**
  * Routes text payload to the appropriate type-aware truncation logic.
  */
 function processHistoricalPayload(
@@ -237,9 +319,26 @@ function processHistoricalPayload(
 		tailBytes: number
 		readFileHeadBytes: number
 		readFileTailBytes: number
+		coldMaxEphemeralBytes?: number
+		coldMaxReadFileBytes?: number
+		coldMaxSkillBytes?: number
+		isZone2?: boolean
 	},
 ): string {
 	const category = determineToolCategory(toolInfo, text)
+
+	if (options.isZone2) {
+		if (category === "code_read") {
+			const filePath = typeof toolInfo?.input?.path === "string" ? toolInfo.input.path : undefined
+			return truncateColdCodePayload(text, filePath)
+		}
+		if (category === "skill") {
+			return truncateColdSkillPayload(text)
+		}
+		if (category === "ephemeral_command" || category === "ephemeral_search") {
+			return truncateEphemeralMicroStub(text)
+		}
+	}
 
 	if (category === "code_read") {
 		const filePath = typeof toolInfo?.input?.path === "string" ? toolInfo.input.path : undefined
@@ -282,6 +381,9 @@ export function truncateTextPayload(
 		tailBytes,
 		readFileHeadBytes: headBytes,
 		readFileTailBytes: tailBytes,
+		coldMaxEphemeralBytes: DEFAULT_COLD_MAX_EPHEMERAL_BYTES,
+		coldMaxReadFileBytes: DEFAULT_COLD_MAX_READ_FILE_BYTES,
+		coldMaxSkillBytes: DEFAULT_COLD_MAX_SKILL_BYTES,
 	})
 }
 
@@ -313,6 +415,7 @@ export function optimizeEffectiveApiHistory(
 	}
 
 	const recentMessagesPreserved = options.recentMessagesPreserved ?? DEFAULT_RECENT_MESSAGES_PRESERVED
+	const warmTurnsPreserved = options.warmTurnsPreserved ?? DEFAULT_WARM_TURNS_PRESERVED
 	const maxEphemeralBytes = options.maxHistoricalToolBytes ?? DEFAULT_MAX_HISTORICAL_TOOL_BYTES
 	const maxReadFileBytes = options.maxReadFileBytes ?? DEFAULT_MAX_READ_FILE_BYTES
 	const maxSkillBytes = options.maxSkillBytes ?? DEFAULT_MAX_SKILL_BYTES
@@ -320,6 +423,10 @@ export function optimizeEffectiveApiHistory(
 	const tailBytes = options.tailBytes ?? DEFAULT_TAIL_BYTES
 	const readFileHeadBytes = options.readFileHeadBytes ?? DEFAULT_READ_FILE_HEAD_BYTES
 	const readFileTailBytes = options.readFileTailBytes ?? DEFAULT_READ_FILE_TAIL_BYTES
+	const coldMaxEphemeralBytes = options.coldMaxEphemeralBytes ?? DEFAULT_COLD_MAX_EPHEMERAL_BYTES
+	const coldMaxReadFileBytes = options.coldMaxReadFileBytes ?? DEFAULT_COLD_MAX_READ_FILE_BYTES
+	const coldMaxSkillBytes = options.coldMaxSkillBytes ?? DEFAULT_COLD_MAX_SKILL_BYTES
+	const stripEnvDetails = options.stripHistoricalEnvironmentDetails ?? true
 
 	const truncationConfig = {
 		maxEphemeralBytes,
@@ -329,6 +436,9 @@ export function optimizeEffectiveApiHistory(
 		tailBytes,
 		readFileHeadBytes,
 		readFileTailBytes,
+		coldMaxEphemeralBytes,
+		coldMaxReadFileBytes,
+		coldMaxSkillBytes,
 	}
 
 	// 1. Build tool call metadata map from assistant messages (indexed by tool_use_id)
@@ -346,24 +456,58 @@ export function optimizeEffectiveApiHistory(
 		}
 	}
 
+	// Zone cutoffs:
+	// Zone 0: [cutoffIndex ... messages.length - 1] -> 100% untouched
+	// Zone 1: [warmCutoffIndex ... cutoffIndex - 1] -> Warm Working Memory (Type-Aware Retention)
+	// Zone 2: [0 ... warmCutoffIndex - 1] -> Cold Archive (Micro-Stubs, Navigation Stubs)
 	const cutoffIndex = Math.max(0, messages.length - recentMessagesPreserved)
+	const warmCutoffIndex = Math.max(0, messages.length - (recentMessagesPreserved + warmTurnsPreserved * 2))
 
 	return messages.map((msg, index) => {
-		// Recent messages (active turn + immediate context) are preserved 100% untouched
+		// Zone 0: Recent messages (active turn + immediate context) are preserved 100% untouched
 		if (index >= cutoffIndex) {
 			return msg
 		}
 
-		// Only user messages contain tool_result blocks.
-		// Summary messages and truncation markers must never be treated as tool results.
-		if (msg.role !== "user" || !msg.content || msg.isSummary || msg.isTruncationMarker) {
+		// Summary messages and truncation markers must never be treated as tool results or stripped
+		if (msg.isSummary || msg.isTruncationMarker) {
 			return msg
 		}
 
-		// Plain text user messages contain user instructions/prompts, NOT tool results.
-		// In Anthropic API protocol, tool results are always structured blocks with type: "tool_result".
-		// Pure user text (string content) must not be truncated or mislabeled as historical tool output.
+		const isZone2 = index < warmCutoffIndex
+		const zoneTruncationConfig = {
+			...truncationConfig,
+			isZone2,
+		}
+
+		// Plain text user messages: strip historical environment details and ephemeralize cold skill expansions
 		if (typeof msg.content === "string") {
+			let text = msg.content
+			let modified = false
+
+			if (stripEnvDetails && text.includes("<environment_details>")) {
+				text = text.replace(
+					/<environment_details>[\s\S]*?<\/environment_details>/g,
+					"[Environment details omitted for previous turn]",
+				)
+				modified = true
+			}
+
+			if (
+				isZone2 &&
+				text.length > 4000 &&
+				(text.includes("# /graphify") || text.includes("name: graphify") || text.includes("--- Skill Instructions ---"))
+			) {
+				text =
+					`[Skill instructions loaded in earlier turn (${text.length} bytes). Instructions active in session]\n\n` +
+					text.slice(0, 500) +
+					"\n... [Remaining skill documentation omitted in historical turn] ..."
+				modified = true
+			}
+
+			if (modified) {
+				return { ...msg, content: text }
+			}
 			return msg
 		}
 
@@ -376,7 +520,7 @@ export function optimizeEffectiveApiHistory(
 					const toolInfo = toolResultBlock.tool_use_id ? toolCallMap.get(toolResultBlock.tool_use_id) : undefined
 
 					if (typeof toolResultBlock.content === "string") {
-						const truncated = processHistoricalPayload(toolResultBlock.content, toolInfo, truncationConfig)
+						const truncated = processHistoricalPayload(toolResultBlock.content, toolInfo, zoneTruncationConfig)
 						if (truncated !== toolResultBlock.content) {
 							modified = true
 							return {
@@ -388,7 +532,7 @@ export function optimizeEffectiveApiHistory(
 						let subModified = false
 						const newSubBlocks = toolResultBlock.content.map((subBlock) => {
 							if (subBlock.type === "text" && typeof subBlock.text === "string") {
-								const truncated = processHistoricalPayload(subBlock.text, toolInfo, truncationConfig)
+								const truncated = processHistoricalPayload(subBlock.text, toolInfo, zoneTruncationConfig)
 								if (truncated !== subBlock.text) {
 									subModified = true
 									return { ...subBlock, text: truncated }
@@ -403,6 +547,36 @@ export function optimizeEffectiveApiHistory(
 								content: newSubBlocks,
 							}
 						}
+					}
+				} else if (block.type === "text" && typeof block.text === "string") {
+					let newText = block.text
+					let textModified = false
+
+					if (stripEnvDetails && newText.includes("<environment_details>")) {
+						newText = newText.replace(
+							/<environment_details>[\s\S]*?<\/environment_details>/g,
+							"[Environment details omitted for previous turn]",
+						)
+						textModified = true
+					}
+
+					if (
+						isZone2 &&
+						newText.length > 4000 &&
+						(newText.includes("# /graphify") ||
+							newText.includes("name: graphify") ||
+							newText.includes("--- Skill Instructions ---"))
+					) {
+						newText =
+							`[Skill instructions loaded in earlier turn (${newText.length} bytes). Instructions active in session]\n\n` +
+							newText.slice(0, 500) +
+							"\n... [Remaining skill documentation omitted in historical turn] ..."
+						textModified = true
+					}
+
+					if (textModified) {
+						modified = true
+						return { ...block, text: newText }
 					}
 				}
 				return block

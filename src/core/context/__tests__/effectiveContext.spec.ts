@@ -154,4 +154,105 @@ describe("optimizeEffectiveApiHistory", () => {
 		const reductionPercent = ((rawChars - optimizedChars) / rawChars) * 100
 		expect(reductionPercent).toBeGreaterThan(60)
 	})
+
+	it("strips historical <environment_details> from older turns while preserving them in the active turn", () => {
+		const envDetails = "<environment_details>\n# Current Time\n2026-09-22T23:25:43.275Z\n# Current Cost: $0.42\n</environment_details>"
+		const messages: ApiMessage[] = [
+			{
+				role: "user",
+				content: `Initial goal\n${envDetails}`,
+				ts: 1,
+			},
+			{ role: "assistant", content: "Working on it", ts: 2 },
+			{
+				role: "user",
+				content: [
+					{ type: "tool_result", tool_use_id: "c1", content: "Result 1" },
+					{ type: "text", text: envDetails },
+				],
+				ts: 3,
+			},
+			{ role: "assistant", content: "Next step", ts: 4 },
+			// Active turn (within recentMessagesPreserved: 2)
+			{ role: "assistant", content: "Almost done", ts: 5 },
+			{
+				role: "user",
+				content: `Active instruction\n${envDetails}`,
+				ts: 6,
+			},
+		]
+
+		const optimized = optimizeEffectiveApiHistory(messages, { recentMessagesPreserved: 2 })
+
+		// Message 0 (historical): env details should be stripped to stub
+		expect(typeof optimized[0].content).toBe("string")
+		expect(optimized[0].content).toContain("Initial goal")
+		expect(optimized[0].content).not.toContain("2026-09-22T23:25:43.275Z")
+		expect(optimized[0].content).toContain("[Environment details omitted for previous turn]")
+
+		// Message 2 (historical block array): env details text block stripped to stub
+		const blocks = optimized[2].content as any[]
+		expect(blocks[1].text).toContain("[Environment details omitted for previous turn]")
+		expect(blocks[1].text).not.toContain("2026-09-22T23:25:43.275Z")
+
+		// Message 5 (active turn): env details MUST be 100% preserved
+		expect(optimized[5].content).toContain(envDetails)
+	})
+
+	it("applies Zone 2 cold archive micro-stubs for turns older than warm window", () => {
+		const messages: ApiMessage[] = []
+		// Create 12 turns (24 messages). With warmTurnsPreserved = 4 and recentMessagesPreserved = 4:
+		// Zone 0: messages 20-23 (turns 11-12)
+		// Zone 1: messages 12-19 (turns 7-10)
+		// Zone 2: messages 0-11 (turns 1-6)
+		for (let i = 0; i < 12; i++) {
+			messages.push({
+				role: "assistant",
+				content: [
+					{ type: "tool_use", id: `call_cmd_${i}`, name: "execute_command", input: { command: "test" } },
+					{ type: "tool_use", id: `call_read_${i}`, name: "read_file", input: { path: `src/file_${i}.ts` } },
+				],
+				ts: i * 2,
+			})
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `call_cmd_${i}`,
+						content: "line 1\nline 2\n" + "x".repeat(3000) + "\nline 50\nexit code: 0",
+					},
+					{
+						type: "tool_result",
+						tool_use_id: `call_read_${i}`,
+						content: Array.from({ length: 80 }, (_, idx) => `const line${idx} = ${idx};`).join("\n"),
+					},
+				],
+				ts: i * 2 + 1,
+			})
+		}
+
+		const optimized = optimizeEffectiveApiHistory(messages, {
+			recentMessagesPreserved: 4,
+			warmTurnsPreserved: 4,
+		})
+
+		// Message 1 is in Zone 2 (cold archive):
+		const coldMsgBlocks = optimized[1].content as any[]
+		// Ephemeral command should be reduced to micro-stub
+		expect(coldMsgBlocks[0].content).toContain("[Historical tool output:")
+		expect(coldMsgBlocks[0].content).toContain("(exit code: 0). Full output preserved in logs")
+		expect(coldMsgBlocks[0].content.length).toBeLessThan(200)
+
+		// Cold code read should be reduced to head/tail navigation stub
+		expect(coldMsgBlocks[1].content).toContain("[Historical read_file output for 'src/file_0.ts' (cold turn):")
+		expect(coldMsgBlocks[1].content).toContain("--- File Content (Head) ---")
+		expect(coldMsgBlocks[1].content).toContain("--- File Content (Tail) ---")
+
+		// Message 15 is in Zone 1 (warm):
+		// Code read of 80 lines (< 20 KB) is preserved verbatim in warm memory
+		const warmMsgBlocks = optimized[15].content as any[]
+		expect(warmMsgBlocks[1].content).not.toContain("(cold turn)")
+		expect(warmMsgBlocks[1].content).toContain("const line0 = 0;")
+	})
 })

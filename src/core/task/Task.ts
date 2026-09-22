@@ -356,6 +356,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private isCompacting = false
 	private compactionAbortController?: AbortController
 	private currentAuditRecord?: TokenAuditRecord
+	private requestsSinceLastCompaction = 0
+	private tokensInAtLastCompaction = 0
 
 	public abortCompaction(): void {
 		this.compactionAbortController?.abort()
@@ -1782,16 +1784,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			// Process any queued messages after condensing completes
 			this.processQueuedMessages()
+			this.recordCompactionCompletion()
 		} finally {
 			this.compactionAbortController = undefined
 		}
+	}
+
+	private recordCompactionCompletion(): void {
+		this.requestsSinceLastCompaction = 0
+		const { totalTokensIn } = this.getTokenUsage()
+		this.tokensInAtLastCompaction = totalTokensIn ?? 0
 	}
 
 	public static readonly AUTO_COMPACT_THRESHOLD = 0.85
 	public static readonly DEFAULT_ECONOMIC_CONTEXT_CAP = 200_000
 
 	public checkContextCompactionThreshold(): boolean {
-		const { contextTokens } = this.getTokenUsage()
+		const { contextTokens, totalTokensIn } = this.getTokenUsage()
 		if (!contextTokens) {
 			return false
 		}
@@ -1816,8 +1825,53 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			? parseInt(process.env.ROO_MAX_WORKING_CONTEXT_TOKENS, 10)
 			: Task.DEFAULT_ECONOMIC_CONTEXT_CAP
 
-		const effectiveThreshold = Math.min(hardModelLimit, customCap)
-		return contextTokens >= effectiveThreshold
+		const capacityLimit = Math.min(hardModelLimit, customCap)
+		if (contextTokens >= capacityLimit) {
+			return true
+		}
+
+		// Adaptive Cost-Aware Compaction (ACAC) Trigger:
+		// Triggers compaction when cumulative retransmission drag or long plateaus accumulate,
+		// preventing millions of redundant tokens on models with 128k, 200k, or 1M+ context windows.
+		// Constraints to protect 1M+ models and large single-turn ingests:
+		// 1. Minimum context floor: at least 40,000 tokens
+		// 2. High-capacity grace period: at least 10 turns since task start / last compaction
+		// 3. Novelty ratio gate: if recent turn added > 35% new tokens, defer compaction
+		const MIN_ECONOMIC_FLOOR = 40_000
+		const GRACE_PERIOD_REQUESTS = 10
+		const RETRANSMISSION_DRAG_THRESHOLD = process.env.ROO_ACAC_RETRANS_THRESHOLD
+			? parseInt(process.env.ROO_ACAC_RETRANS_THRESHOLD, 10)
+			: 1_200_000
+		const PLATEAU_REQUEST_THRESHOLD = 20
+		const PLATEAU_CONTEXT_FLOOR = 60_000
+
+		if (contextTokens < MIN_ECONOMIC_FLOOR) {
+			return false
+		}
+
+		if (this.requestsSinceLastCompaction < GRACE_PERIOD_REQUESTS) {
+			return false
+		}
+
+		// Novelty ratio gate: if latest message contains significant fresh input (> 35%),
+		// defer compaction so the model can process it first without disruption.
+		const lastMsg = this.apiConversationHistory[this.apiConversationHistory.length - 1]
+		if (lastMsg && lastMsg.content) {
+			const lastContentStr =
+				typeof lastMsg.content === "string" ? lastMsg.content : JSON.stringify(lastMsg.content)
+			const estimatedLastTokens = Math.ceil(lastContentStr.length / 4)
+			const noveltyRatio = estimatedLastTokens / contextTokens
+			if (noveltyRatio >= 0.35) {
+				return false
+			}
+		}
+
+		const tokensSinceLastCompaction = Math.max(0, (totalTokensIn ?? 0) - this.tokensInAtLastCompaction)
+		const isCumulativeDragTriggered = tokensSinceLastCompaction >= RETRANSMISSION_DRAG_THRESHOLD
+		const isPlateauTriggered =
+			this.requestsSinceLastCompaction >= PLATEAU_REQUEST_THRESHOLD && contextTokens >= PLATEAU_CONTEXT_FLOOR
+
+		return isCumulativeDragTriggered || isPlateauTriggered
 	}
 
 	public async compactContext(autoTriggered = true): Promise<void> {
@@ -1915,6 +1969,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			await this.saveClineMessages()
 			this.processQueuedMessages()
+			this.recordCompactionCompletion()
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			if (
@@ -2033,6 +2088,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 
 			this.processQueuedMessages()
+			this.recordCompactionCompletion()
 
 			return { previousTokens, newTokens, savedTokensPercentage }
 		} catch (error) {
@@ -2780,7 +2836,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				break
 			}
 		}
-		if (lastUserMsgIndex >= 0) {
+		if (lastUserMsgIndex >= 0 && lastUserMsgIndex === this.apiConversationHistory.length - 1) {
 			const lastUserMsg = this.apiConversationHistory[lastUserMsgIndex]
 			if (Array.isArray(lastUserMsg.content)) {
 				// Remove any existing environment_details blocks before adding fresh ones
@@ -4297,6 +4353,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// here for direct callers (tests) and for the case where we didn't rate-limit
 		// in the caller.
 		Task.lastGlobalApiRequestTime = performance.now()
+		this.requestsSinceLastCompaction++
 
 		const systemPrompt = await this.getSystemPrompt()
 		const { contextTokens } = this.getTokenUsage()

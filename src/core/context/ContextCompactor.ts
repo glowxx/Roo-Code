@@ -29,7 +29,8 @@ Provide a comprehensive, highly technical, and structured Markdown summary follo
 
 CRITICAL INSTRUCTIONS:
 - You must output ONLY valid Markdown adhering strictly to the format above starting with "### CONTEXT COMPACTION HANDOFF".
-- Maintain high information density and preserve exact technical terms, identifiers, and file paths.`
+- Maintain high information density and preserve exact technical terms, identifiers, and file paths.
+- Keep the summary concise, dense, and focused: maximum 1,500 words / ~2,000 tokens. Do not include raw source file dumps, massive terminal logs, or repetitive listings. Focus strictly on architectural facts and active state.`
 
 export interface CompactHistoryOptions {
 	messages: ApiMessage[]
