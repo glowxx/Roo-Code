@@ -14,6 +14,8 @@ export interface DesktopConfig {
 		y?: number
 		isMaximized?: boolean
 	}
+	openAiModelInfos?: Record<string, any>
+	openAiModels?: string[]
 }
 
 /**

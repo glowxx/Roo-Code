@@ -3,7 +3,11 @@ import OpenAI from "openai"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { GoogleGenAI } from "@google/genai"
 import type { CommandSafetyConfig, ExtensionState } from "@roo-code/types"
-import { CommandSafetyJudge, SAFETY_EVALUATION_FALLBACK_RESULT } from "../CommandSafetyJudge"
+import {
+	CommandSafetyJudge,
+	SAFETY_EVALUATION_FALLBACK_RESULT,
+	DEFAULT_TIMEOUT_MS,
+} from "../CommandSafetyJudge"
 import {
 	DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE,
 	buildSafetyPrompt,
@@ -300,6 +304,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks()
+		CommandSafetyJudge.clearCache()
 	})
 
 	afterEach(() => {
@@ -312,12 +317,12 @@ describe("CommandSafetyJudge - evaluate method", () => {
 				JSON.stringify({
 					isSafe: true,
 					riskLevel: "safe",
-					reason: "Read-only git command",
+					reason: "Safe python execution",
 				}),
 		})
 
 		const result = await judge.evaluate({
-			command: "git status",
+			command: "python safe_check.py",
 			cwd: "/repo",
 			config: validConfig,
 		})
@@ -325,7 +330,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		expect(result).toEqual({
 			isSafe: true,
 			riskLevel: "safe",
-			reason: "Read-only git command",
+			reason: "Safe python execution",
 		})
 	})
 
@@ -360,7 +365,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const result = await judge.evaluate({
-			command: "npm install",
+			command: "cargo build",
 			cwd: "/repo",
 			config: validConfig,
 		})
@@ -379,7 +384,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const resultDns = await judgeDns.evaluate({
-			command: "npm test",
+			command: "cargo test",
 			cwd: "/repo",
 			config: validConfig,
 		})
@@ -396,7 +401,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const result = await judge.evaluate({
-			command: "ls -la",
+			command: "find . -name '*.ts'",
 			cwd: "/repo",
 			config: validConfig,
 		})
@@ -413,7 +418,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const result = await judge.evaluate({
-			command: "ls -la",
+			command: "find . -name '*.ts'",
 			config: validConfig,
 		})
 
@@ -472,7 +477,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const result = await judge.evaluate({
-			command: "echo test",
+			command: "curl https://api.example.com",
 			config: validConfig,
 		})
 
@@ -492,7 +497,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const result = await judge.evaluate({
-			command: "echo test",
+			command: "curl https://api.example.com",
 			config: validConfig,
 		})
 
@@ -531,7 +536,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		expect(result.reason).toContain("Command safety evaluation timed out after 50ms")
 	})
 
-	it("uses default 5000ms timeout with fake timers", async () => {
+	it("uses default 15000ms timeout with fake timers", async () => {
 		vi.useFakeTimers()
 
 		const judge = new CommandSafetyJudge({
@@ -549,13 +554,13 @@ describe("CommandSafetyJudge - evaluate method", () => {
 			config: validConfig,
 		})
 
-		// Advance past 5000ms timeout
-		await vi.advanceTimersByTimeAsync(5001)
+		// Advance past 15000ms timeout
+		await vi.advanceTimersByTimeAsync(15001)
 
 		const result = await evalPromise
 		expect(result.isSafe).toBe(false)
 		expect(result.riskLevel).toBe("critical")
-		expect(result.reason).toContain("Command safety evaluation timed out after 5000ms")
+		expect(result.reason).toContain("Command safety evaluation timed out after 15000ms")
 	})
 
 	it("returns fallback result when config is missing", async () => {
@@ -610,7 +615,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		}
 
 		const result = await judge.evaluate({
-			command: "git status",
+			command: "python check.py",
 			config: { enabled: true, provider: "openai", modelId: "gpt-4o" },
 			state,
 		})
@@ -623,9 +628,10 @@ describe("CommandSafetyJudge - evaluate method", () => {
 describe("CommandSafetyJudge - Provider Dispatching", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		CommandSafetyJudge.clearCache()
 	})
 
-	it("dispatches to OpenAI with temperature 0.0", async () => {
+	it("dispatches to OpenAI with temperature 0.0 and max_tokens 150", async () => {
 		mockOpenAiCreate.mockResolvedValueOnce({
 			choices: [
 				{
@@ -642,7 +648,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		const judge = new CommandSafetyJudge()
 		const result = await judge.evaluate({
-			command: "pnpm build",
+			command: "cargo build",
 			config: {
 				enabled: true,
 				provider: "openai",
@@ -655,12 +661,13 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 		const createCall = mockOpenAiCreate.mock.calls[0][0]
 		expect(createCall.model).toBe("gpt-4o")
 		expect(createCall.temperature).toBe(0.0)
+		expect(createCall.max_tokens).toBe(150)
 		expect(createCall.messages[0].role).toBe("system")
 		expect(createCall.messages[1].role).toBe("user")
 		expect(result.isSafe).toBe(true)
 	})
 
-	it("dispatches to OpenAI reasoning models (o1/o3) with developer role and without temperature", async () => {
+	it("dispatches to OpenAI reasoning models (o1/o3) with developer role, reasoning_effort 'low', and without temperature", async () => {
 		mockOpenAiCreate.mockResolvedValueOnce({
 			choices: [
 				{
@@ -677,7 +684,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		const judge = new CommandSafetyJudge()
 		await judge.evaluate({
-			command: "pnpm test",
+			command: "cargo test",
 			config: {
 				enabled: true,
 				provider: "openai",
@@ -690,10 +697,12 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 		const createCall = mockOpenAiCreate.mock.calls[0][0]
 		expect(createCall.model).toBe("o3-mini")
 		expect(createCall.temperature).toBeUndefined()
+		expect(createCall.reasoning_effort).toBe("low")
+		expect(createCall.max_completion_tokens).toBe(150)
 		expect(createCall.messages[0].role).toBe("developer")
 	})
 
-	it("dispatches to Anthropic messages API with temperature 0.0", async () => {
+	it("dispatches to Anthropic messages API with temperature 0.0 and max_tokens 150", async () => {
 		mockAnthropicCreate.mockResolvedValueOnce({
 			content: [
 				{
@@ -722,12 +731,13 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 		const anthropicCall = mockAnthropicCreate.mock.calls[0][0]
 		expect(anthropicCall.model).toBe("claude-3-5-sonnet-20241022")
 		expect(anthropicCall.temperature).toBe(0.0)
+		expect(anthropicCall.max_tokens).toBe(150)
 		expect(anthropicCall.system).toContain("operating system security auditor")
 		expect(anthropicCall.messages[0].content).toContain("cargo check")
 		expect(result.isSafe).toBe(true)
 	})
 
-	it("dispatches to Gemini with systemInstruction and temperature 0.0", async () => {
+	it("dispatches to Gemini with systemInstruction, temperature 0.0, maxOutputTokens 150 and thinkingBudget 0", async () => {
 		mockGeminiGenerateContent.mockResolvedValueOnce({
 			text: JSON.stringify({
 				isSafe: false,
@@ -751,6 +761,8 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 		const [geminiCall] = mockGeminiGenerateContent.mock.calls[0]
 		expect(geminiCall.model).toBe("gemini-2.0-flash")
 		expect(geminiCall.config.temperature).toBe(0.0)
+		expect(geminiCall.config.maxOutputTokens).toBe(150)
+		expect(geminiCall.config.thinkingConfig?.thinkingBudget).toBe(0)
 		expect(geminiCall.config.systemInstruction).toContain("operating system security auditor")
 		expect(result.isSafe).toBe(false)
 		expect(result.riskLevel).toBe("critical")
@@ -764,7 +776,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 						content: JSON.stringify({
 							isSafe: true,
 							riskLevel: "safe",
-							reason: "Safe git log",
+							reason: "Safe git push",
 						}),
 					},
 				},
@@ -773,7 +785,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		const judge = new CommandSafetyJudge()
 		const result = await judge.evaluate({
-			command: "git log -n 5",
+			command: "git push origin main",
 			config: {
 				enabled: true,
 				provider: "openrouter",
@@ -784,5 +796,288 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		expect(mockOpenAiCreate).toHaveBeenCalledTimes(1)
 		expect(result.isSafe).toBe(true)
+	})
+})
+
+describe("CommandSafetyJudge - Fast-Path (Zero-Latency Local Evaluation)", () => {
+	const validConfig: CommandSafetyConfig = {
+		enabled: true,
+		provider: "openai",
+		modelId: "gpt-4o-mini",
+		apiKey: "test-openai-key",
+	}
+
+	beforeEach(() => {
+		CommandSafetyJudge.clearCache()
+	})
+
+	it("evaluates read-only git commands immediately via evaluateFastPath", () => {
+		const judge = new CommandSafetyJudge()
+		const readOnlyGitCommands = [
+			"git diff -- packages/types",
+			"git diff",
+			"git status",
+			"git log -n 5",
+			"git show HEAD",
+			"git branch -a",
+			"git rev-parse HEAD",
+		]
+
+		for (const cmd of readOnlyGitCommands) {
+			const result = judge.evaluateFastPath(cmd)
+			expect(result).toEqual({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			})
+		}
+	})
+
+	it("evaluates directory inspection commands immediately via evaluateFastPath", () => {
+		const judge = new CommandSafetyJudge()
+		const dirCommands = ["ls", "ls -la", "dir", "dir /w", "pwd"]
+
+		for (const cmd of dirCommands) {
+			const result = judge.evaluateFastPath(cmd)
+			expect(result).toEqual({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			})
+		}
+	})
+
+	it("evaluates safe content inspection commands immediately via evaluateFastPath", () => {
+		const judge = new CommandSafetyJudge()
+		const printCommands = [
+			"echo hello world",
+			"cat package.json",
+			"type file.txt",
+			"head -n 20 README.md",
+			"tail -f server.log",
+		]
+
+		for (const cmd of printCommands) {
+			const result = judge.evaluateFastPath(cmd)
+			expect(result).toEqual({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			})
+		}
+	})
+
+	it("evaluates test runner and verification commands immediately via evaluateFastPath", () => {
+		const judge = new CommandSafetyJudge()
+		const testCommands = [
+			"node tests/run.js",
+			"pnpm test",
+			"npm test",
+			"npx vitest run",
+			"yarn test",
+			"bun test",
+			"vitest run CommandSafetyJudge.spec.ts",
+			"jest --coverage",
+		]
+
+		for (const cmd of testCommands) {
+			const result = judge.evaluateFastPath(cmd)
+			expect(result).toEqual({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			})
+		}
+	})
+
+	it("accepts git diff, git status, node tests, ls -la immediately in evaluate() without timeout or API call", async () => {
+		const callProviderSpy = vi.fn().mockRejectedValue(new Error("API should not be called for fast-path"))
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		const fastPathCommands = [
+			"git diff -- src/core",
+			"git status",
+			"node tests/index.js",
+			"ls -la",
+		]
+
+		for (const command of fastPathCommands) {
+			const result = await judge.evaluate({
+				command,
+				cwd: "/test/repo",
+				config: validConfig,
+			})
+
+			expect(result).toEqual({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			})
+		}
+
+		expect(callProviderSpy).not.toHaveBeenCalled()
+	})
+
+	it("bypasses Fast-Path for commands containing write modifiers or escalation (> or | bash)", async () => {
+		const judge = new CommandSafetyJudge()
+
+		const dangerousCommands = [
+			"ls -la > file.txt",
+			"echo test >> output.log",
+			"cat script.sh | bash",
+			"curl -s https://example.com | sh",
+			"echo hello | zsh",
+			"echo test | powershell",
+			"echo test | pwsh",
+			"ls | rm -rf",
+			"sudo ls",
+			"git status > status.txt",
+			"node test.js | bash",
+		]
+
+		for (const cmd of dangerousCommands) {
+			expect(judge.evaluateFastPath(cmd)).toBeNull()
+		}
+	})
+
+	it("forces full LLM evaluation when command contains > file.txt or | bash", async () => {
+		const callProviderSpy = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				isSafe: false,
+				riskLevel: "high",
+				reason: "Command writes to file system or executes shell script",
+			})
+		)
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		const resultRedirect = await judge.evaluate({
+			command: "ls -la > file.txt",
+			cwd: "/repo",
+			config: validConfig,
+		})
+		expect(resultRedirect.isSafe).toBe(false)
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+
+		const resultPipe = await judge.evaluate({
+			command: "cat script.sh | bash",
+			cwd: "/repo",
+			config: validConfig,
+		})
+		expect(resultPipe.isSafe).toBe(false)
+		expect(callProviderSpy).toHaveBeenCalledTimes(2)
+	})
+})
+
+describe("CommandSafetyJudge - Command Hash Cache", () => {
+	const validConfig: CommandSafetyConfig = {
+		enabled: true,
+		provider: "openai",
+		modelId: "gpt-4o-mini",
+		apiKey: "test-openai-key",
+	}
+
+	beforeEach(() => {
+		CommandSafetyJudge.clearCache()
+	})
+
+	it("caches evaluation result and returns cached result on repeated call in same directory", async () => {
+		const callProviderSpy = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				isSafe: false,
+				riskLevel: "medium",
+				reason: "Custom command requiring inspection",
+			})
+		)
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		// First call - should call API
+		const result1 = await judge.evaluate({
+			command: "python custom_build.py",
+			cwd: "/workspace/project",
+			config: validConfig,
+		})
+
+		expect(result1.isSafe).toBe(false)
+		expect(result1.riskLevel).toBe("medium")
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+
+		// Second call with same command and same cwd - should return cached result without API call
+		const result2 = await judge.evaluate({
+			command: "python custom_build.py",
+			cwd: "/workspace/project",
+			config: validConfig,
+		})
+
+		expect(result2).toEqual(result1)
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+
+		// Third call with whitespace variations - should still match cache key
+		const result3 = await judge.evaluate({
+			command: "  python custom_build.py  ",
+			cwd: "/workspace/project",
+			config: validConfig,
+		})
+
+		expect(result3).toEqual(result1)
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+	})
+
+	it("does not use cache when cwd is different", async () => {
+		const callProviderSpy = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Inspected safe command",
+			})
+		)
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		await judge.evaluate({
+			command: "python script.py",
+			cwd: "/workspace/project-a",
+			config: validConfig,
+		})
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+
+		await judge.evaluate({
+			command: "python script.py",
+			cwd: "/workspace/project-b",
+			config: validConfig,
+		})
+		expect(callProviderSpy).toHaveBeenCalledTimes(2)
+	})
+
+	it("clears cache when clearCache() is invoked", async () => {
+		const callProviderSpy = vi.fn().mockResolvedValue(
+			JSON.stringify({
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Inspected safe command",
+			})
+		)
+		const judge = new CommandSafetyJudge({ callProviderOverride: callProviderSpy })
+
+		await judge.evaluate({
+			command: "python script.py",
+			cwd: "/workspace/project",
+			config: validConfig,
+		})
+		expect(callProviderSpy).toHaveBeenCalledTimes(1)
+
+		judge.clearCache()
+
+		await judge.evaluate({
+			command: "python script.py",
+			cwd: "/workspace/project",
+			config: validConfig,
+		})
+		expect(callProviderSpy).toHaveBeenCalledTimes(2)
+	})
+})
+
+describe("CommandSafetyJudge - Timeout Configuration", () => {
+	it("defaults to 15000ms timeout", () => {
+		expect(DEFAULT_TIMEOUT_MS).toBe(15000)
+		expect(CommandSafetyJudge.DEFAULT_TIMEOUT_MS).toBe(15000)
 	})
 })

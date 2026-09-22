@@ -1,6 +1,6 @@
 // npx vitest run api/providers/__tests__/openai.spec.ts
 
-import { OpenAiHandler, getOpenAiModels, getOpenAiModelsWithInfo, parseOpenAiModelInfo, sortOpenAiModels } from "../openai"
+import { OpenAiHandler, getOpenAiModels, getOpenAiModelsWithInfo, parseOpenAiModelInfo, sortOpenAiModels, initializeOpenAiModelInfoCache, getCachedOpenAiModelInfo } from "../openai"
 import { ApiHandlerOptions } from "../../../shared/api"
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
@@ -1491,5 +1491,57 @@ describe("getOpenAiModels", () => {
 		expect(model.id).toBe("gpt-4o")
 		expect(model.info.contextWindow).toBe(openAiModelInfoSaneDefaults.contextWindow)
 		expect(model.info.supportsReasoningEffort).toBeUndefined()
+	})
+
+	describe("initializeOpenAiModelInfoCache and cold start persistence", () => {
+		it("initializes cache from persisted metadata and prevents context window drop to 200k/128k", () => {
+			initializeOpenAiModelInfoCache({
+				"openai/gpt-6-astra": {
+					contextWindow: 1_000_000,
+					maxTokens: 65536,
+					supportsImages: true,
+					supportsPromptCache: true,
+				},
+				"custom/astra-model": {
+					contextWindow: 1_000_000,
+					supportsPromptCache: true,
+				},
+			})
+
+			expect(getCachedOpenAiModelInfo("openai/gpt-6-astra")?.contextWindow).toBe(1_000_000)
+			expect(getCachedOpenAiModelInfo("custom/astra-model")?.contextWindow).toBe(1_000_000)
+
+			const handler = new OpenAiHandler({
+				openAiApiKey: "test-key",
+				openAiModelId: "openai/gpt-6-astra",
+			})
+			const model = handler.getModel()
+			expect(model.id).toBe("openai/gpt-6-astra")
+			expect(model.info.contextWindow).toBe(1_000_000)
+			expect(model.info.contextWindow).not.toBe(200_000)
+			expect(model.info.contextWindow).not.toBe(128_000)
+		})
+
+		it("prevents drop to 200k/128k even if openAiCustomModelInfo has default 128k/200k context window", () => {
+			const handlerWith200k = new OpenAiHandler({
+				openAiApiKey: "test-key",
+				openAiModelId: "openai/gpt-6-astra",
+				openAiCustomModelInfo: {
+					contextWindow: 200_000,
+					supportsPromptCache: true,
+				},
+			})
+			expect(handlerWith200k.getModel().info.contextWindow).toBe(1_000_000)
+
+			const handlerWith128k = new OpenAiHandler({
+				openAiApiKey: "test-key",
+				openAiModelId: "openai/gpt-6-astra",
+				openAiCustomModelInfo: {
+					contextWindow: 128_000,
+					supportsPromptCache: true,
+				},
+			})
+			expect(handlerWith128k.getModel().info.contextWindow).toBe(1_000_000)
+		})
 	})
 })

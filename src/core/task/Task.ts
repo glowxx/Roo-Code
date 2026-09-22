@@ -1778,6 +1778,143 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 	}
 
+	public static readonly AUTO_COMPACT_THRESHOLD = 0.85
+
+	public checkContextCompactionThreshold(): boolean {
+		const { contextTokens } = this.getTokenUsage()
+		if (!contextTokens) {
+			return false
+		}
+		const modelInfo = this.api.getModel().info
+		const contextWindow = modelInfo.contextWindow
+		if (!contextWindow || contextWindow <= 0) {
+			return false
+		}
+		return contextTokens / contextWindow >= Task.AUTO_COMPACT_THRESHOLD
+	}
+
+	public async compactContext(autoTriggered = true): Promise<void> {
+		if (this.isCompacting) {
+			if (!autoTriggered) {
+				throw new Error("Context compaction is already in progress.")
+			}
+			return
+		}
+
+		await pWaitFor(
+			() => !this.isStreaming && !this.isWaitingForFirstChunk && !this.presentAssistantMessageLocked,
+			{ timeout: 60000, interval: 100 },
+		)
+
+		if (this.isCompacting) {
+			if (!autoTriggered) {
+				throw new Error("Context compaction is already in progress.")
+			}
+			return
+		}
+
+		this.isCompacting = true
+		this.compactionAbortController = new AbortController()
+
+		try {
+			await this.flushPendingToolResultsToHistory()
+
+			const systemPrompt = await this.getSystemPrompt()
+
+			const {
+				newHistory,
+				summary,
+				previousTokens,
+				newTokens,
+				cost,
+			} = await compactHistory({
+				messages: this.apiConversationHistory,
+				apiHandler: this.api,
+				systemPrompt,
+				taskId: this.taskId,
+				cwd: this.cwd,
+				rooIgnoreController: this.rooIgnoreController,
+				abortSignal: this.compactionAbortController.signal,
+			})
+
+			// If condensation was aborted, do not overwrite history on disk
+			if (this.compactionAbortController?.signal.aborted || this.abort) {
+				return
+			}
+
+			await this.overwriteApiConversationHistory(newHistory)
+
+			const contextCondense: ContextCondense = {
+				summary,
+				cost,
+				prevContextTokens: previousTokens,
+				newContextTokens: newTokens,
+			}
+
+			await this.say(
+				"condense_context",
+				undefined /* text */,
+				undefined /* images */,
+				false /* partial */,
+				undefined /* checkpoint */,
+				undefined /* progressStatus */,
+				{ isNonInteractive: true } /* options */,
+				contextCondense,
+			)
+
+			const savedTokens = Math.max(0, previousTokens - newTokens)
+			const savedTokensPercentage =
+				previousTokens > 0 ? Math.round((savedTokens / previousTokens) * 100) : 0
+
+			const provider = this.providerRef.deref()
+			await provider?.postMessageToWebview({
+				type: "taskCompacted",
+				text: this.taskId,
+				previousTokens,
+				newTokens,
+				savedTokensPercentage,
+				payload: {
+					taskId: this.taskId,
+					previousTokens,
+					newTokens,
+					savedTokens,
+					savedTokensPercentage,
+				},
+			})
+			await provider?.postMessageToWebview({
+				type: "condenseTaskContextResponse",
+				text: this.taskId,
+			})
+
+			await this.saveClineMessages()
+			this.processQueuedMessages()
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			if (
+				errorMessage.includes("truncated") ||
+				errorMessage.includes("finish_reason") ||
+				errorMessage.includes("incomplete")
+			) {
+				await this.say(
+					"condense_context_error",
+					errorMessage,
+					undefined,
+					false,
+					undefined,
+					undefined,
+					{ isNonInteractive: true },
+				)
+			}
+			console.error(`[Task#${this.taskId}] Context compaction failed:`, error)
+			if (!autoTriggered) {
+				throw error
+			}
+		} finally {
+			this.isCompacting = false
+			this.compactionAbortController = undefined
+		}
+	}
+
 	public async compactConversation(
 		customInstructions?: string,
 	): Promise<{ previousTokens: number; newTokens: number; savedTokensPercentage: number }> {
@@ -4130,7 +4267,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const systemPrompt = await this.getSystemPrompt()
 		const { contextTokens } = this.getTokenUsage()
 
-		if (contextTokens) {
+		let autoCompacted = false
+		if (this.checkContextCompactionThreshold()) {
+			await this.compactContext(true)
+			autoCompacted = true
+		}
+
+		if (!autoCompacted && contextTokens && this.apiConversationHistory.length > 0) {
 			const modelInfo = this.api.getModel().info
 
 			const maxTokens = getModelMaxOutputTokens({

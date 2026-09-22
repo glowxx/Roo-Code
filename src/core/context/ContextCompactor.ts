@@ -5,26 +5,30 @@ import { RooIgnoreController } from "../ignore/RooIgnoreController"
 import { convertToolBlocksToText, toolUseToText, toolResultToText } from "../condense"
 import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
 
+export const STATE_HANDOFF_HEADER = "### CONTEXT COMPACTION HANDOFF"
+
+export const STATE_HANDOFF_TEMPLATE = `### CONTEXT COMPACTION HANDOFF
+- **Primary Objective**: {primaryObjective}
+- **Work Completed**: {workCompleted}
+- **Current State & Obstacles**: {currentStateAndObstacles}
+- **Next Immediate Actions**: {nextImmediateActions}
+- **Critical Constraints**: {criticalConstraints}`
+
 export const CONDENSING_SYSTEM_PROMPT = `You are an expert AI software architect and technical assistant tasked with summarizing conversation history for context condensation.
 
 CRITICAL: This is a summarization-only operation. DO NOT call any tools or output tool use blocks. Output pure Markdown text only.
 
-Provide a comprehensive, highly technical, and structured Markdown summary following these exact section headers:
+Provide a comprehensive, highly technical, and structured Markdown summary following this exact format:
 
-### 1. Main Objective & Context
-State the core task goal, user intent, initial requirements, and constraints.
-
-### 2. Changes Made & Modified Files
-Detail all file modifications, additions, and deletions with exact paths. Highlight functions, classes, and components created or updated, along with key bugs resolved.
-
-### 3. Key Architectural Decisions
-Describe patterns adopted, design choices made, dependencies added or avoided, and rationale behind technical implementations.
-
-### 4. Next Steps & Current State
-Summarize the current task status, recent errors or test results, next actions to execute, and immediate context needed to continue uninterrupted.
+### CONTEXT COMPACTION HANDOFF
+- **Primary Objective**: [State the core task goal, user intent, initial requirements, and constraints]
+- **Work Completed**: [Detail all modified/created files with exact paths, functions/components updated, key bugs resolved, and tests run]
+- **Current State & Obstacles**: [What the agent was working on immediately before compaction, current error logs or test results]
+- **Next Immediate Actions**: [Next 2-3 concrete steps to execute upon resumption]
+- **Critical Constraints**: [Environment paths, architecture, preserved variables, dependencies]
 
 CRITICAL INSTRUCTIONS:
-- You must output ONLY valid Markdown adhering strictly to the four sections above.
+- You must output ONLY valid Markdown adhering strictly to the format above starting with "### CONTEXT COMPACTION HANDOFF".
 - Maintain high information density and preserve exact technical terms, identifiers, and file paths.`
 
 export interface CompactHistoryOptions {
@@ -122,6 +126,74 @@ async function countTokensForHistory(
 		}, systemPrompt?.length ?? 0)
 		return Math.ceil(charCount / 4)
 	}
+}
+
+export const TERMINAL_OUTPUT_MAX_BYTES = 2048
+
+/**
+ * Truncates terminal outputs and large file dumps exceeding the threshold in intermediate messages,
+ * replacing them with concise reference markers:
+ * [Command output truncated: <N> lines, <X> bytes - refer to previous logs if needed]
+ */
+export function truncateHeavyOutputs(
+	content: string | Anthropic.Messages.ContentBlockParam[],
+	thresholdBytes: number = TERMINAL_OUTPUT_MAX_BYTES,
+): string | Anthropic.Messages.ContentBlockParam[] {
+	if (typeof content === "string") {
+		const bytes = Buffer.byteLength(content, "utf8")
+		if (bytes > thresholdBytes) {
+			const lines = content.split("\n").length
+			return `[Command output truncated: ${lines} lines, ${bytes} bytes - refer to previous logs if needed]`
+		}
+		return content
+	}
+
+	if (Array.isArray(content)) {
+		return content.map((block) => {
+			if (block.type === "tool_result") {
+				if (typeof block.content === "string") {
+					const bytes = Buffer.byteLength(block.content, "utf8")
+					if (bytes > thresholdBytes) {
+						const lines = block.content.split("\n").length
+						return {
+							...block,
+							content: `[Command output truncated: ${lines} lines, ${bytes} bytes - refer to previous logs if needed]`,
+						}
+					}
+				} else if (Array.isArray(block.content)) {
+					const newContent = block.content.map((subBlock) => {
+						if (subBlock.type === "text") {
+							const bytes = Buffer.byteLength(subBlock.text, "utf8")
+							if (bytes > thresholdBytes) {
+								const lines = subBlock.text.split("\n").length
+								return {
+									...subBlock,
+									text: `[Command output truncated: ${lines} lines, ${bytes} bytes - refer to previous logs if needed]`,
+								}
+							}
+						}
+						return subBlock
+					})
+					return {
+						...block,
+						content: newContent,
+					}
+				}
+			} else if (block.type === "text") {
+				const bytes = Buffer.byteLength(block.text, "utf8")
+				if (bytes > thresholdBytes) {
+					const lines = block.text.split("\n").length
+					return {
+						...block,
+						text: `[Command output truncated: ${lines} lines, ${bytes} bytes - refer to previous logs if needed]`,
+					}
+				}
+			}
+			return block
+		})
+	}
+
+	return content
 }
 
 /**
@@ -283,9 +355,13 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		throw new Error("Not enough intermediate messages to compact.")
 	}
 
-	// Clean intermediate messages: remove images if needed and convert tool blocks to text
+	// Clean intermediate messages: remove images if needed, truncate heavy outputs (> 2KB), and convert tool blocks to text
 	const cleanedIntermediate = maybeRemoveImageBlocks(intermediateMessages, apiHandler)
-	const transformedIntermediate: Anthropic.Messages.MessageParam[] = cleanedIntermediate.map((msg) => ({
+	const truncatedIntermediate = cleanedIntermediate.map((msg) => ({
+		...msg,
+		content: truncateHeavyOutputs(msg.content as any),
+	}))
+	const transformedIntermediate: Anthropic.Messages.MessageParam[] = truncatedIntermediate.map((msg) => ({
 		role: msg.role === "assistant" ? "assistant" : "user",
 		content: convertToolBlocksToText(msg.content as any) as any,
 	}))
@@ -311,7 +387,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 
 	// Build the final user summarization prompt
 	let finalRequestPrompt =
-		"Please synthesize and summarize the conversation history above following the required structured Markdown format with the 4 headings."
+		"Please synthesize and summarize the conversation history above following the required structured Markdown format starting with ### CONTEXT COMPACTION HANDOFF."
 	if (customInstructions && customInstructions.trim()) {
 		finalRequestPrompt += `\n\nAdditional Instructions:\n${customInstructions.trim()}`
 	}
@@ -452,10 +528,15 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		throw new Error("Context condensation failed: received empty summary from model.")
 	}
 
+	let formattedSummary = summary
+	if (!formattedSummary.includes("### CONTEXT COMPACTION HANDOFF")) {
+		formattedSummary = `### CONTEXT COMPACTION HANDOFF\n\n${formattedSummary}`
+	}
+
 	// Construct synthetic summary message
 	const summaryMessage: ApiMessage = {
 		role: "user",
-		content: [{ type: "text", text: `[Context Compacted Summary]\n\n${summary}` }],
+		content: [{ type: "text", text: `[Context Compacted Summary]\n\n${formattedSummary}` }],
 		ts: Date.now(),
 		isSummary: true,
 	}

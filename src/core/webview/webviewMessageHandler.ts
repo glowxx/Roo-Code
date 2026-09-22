@@ -12,6 +12,7 @@ import {
 	type GlobalState,
 	type ClineMessage,
 	type ModelRecord,
+	type ModelInfo,
 	type Command as SlashCommand,
 	type WebviewMessage,
 	type EditQueuedMessagePayload,
@@ -201,7 +202,9 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			const result = await currentTask.compactConversation(customInstructions)
 			const previousTokens = result.previousTokens
 			const newTokens = result.newTokens
-			const savedTokensPercentage = result.savedTokensPercentage
+			const savedTokensPercentage =
+				result.savedTokensPercentage ??
+				(previousTokens > 0 ? Math.round(((previousTokens - newTokens) / previousTokens) * 100) : 0)
 
 			await provider.postMessageToWebview({
 				type: "taskCompacted",
@@ -1135,15 +1138,20 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 				if (openAiModels && openAiModels.length > 0) {
 					await provider.setValue("openAiModels", openAiModels)
 					await provider.setGlobalState("openAiModels", openAiModels)
+					await provider.setValue("openAiModelInfos", openAiModelInfos)
+					await provider.setGlobalState("openAiModelInfos", openAiModelInfos)
 					provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 				} else {
 					const cached =
 						(provider.getValue("openAiModels") as string[] | undefined) ??
 						(await provider.getGlobalState("openAiModels"))
+					const cachedInfos =
+						(provider.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
+						(await provider.getGlobalState("openAiModelInfos"))
 					if (cached && cached.length > 0) {
-						provider.postMessageToWebview({ type: "openAiModels", openAiModels: cached })
+						provider.postMessageToWebview({ type: "openAiModels", openAiModels: cached, openAiModelInfos: cachedInfos })
 					} else {
-						provider.postMessageToWebview({ type: "openAiModels", openAiModels: [] })
+						provider.postMessageToWebview({ type: "openAiModels", openAiModels: [], openAiModelInfos: cachedInfos })
 					}
 				}
 			}
@@ -1929,6 +1937,8 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 								if (openAiModels && openAiModels.length > 0) {
 									await provider.setValue("openAiModels", openAiModels)
 									await provider.setGlobalState("openAiModels", openAiModels)
+									await provider.setValue("openAiModelInfos", openAiModelInfos)
+									await provider.setGlobalState("openAiModelInfos", openAiModelInfos)
 									provider.postMessageToWebview({ type: "openAiModels", openAiModels, openAiModelInfos })
 								}
 							})

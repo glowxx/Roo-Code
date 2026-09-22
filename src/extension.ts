@@ -22,10 +22,12 @@ import { customToolRegistry } from "@roo-code/core"
 import "./utils/path" // Necessary to have access to String.prototype.toPosix.
 import { initializeNetworkProxy } from "./utils/networkProxy"
 
+import { type ModelInfo } from "@roo-code/types"
 import { Package } from "./shared/package"
 import { formatLanguage } from "./shared/language"
 import { ContextProxy } from "./core/config/ContextProxy"
 import { ClineProvider } from "./core/webview/ClineProvider"
+import { initializeOpenAiModelInfoCache } from "./api"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { TerminalRegistry } from "./integrations/terminal/TerminalRegistry"
 import { openAiCodexOAuthManager } from "./integrations/openai-codex/oauth"
@@ -142,6 +144,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	const contextProxy = await ContextProxy.getInstance(context)
+
+	// Seed openAiModelInfoCache immediately from persisted metadata on activation
+	const persistedModelInfos = contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined
+	if (persistedModelInfos && typeof persistedModelInfos === "object") {
+		initializeOpenAiModelInfoCache(persistedModelInfos)
+	}
 
 	// Initialize code index managers for all workspace folders.
 	const codeIndexManagers: CodeIndexManager[] = []

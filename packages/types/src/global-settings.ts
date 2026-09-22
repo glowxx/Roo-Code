@@ -15,6 +15,7 @@ import { customModePromptsSchema, customSupportPromptsSchema } from "./mode.js"
 import { toolNamesSchema } from "./tool.js"
 import { languagesSchema } from "./vscode.js"
 import { commandSafetyConfigSchema } from "./command-safety.js"
+import { modelInfoSchema } from "./model.js"
 
 /**
  * Default delay in milliseconds after writes to allow diagnostics to detect potential problems.
@@ -245,6 +246,12 @@ export const globalSettingsSchema = z.object({
 	 * Persisted across sessions via ContextProxy.
 	 */
 	openAiModels: z.array(z.string()).optional(),
+
+	/**
+	 * Dynamically discovered model metadata for OpenAI-compatible and xKiro providers.
+	 * Persisted across sessions via ContextProxy to prevent cold-start context window collapse.
+	 */
+	openAiModelInfos: z.record(z.string(), modelInfoSchema).optional(),
 })
 
 export type GlobalSettings = z.infer<typeof globalSettingsSchema>

@@ -27,6 +27,7 @@ import {
 	type ToolUsage,
 	type ExtensionMessage,
 	type ExtensionState,
+	type ModelInfo,
 	RooCodeEventName,
 	requestyDefaultModelId,
 	openRouterDefaultModelId,
@@ -76,6 +77,7 @@ import { setPanel } from "../../activate/registerCommands"
 import { t } from "../../i18n"
 
 import { buildApiHandler } from "../../api"
+import { initializeOpenAiModelInfoCache } from "../../api/providers/openai"
 import { forceFullModelDetailsLoad, hasLoadedFullDetails } from "../../api/providers/fetchers/lmstudio"
 
 import { ContextProxy } from "../config/ContextProxy"
@@ -172,6 +174,14 @@ export class ClineProvider
 		}
 
 		ClineProvider.activeInstances.add(this)
+
+		// Seed openAiModelInfoCache immediately from persisted metadata before any network request
+		const persistedModelInfos =
+			(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
+			(this.getGlobalState("openAiModelInfos") as Record<string, ModelInfo> | undefined)
+		if (persistedModelInfos && typeof persistedModelInfos === "object") {
+			initializeOpenAiModelInfoCache(persistedModelInfos)
+		}
 
 		this.updateGlobalState("codebaseIndexModels", EMBEDDING_MODEL_PROFILES)
 
@@ -2081,6 +2091,7 @@ export class ClineProvider
 			openRouterImageGenerationSelectedModel,
 			lockApiConfigAcrossModes,
 			openAiModels,
+			openAiModelInfos,
 		} = await this.getState()
 
 		const mergedAllowedCommands = this.mergeAllowedCommands(allowedCommands)
@@ -2091,6 +2102,10 @@ export class ClineProvider
 			(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
 			(await this.getGlobalState("openAiModels")) ??
 			[]
+		const cachedOpenAiModelInfos =
+			(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
+			(await this.getGlobalState("openAiModelInfos")) ??
+			{}
 
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
@@ -2183,6 +2198,10 @@ export class ClineProvider
 			hasOpenedModeSelector: this.getGlobalState("hasOpenedModeSelector") ?? false,
 			lockApiConfigAcrossModes: lockApiConfigAcrossModes ?? false,
 			openAiModels: openAiModels && openAiModels.length > 0 ? openAiModels : cachedOpenAiModels,
+			openAiModelInfos:
+				openAiModelInfos && Object.keys(openAiModelInfos).length > 0
+					? openAiModelInfos
+					: cachedOpenAiModelInfos,
 			alwaysAllowFollowupQuestions: alwaysAllowFollowupQuestions ?? false,
 			followupAutoApproveTimeoutMs: followupAutoApproveTimeoutMs ?? 60000,
 			includeDiagnosticMessages: includeDiagnosticMessages ?? true,
@@ -2345,6 +2364,10 @@ export class ClineProvider
 				(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
 				(await this.getGlobalState("openAiModels")) ??
 				[],
+			openAiModelInfos:
+				(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
+				(await this.getGlobalState("openAiModelInfos")) ??
+				{},
 		}
 	}
 

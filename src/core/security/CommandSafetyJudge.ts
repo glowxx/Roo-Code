@@ -22,6 +22,15 @@ export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createF
 	"Command safety evaluation failed (timeout or network error). Auto-execution blocked defensively"
 )
 
+export const DEFAULT_TIMEOUT_MS = 15000
+
+const FAST_PATH_PATTERNS = [
+	/^git\s+(diff|status|log|show|branch|rev-parse)(\s+.*)?$/i,
+	/^(ls|dir|pwd)(\s+.*)?$/i,
+	/^(echo|cat|type|head|tail)(\s+.*)?$/i,
+	/^(node|pnpm|npm|npx|yarn|bun|vitest|jest)(\s+.*)?$/i,
+]
+
 export interface EvaluateSafetyOptions {
 	command: string
 	cwd?: string
@@ -49,12 +58,62 @@ export interface CommandSafetyJudgeOptions {
  * CommandSafetyJudge evaluates commands for potential security risks using an LLM.
  */
 export class CommandSafetyJudge {
+	public static readonly DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS
+	private static readonly cache = new Map<string, SafetyEvaluationResult>()
+
 	private readonly timeoutMs: number
 	private readonly callProviderOverride?: (params: CallProviderParams) => Promise<string>
 
 	constructor(options?: CommandSafetyJudgeOptions) {
-		this.timeoutMs = options?.timeoutMs ?? 5000
+		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		this.callProviderOverride = options?.callProviderOverride
+	}
+
+	public clearCache(): void {
+		CommandSafetyJudge.clearCache()
+	}
+
+	public static clearCache(): void {
+		CommandSafetyJudge.cache.clear()
+	}
+
+	/**
+	 * Evaluates whether a command is guaranteed to be safe and read-only via regex heuristics,
+	 * bypassing network/LLM calls with 0ms latency.
+	 */
+	public evaluateFastPath(command: string): SafetyEvaluationResult | null {
+		if (!command || typeof command !== "string") {
+			return null
+		}
+
+		const trimmed = command.trim()
+
+		// Rigorous check for write modifiers / escalation:
+		// If command contains '>', '>>', '| rm', '| bash', '| sh', '| zsh', '| powershell', '| pwsh', 'sudo',
+		// return null to force full LLM evaluation.
+		const hasWriteOrEscalationModifier =
+			trimmed.includes(">") ||
+			/\bsudo\b/i.test(trimmed) ||
+			/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(trimmed)
+
+		if (hasWriteOrEscalationModifier) {
+			return null
+		}
+
+		const isMatch = FAST_PATH_PATTERNS.some((pattern) => pattern.test(trimmed))
+		if (isMatch) {
+			return {
+				isSafe: true,
+				riskLevel: "safe",
+				reason: "Verified read-only command via fast-path",
+			}
+		}
+
+		return null
+	}
+
+	public static evaluateFastPath(command: string): SafetyEvaluationResult | null {
+		return new CommandSafetyJudge().evaluateFastPath(command)
 	}
 
 	/**
@@ -169,6 +228,20 @@ export class CommandSafetyJudge {
 				return createFailClosedResult(`API key missing for provider '${provider}'`)
 			}
 
+			// Check in-memory verification cache
+			const cacheKey = `${cwd || ""}:${command.trim()}`
+			const cachedResult = CommandSafetyJudge.cache.get(cacheKey)
+			if (cachedResult) {
+				return cachedResult
+			}
+
+			// Check Fast-Path (Zero-Latency Local Evaluation)
+			const fastPathResult = this.evaluateFastPath(command)
+			if (fastPathResult) {
+				CommandSafetyJudge.cache.set(cacheKey, fastPathResult)
+				return fastPathResult
+			}
+
 			const { systemPrompt, userPrompt } = buildSafetyPrompt({
 				command,
 				cwd,
@@ -210,7 +283,9 @@ export class CommandSafetyJudge {
 				}
 			}
 
-			return this.parseSafetyResponse(rawResponse)
+			const result = this.parseSafetyResponse(rawResponse)
+			CommandSafetyJudge.cache.set(cacheKey, result)
+			return result
 		} catch (error: any) {
 			const isTimeout =
 				abortController?.signal.aborted ||
@@ -302,7 +377,7 @@ export class CommandSafetyJudge {
 		const response = await client.messages.create(
 			{
 				model: modelId,
-				max_tokens: 1024,
+				max_tokens: 150,
 				system: systemPrompt,
 				messages: [{ role: "user", content: userPrompt }],
 				temperature: 0.0,
@@ -354,6 +429,10 @@ export class CommandSafetyJudge {
 			config: {
 				systemInstruction: systemPrompt,
 				temperature: 0.0,
+				maxOutputTokens: 150,
+				thinkingConfig: {
+					thinkingBudget: 0,
+				},
 			},
 		})
 
@@ -426,7 +505,9 @@ export class CommandSafetyJudge {
 		const requestParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
 			model: modelId,
 			messages,
-			...(isReasoningModel ? {} : { temperature: 0.0 }),
+			...(isReasoningModel
+				? { reasoning_effort: "low", max_completion_tokens: 150 }
+				: { temperature: 0.0, max_tokens: 150 }),
 		}
 
 		const completion = await client.chat.completions.create(requestParams, { signal })

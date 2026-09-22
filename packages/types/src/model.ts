@@ -202,8 +202,8 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 
 	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra)
 	// or the Gemini family (gemini-1.5, gemini-2.0, gemini-2.5, gemini-3.0)
-	const is2mPattern = /(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")
-	const is1mPattern = /(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-1m") || lower.includes("_1m")
+	const is2mPattern = lower.includes("2m") || /(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")
+	const is1mPattern = lower.includes("1m") || /(?:^|[\/_\-.:])1m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-1m") || lower.includes("_1m")
 	const isAstraOrGpt6 = lower.includes("astra") || lower.includes("gpt-6")
 	const isGemini = lower.includes("gemini")
 

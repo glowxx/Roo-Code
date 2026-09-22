@@ -5,7 +5,7 @@ import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, 
 
 import { ApiStream } from "./transform/stream"
 
-import { getCachedOpenAiModelInfo } from "./providers/openai"
+import { getCachedOpenAiModelInfo, initializeOpenAiModelInfoCache } from "./providers/openai"
 import {
 	AnthropicHandler,
 	AwsBedrockHandler,
@@ -216,3 +216,5 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 			return new AnthropicHandler(options)
 	}
 }
+
+export { getCachedOpenAiModelInfo, initializeOpenAiModelInfoCache } from "./providers/openai"

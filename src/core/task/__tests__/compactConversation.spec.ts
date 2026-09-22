@@ -133,6 +133,12 @@ vi.mock("../../../utils/storage", () => ({
 	getSettingsDirectoryPath: vi
 		.fn()
 		.mockImplementation((globalStoragePath) => Promise.resolve(`${globalStoragePath}/settings`)),
+	ensureSettingsDirectoryExists: vi
+		.fn()
+		.mockImplementation((context) => Promise.resolve(`${context?.globalStorageUri?.fsPath || "/mock/storage"}/settings`)),
+	ensureTaskDirectoryExists: vi
+		.fn()
+		.mockImplementation((context, taskId) => Promise.resolve(`${context?.globalStorageUri?.fsPath || "/mock/storage"}/tasks/${taskId}`)),
 }))
 
 vi.mock("../../../utils/fs", () => ({
@@ -205,6 +211,7 @@ describe("Task compactConversation", () => {
 		mockProvider.postStateToWebview = vi.fn().mockResolvedValue(undefined)
 		mockProvider.postStateToWebviewWithoutTaskHistory = vi.fn().mockResolvedValue(undefined)
 		mockProvider.updateTaskHistory = vi.fn().mockResolvedValue(undefined)
+		mockProvider.getState = vi.fn().mockResolvedValue({})
 	})
 
 	it("executes context compaction successfully and notifies webview", async () => {
@@ -382,5 +389,172 @@ describe("Task compactConversation", () => {
 			{ isNonInteractive: true },
 		)
 		expect((task as any).isCompacting).toBe(false)
+	})
+
+	describe("Automatic Context Compaction at 85% Threshold", () => {
+		it("automatically triggers compactContext when context tokens reach or exceed 85% of context window", async () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "Initial user task",
+				startTask: false,
+			})
+
+			// 85% of 100,000 = 85,000
+			vi.spyOn(task, "getTokenUsage").mockReturnValue({
+				totalTokensIn: 85000,
+				totalTokensOut: 0,
+				contextTokens: 85000,
+				totalCost: 0,
+			})
+
+			vi.spyOn(task.api, "getModel").mockReturnValue({
+				id: "mock-model",
+				info: {
+					contextWindow: 100000,
+					maxTokens: 4096,
+					supportsPromptCache: true,
+					supportsImages: true,
+					inputPrice: 0,
+					outputPrice: 0,
+					description: "Mock model",
+				},
+			})
+
+			task.apiConversationHistory = [{ role: "user", content: "Initial user task", ts: 1 }]
+
+			expect(task.checkContextCompactionThreshold()).toBe(true)
+
+			const compactSpy = vi.spyOn(task, "compactContext").mockResolvedValue(undefined)
+			vi.spyOn(task as any, "getSystemPrompt").mockResolvedValue("mock system prompt")
+			vi.spyOn(task.api, "createMessage").mockReturnValue({
+				async *[Symbol.asyncIterator]() {
+					yield { type: "text", text: "Response" }
+				},
+			} as any)
+
+			const iterator = task.attemptApiRequest(0)
+			await iterator.next()
+
+			expect(compactSpy).toHaveBeenCalledWith(true)
+		})
+
+		it("does not trigger compactContext when context tokens are below 85% of context window", async () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "Initial user task",
+				startTask: false,
+			})
+
+			task.apiConversationHistory = [{ role: "user", content: "Initial user task", ts: 1 }]
+
+			// 84% of 100,000 = 84,000 (< 85%)
+			vi.spyOn(task, "getTokenUsage").mockReturnValue({
+				totalTokensIn: 84000,
+				totalTokensOut: 0,
+				contextTokens: 84000,
+				totalCost: 0,
+			})
+
+			vi.spyOn(task.api, "getModel").mockReturnValue({
+				id: "mock-model",
+				info: {
+					contextWindow: 100000,
+					maxTokens: 4096,
+					supportsPromptCache: true,
+					supportsImages: true,
+					inputPrice: 0,
+					outputPrice: 0,
+					description: "Mock model",
+				},
+			})
+
+			expect(task.checkContextCompactionThreshold()).toBe(false)
+
+			const compactSpy = vi.spyOn(task, "compactContext").mockResolvedValue(undefined)
+			vi.spyOn(task as any, "getSystemPrompt").mockResolvedValue("mock system prompt")
+			vi.spyOn(task.api, "createMessage").mockReturnValue({
+				async *[Symbol.asyncIterator]() {
+					yield { type: "text", text: "Response" }
+				},
+			} as any)
+
+			const iterator = task.attemptApiRequest(0)
+			await iterator.next()
+
+			expect(compactSpy).not.toHaveBeenCalled()
+		})
+
+		it("executes compactContext successfully, updates history and notifies webview", async () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "Initial user task",
+				startTask: false,
+			})
+
+			const mockNewHistory = [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Initial user task" },
+						{
+							type: "text",
+							text: "### CONTEXT COMPACTION HANDOFF\n- **Primary Objective**: Initial user task",
+						},
+					],
+					ts: 1,
+					isSummary: true,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "Recent reply" }], ts: 3 },
+			]
+
+			vi.spyOn(ContextCompactorModule, "compactHistory").mockResolvedValue({
+				newHistory: mockNewHistory as any,
+				summary: "### CONTEXT COMPACTION HANDOFF\n- **Primary Objective**: Initial user task",
+				previousTokens: 85000,
+				newTokens: 15000,
+				cost: 0.02,
+			})
+
+			vi.spyOn(task as any, "getSystemPrompt").mockResolvedValue("mock system prompt")
+			const overwriteSpy = vi.spyOn(task, "overwriteApiConversationHistory").mockResolvedValue(undefined)
+			const saySpy = vi.spyOn(task, "say").mockResolvedValue(undefined as any)
+			const flushSpy = vi.spyOn(task, "flushPendingToolResultsToHistory").mockResolvedValue(true)
+			const saveMessagesSpy = vi.spyOn(task as any, "saveClineMessages").mockResolvedValue(undefined as any)
+
+			await task.compactContext(true)
+
+			expect(flushSpy).toHaveBeenCalled()
+			expect(ContextCompactorModule.compactHistory).toHaveBeenCalledWith(
+				expect.objectContaining({
+					taskId: task.taskId,
+					abortSignal: expect.any(AbortSignal),
+				}),
+			)
+			expect(overwriteSpy).toHaveBeenCalledWith(mockNewHistory)
+			expect(saySpy).toHaveBeenCalledWith(
+				"condense_context",
+				undefined,
+				undefined,
+				false,
+				undefined,
+				undefined,
+				{ isNonInteractive: true },
+				expect.objectContaining({
+					summary: expect.stringContaining("### CONTEXT COMPACTION HANDOFF"),
+					cost: 0.02,
+					prevContextTokens: 85000,
+					newContextTokens: 15000,
+				}),
+			)
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "condenseTaskContextResponse",
+				text: task.taskId,
+			})
+			expect(saveMessagesSpy).toHaveBeenCalled()
+			expect((task as any).isCompacting).toBe(false)
+		})
 	})
 })

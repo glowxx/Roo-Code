@@ -284,7 +284,12 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 
 	override getModel() {
 		const id = this.options.openAiModelId ?? ""
-		const info: ModelInfo = getOpenAiModelInfo(id, this.options.openAiCustomModelInfo)
+		const cachedInfo = getCachedOpenAiModelInfo(id)
+		const customInfo =
+			this.options.openAiCustomModelInfo && Object.keys(this.options.openAiCustomModelInfo).length > 0
+				? this.options.openAiCustomModelInfo
+				: cachedInfo
+		const info: ModelInfo = getOpenAiModelInfo(id, customInfo)
 		const params = getModelParams({
 			format: "openai",
 			modelId: id,
@@ -678,6 +683,17 @@ export const openAiModelInfoCache = new Map<string, ModelInfo>()
 
 export function getCachedOpenAiModelInfo(modelId: string): ModelInfo | undefined {
 	return openAiModelInfoCache.get(modelId)
+}
+
+export function initializeOpenAiModelInfoCache(cachedInfos: Record<string, ModelInfo>): void {
+	if (!cachedInfos || typeof cachedInfos !== "object") {
+		return
+	}
+	for (const [id, info] of Object.entries(cachedInfos)) {
+		if (id && info) {
+			openAiModelInfoCache.set(id, info)
+		}
+	}
 }
 
 export function parseOpenAiModelInfo(rawItem: any): ModelInfo {

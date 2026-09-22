@@ -125,4 +125,35 @@ describe("getModelContextWindow", () => {
 			expect(getModelContextWindow("custom-model", 64_000)).toBe(64_000)
 		})
 	})
+
+	describe("Cold start context window safety for 1M/2M models (Astra, 1M, Gemini)", () => {
+		it("ensures gpt-6-astra, astra, 1m have at least 1M context window even with baseContext = 200k / 128k", () => {
+			expect(getModelContextWindow("gpt-6-astra")).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("gpt-6-astra", 200_000)).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("gpt-6-astra", 128_000)).toBeGreaterThanOrEqual(1_000_000)
+
+			expect(getModelContextWindow("astra")).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("astra", 200_000)).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("astra", 128_000)).toBeGreaterThanOrEqual(1_000_000)
+
+			expect(getModelContextWindow("1m")).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("1m", 200_000)).toBeGreaterThanOrEqual(1_000_000)
+			expect(getModelContextWindow("1m", 128_000)).toBeGreaterThanOrEqual(1_000_000)
+		})
+
+		it("ensures gemini-1.5-pro has at least 2M context window even with baseContext = 200k / 128k", () => {
+			expect(getModelContextWindow("gemini-1.5-pro")).toBeGreaterThanOrEqual(2_000_000)
+			expect(getModelContextWindow("gemini-1.5-pro", 200_000)).toBeGreaterThanOrEqual(2_000_000)
+			expect(getModelContextWindow("gemini-1.5-pro", 128_000)).toBeGreaterThanOrEqual(2_000_000)
+		})
+
+		it("ensures Astra and 1M family models never collapse to 200k or 128k during cold start", () => {
+			const models = ["gpt-6-astra", "openai/gpt-6-astra", "astra", "custom/astra", "1m", "my-model-1m"]
+			for (const m of models) {
+				expect(getModelContextWindow(m, 200_000)).toBe(1_000_000)
+				expect(getModelContextWindow(m, 128_000)).toBe(1_000_000)
+			}
+		})
+	})
 })
+

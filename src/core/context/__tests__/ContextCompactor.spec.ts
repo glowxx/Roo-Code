@@ -4,22 +4,25 @@ import type { ModelInfo } from "@roo-code/types"
 
 import { BaseProvider } from "../../../api/providers/base-provider"
 import { ApiMessage } from "../../task-persistence/apiMessages"
-import { compactHistory, CONDENSING_SYSTEM_PROMPT, sanitizeRoleAlternation } from "../ContextCompactor"
+import {
+	compactHistory,
+	CONDENSING_SYSTEM_PROMPT,
+	sanitizeRoleAlternation,
+	STATE_HANDOFF_HEADER,
+	STATE_HANDOFF_TEMPLATE,
+	truncateHeavyOutputs,
+	TERMINAL_OUTPUT_MAX_BYTES,
+} from "../ContextCompactor"
 
 class MockApiHandler extends BaseProvider {
 	public lastSystemPrompt?: string
 	public lastMessages?: Anthropic.Messages.MessageParam[]
-	public summaryToReturn = `### 1. Main Objective & Context
-Initial objective is to build feature X.
-
-### 2. Changes Made & Modified Files
-Modified src/index.ts and added tests.
-
-### 3. Key Architectural Decisions
-Adopted clean modular pattern.
-
-### 4. Next Steps & Current State
-Ready for verification.`
+	public summaryToReturn = `### CONTEXT COMPACTION HANDOFF
+- **Primary Objective**: Initial objective is to build feature X.
+- **Work Completed**: Modified src/index.ts and added tests.
+- **Current State & Obstacles**: Ready for verification.
+- **Next Immediate Actions**: Run test suite.
+- **Critical Constraints**: Node v20.`
 	public shouldThrow = false
 
 	createMessage(
@@ -130,7 +133,8 @@ describe("ContextCompactor", () => {
 		expect(blocks).toHaveLength(3) // m0 + summary + m4
 		expect((blocks[0] as any).text).toContain("Initial objective: implement feature X")
 		expect((blocks[1] as any).text).toContain("[Context Compacted Summary]")
-		expect((blocks[1] as any).text).toContain("### 1. Main Objective & Context")
+		expect((blocks[1] as any).text).toContain("### CONTEXT COMPACTION HANDOFF")
+		expect((blocks[1] as any).text).toContain("- **Primary Objective**:")
 		expect((blocks[2] as any).text).toContain("Now do step 3")
 
 		// Remaining messages strictly alternate roles
@@ -471,5 +475,165 @@ describe("ContextCompactor", () => {
 		} finally {
 			vi.useRealTimers()
 		}
+	})
+
+	describe("Structured State Handoff (Memory Continuity Capsule)", () => {
+		it("generates and validates structured ### CONTEXT COMPACTION HANDOFF block", async () => {
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("### CONTEXT COMPACTION HANDOFF")
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("- **Primary Objective**:")
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("- **Work Completed**:")
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("- **Current State & Obstacles**:")
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("- **Next Immediate Actions**:")
+			expect(CONDENSING_SYSTEM_PROMPT).toContain("- **Critical Constraints**:")
+
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Primary user task: build feature Y", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Working on step 1" }], ts: 2 },
+				{ role: "user", content: "Continue to step 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Done with step 2" }], ts: 4 },
+			]
+
+			const result = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+			})
+
+			expect(result.summary).toContain("### CONTEXT COMPACTION HANDOFF")
+			expect(result.summary).toContain("- **Primary Objective**:")
+			expect(result.summary).toContain("- **Work Completed**:")
+			expect(result.summary).toContain("- **Current State & Obstacles**:")
+			expect(result.summary).toContain("- **Next Immediate Actions**:")
+			expect(result.summary).toContain("- **Critical Constraints**:")
+
+			// Verify synthetic message contains the handoff capsule
+			const summaryBlock = (result.newHistory[0].content as any[]).find(
+				(b) => typeof b.text === "string" && b.text.includes("### CONTEXT COMPACTION HANDOFF"),
+			)
+			expect(summaryBlock).toBeDefined()
+			expect(summaryBlock.text).toContain("### CONTEXT COMPACTION HANDOFF")
+			expect(summaryBlock.text).toContain("- **Primary Objective**:")
+		})
+
+		it("reduces heavy terminal outputs exceeding 2KB with concise reference markers", async () => {
+			const heavyLineCount = 60
+			const heavyOutput = "echo 'long terminal output line testing heavy output buffer'\n".repeat(heavyLineCount)
+			const heavyBytes = Buffer.byteLength(heavyOutput, "utf8")
+			expect(heavyBytes).toBeGreaterThan(TERMINAL_OUTPUT_MAX_BYTES)
+
+			// Direct truncateHeavyOutputs tests
+			const truncatedString = truncateHeavyOutputs(heavyOutput) as string
+			expect(truncatedString).toBe(
+				`[Command output truncated: ${heavyLineCount + 1} lines, ${heavyBytes} bytes - refer to previous logs if needed]`,
+			)
+
+			const truncatedToolResult = truncateHeavyOutputs([
+				{
+					type: "tool_result",
+					tool_use_id: "tool-exec-1",
+					content: heavyOutput,
+				},
+			]) as Anthropic.Messages.ContentBlockParam[]
+			expect(truncatedToolResult[0]).toEqual({
+				type: "tool_result",
+				tool_use_id: "tool-exec-1",
+				content: `[Command output truncated: ${heavyLineCount + 1} lines, ${heavyBytes} bytes - refer to previous logs if needed]`,
+			})
+
+			// Outputs under 2KB remain intact
+			const shortOutput = "short command output under 2KB"
+			expect(truncateHeavyOutputs(shortOutput)).toBe(shortOutput)
+
+			// In compactHistory, intermediate heavy outputs are truncated before sending to summarizer
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial user task", ts: 1 },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "cmd-1",
+							name: "execute_command",
+							input: { command: "npm test" },
+						},
+					],
+					ts: 2,
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "cmd-1",
+							content: heavyOutput,
+						},
+					],
+					ts: 3,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "Tests processed" }], ts: 4 },
+				{ role: "user", content: "Recent prompt 1", ts: 5 },
+				{ role: "assistant", content: [{ type: "text", text: "Recent reply 1" }], ts: 6 },
+				{ role: "user", content: "Recent prompt 2", ts: 7 },
+				{ role: "assistant", content: [{ type: "text", text: "Recent reply 2" }], ts: 8 },
+			]
+
+			await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 2,
+			})
+
+			const serialized = JSON.stringify(mockApiHandler.lastMessages)
+			expect(serialized).toContain("[Command output truncated:")
+			expect(serialized).not.toContain(heavyOutput)
+		})
+
+		it("preserves Message 0 and recent 2-3 turns intact with sanitized role alternation", async () => {
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Message 0: Initial user objective that must never be lost.", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Intermediate assistant turn 1" }], ts: 2 },
+				{ role: "user", content: "Intermediate user turn 2", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Intermediate assistant turn 3" }], ts: 4 },
+				{ role: "user", content: "Turn -2: User command", ts: 5 },
+				{ role: "assistant", content: [{ type: "text", text: "Turn -2: Direct assistant result" }], ts: 6 },
+				{ role: "user", content: "Turn -1: Final command", ts: 7 },
+				{ role: "assistant", content: [{ type: "text", text: "Turn -1: Final direct result" }], ts: 8 },
+			]
+
+			const result = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 2, // 2 exchanges = 4 messages (indices 4..7)
+			})
+
+			// First message in newHistory contains Message 0 content
+			const firstMessage = result.newHistory[0]
+			expect(firstMessage.role).toBe("user")
+			const firstMessageBlocks = firstMessage.content as Anthropic.Messages.ContentBlockParam[]
+			expect((firstMessageBlocks[0] as any).text).toBe(
+				"Message 0: Initial user objective that must never be lost.",
+			)
+
+			// Synthetic state handoff is included in the merged first user message
+			expect((firstMessageBlocks[1] as any).text).toContain("### CONTEXT COMPACTION HANDOFF")
+
+			// Recent turns (last 2 exchanges) are preserved in order
+			expect(result.newHistory[1].role).toBe("assistant")
+			expect(result.newHistory[1]).toEqual(messages[5])
+			expect(result.newHistory[2].role).toBe("user")
+			expect(result.newHistory[2]).toEqual(messages[6])
+			expect(result.newHistory[3].role).toBe("assistant")
+			expect(result.newHistory[3]).toEqual(messages[7])
+
+			// Verify strictly alternating roles
+			for (let i = 1; i < result.newHistory.length; i++) {
+				expect(result.newHistory[i].role).not.toBe(result.newHistory[i - 1].role)
+			}
+		})
 	})
 })
