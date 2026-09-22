@@ -120,3 +120,142 @@ export const DEFAULT_SAFE_COMMANDS: readonly string[] = [
 	"dir",
 	"pwd",
 ]
+
+/**
+ * Execution boundary domains for nested and wrapped commands.
+ */
+export type ExecutionDomain =
+	| "host"
+	| "wsl"
+	| "docker_exec"
+	| "docker_run"
+	| "compose_exec"
+	| "ssh"
+	| "subshell"
+
+export type HostImpactRisk = "none" | "low" | "medium" | "high" | "critical"
+
+export interface DockerMountInfo {
+	source: string
+	target: string
+	isReadOnly: boolean
+	isHostRootOrSystem: boolean
+	isDockerSocket: boolean
+}
+
+export interface ExecutionTarget {
+	type: "local" | "wsl" | "docker" | "ssh" | "unknown"
+	name?: string
+	classification?: "test-environment" | "development" | "production" | "unknown"
+}
+
+export interface HostImpactAssessment {
+	isHostEscape: boolean
+	highestRisk: HostImpactRisk
+	reasons: string[]
+	affectedHostPaths: string[]
+	hostEscapingBinaries: string[]
+	escapesBoundary: boolean
+}
+
+export interface ExecutionBoundary {
+	host: {
+		os: string
+		shell?: string
+	}
+	target: ExecutionTarget
+	outerCommand?: string
+	innerCommand: string
+	hostImpact: HostImpactAssessment
+}
+
+export interface CompactSafetyContext {
+	taskGoal: string
+	latestUserInstruction: string
+	activeTodo?: {
+		content: string
+		status: "pending" | "in_progress" | "completed"
+		stepIndex: number
+		totalSteps: number
+	}
+	workspacePath: string
+	commandCwd: string
+	isWithinWorkspace: boolean
+	taskMode?: string
+	recentCommands?: string[]
+	explicitConstraints?: string[]
+}
+
+export const compactSafetyContextSchema = z.object({
+	taskGoal: z.string(),
+	latestUserInstruction: z.string(),
+	activeTodo: z
+		.object({
+			content: z.string(),
+			status: z.enum(["pending", "in_progress", "completed"]),
+			stepIndex: z.number(),
+			totalSteps: z.number(),
+		})
+		.optional(),
+	workspacePath: z.string(),
+	commandCwd: z.string(),
+	isWithinWorkspace: z.boolean(),
+	taskMode: z.string().optional(),
+	recentCommands: z.array(z.string()).optional(),
+	explicitConstraints: z.array(z.string()).optional(),
+})
+
+export type Stage2Decision = "ALLOW_AUTO_APPROVE" | "REQUIRE_MANUAL_APPROVAL" | "BLOCK_CRITICAL"
+
+export const stage2DecisionSchema = z.enum([
+	"ALLOW_AUTO_APPROVE",
+	"REQUIRE_MANUAL_APPROVAL",
+	"BLOCK_CRITICAL",
+])
+
+export interface Stage2AdjudicationResult {
+	decision: Stage2Decision
+	risk: CommandSafetyRiskLevel
+	reason: string
+	taskAlignment: boolean
+	executionBoundary?: {
+		host: string
+		targetType: string
+		target?: string
+		hostImpact: boolean
+	}
+	criticalRiskDetected: boolean
+}
+
+export const stage2AdjudicationResultSchema = z.object({
+	decision: stage2DecisionSchema,
+	risk: z.string().transform((val) => {
+		const lower = val.toLowerCase().trim()
+		if (["safe", "low", "medium", "high", "critical"].includes(lower)) {
+			return lower as CommandSafetyRiskLevel
+		}
+		return "high" as CommandSafetyRiskLevel
+	}),
+	reason: z.string(),
+	taskAlignment: z.boolean().default(false),
+	executionBoundary: z
+		.object({
+			host: z.string(),
+			targetType: z.string(),
+			target: z.string().optional(),
+			hostImpact: z.boolean(),
+		})
+		.optional(),
+	criticalRiskDetected: z.boolean().default(false),
+})
+
+export interface TwoStageSafetyResult {
+	decision: "approve" | "ask" | "deny"
+	stage1: SafetyEvaluationResult & {
+		executionBoundary?: ExecutionBoundary
+	}
+	stage2?: Stage2AdjudicationResult
+	finalReason: string
+	auditLog: string
+}
+
