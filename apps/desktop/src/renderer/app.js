@@ -4,6 +4,8 @@
 	let socket = null
 	let currentWorkspace = null
 	let terminalLogs = []
+	let terminalSessions = []
+	let selectedTerminalSessionId = null
 	let diffFiles = []
 	let selectedDiffFile = null
 	let selectedPreviewFile = null
@@ -112,6 +114,13 @@
 	const clearTerminalBtn = document.getElementById("clear-terminal-btn")
 	const terminalClearText = document.getElementById("terminal-clear-text")
 	const terminalEmptyText = document.getElementById("terminal-empty-text")
+	const copyTerminalBtn = document.getElementById("copy-terminal-btn")
+	const terminalCopyText = document.getElementById("terminal-copy-text")
+	const terminalSidebarTitle = document.getElementById("terminal-sidebar-title")
+	const terminalSessionCounter = document.getElementById("terminal-session-counter")
+	const terminalSessionsList = document.getElementById("terminal-sessions-list")
+	const terminalSessionsEmpty = document.getElementById("terminal-sessions-empty")
+	const terminalSessionStatusBadge = document.getElementById("terminal-session-status-badge")
 
 	// Files elements
 	const filesSidebarTitle = document.getElementById("files-sidebar-title")
@@ -218,7 +227,15 @@
 			// Terminal
 			terminalTitle: "Terminal & Agent Command Logs",
 			terminalClear: "Clear",
+			terminalCopy: "Copy",
+			terminalCopied: "Copied!",
 			terminalEmpty: "Roo Code terminal command executions and logs will appear here.",
+			terminalSessionsTitle: "Command Sessions",
+			terminalSessionsCount: (count) => `${count} session${count === 1 ? "" : "s"}`,
+			terminalSessionsEmpty: "No terminal sessions recorded.",
+			sessionRunning: "Running",
+			sessionCompleted: "Completed",
+			sessionError: "Failed",
 
 			// Sidebar
 			workspaces: "Workspaces",
@@ -294,7 +311,15 @@
 			// Terminal
 			terminalTitle: "Dziennik poleceń terminala i agenta",
 			terminalClear: "Wyczyść",
+			terminalCopy: "Kopiuj",
+			terminalCopied: "Skopiowano!",
 			terminalEmpty: "Wyniki poleceń terminala i dzienniki wykonania Roo Code pojawią się tutaj.",
+			terminalSessionsTitle: "Sesje poleceń",
+			terminalSessionsCount: (count) => `${count} sesj${count === 1 ? "a" : count < 5 ? "e" : "i"}`,
+			terminalSessionsEmpty: "Brak zarejestrowanych sesji terminala.",
+			sessionRunning: "W toku",
+			sessionCompleted: "Zakończono",
+			sessionError: "Błąd",
 
 			// Sidebar
 			workspaces: "Obszary robocze",
@@ -397,9 +422,13 @@
 		}
 
 		// 6. Terminal titles & placeholders
-		if (terminalTitleText) terminalTitleText.textContent = tDesktop("terminalTitle")
+		if (terminalTitleText && !selectedTerminalSessionId) terminalTitleText.textContent = tDesktop("terminalTitle")
 		if (terminalClearText) terminalClearText.textContent = tDesktop("terminalClear")
+		if (terminalCopyText) terminalCopyText.textContent = tDesktop("terminalCopy")
 		if (terminalEmptyText) terminalEmptyText.textContent = tDesktop("terminalEmpty")
+		if (terminalSidebarTitle) terminalSidebarTitle.textContent = tDesktop("terminalSessionsTitle")
+		if (terminalSessionCounter) terminalSessionCounter.textContent = tDesktop("terminalSessionsCount", terminalSessions.length)
+		if (terminalSessionsEmpty) terminalSessionsEmpty.textContent = tDesktop("terminalSessionsEmpty")
 
 		// 7. Sidebar elements
 		if (sidebarHeaderTitleEl) sidebarHeaderTitleEl.textContent = tDesktop("workspaces")
@@ -438,6 +467,15 @@
 			}
 		}
 
+		if (targetTab === "diffs") {
+			renderDiffs()
+			sendToServer({ type: "getDiffs" })
+		}
+
+		if (targetTab === "terminal") {
+			renderTerminalLogs()
+		}
+
 		// If user clicked in desktop shell, notify webview with origin: "sync"
 		if (origin === "user") {
 			if (targetTab === "chat") {
@@ -457,6 +495,12 @@
 	tabs.forEach((tab) => {
 		tab.addEventListener("click", () => {
 			const targetTab = tab.getAttribute("data-tab")
+			if (targetTab === "diffs") {
+				renderDiffs()
+				sendToServer({ type: "getDiffs" })
+			} else if (targetTab === "terminal") {
+				renderTerminalLogs()
+			}
 			switchDesktopTab(targetTab, "user")
 		})
 	})
@@ -547,6 +591,15 @@
 		}
 		activeTaskId = null
 		renderSidebar()
+
+		// Reset active terminal logs and diffs for completed task
+		terminalLogs = []
+		diffFiles = []
+		selectedDiffFile = null
+		renderTerminalLogs()
+		renderDiffs()
+		if (terminalCountEl) terminalCountEl.textContent = "0"
+		if (diffsCountEl) diffsCountEl.textContent = "0"
 
 		sendToServer({ type: "newChat", workspacePath })
 		sendToServer({ type: "webviewMessage", message: { type: "clearTask" } })
@@ -971,11 +1024,30 @@
 		openFolderDialog()
 	})
 
-	// Clear Terminal
+	// Terminal Actions
 	clearTerminalBtn?.addEventListener("click", () => {
+		terminalSessions = []
 		terminalLogs = []
-		renderTerminalLogs()
-		terminalCountEl.textContent = "0"
+		selectedTerminalSessionId = null
+		renderTerminalSessions()
+		renderActiveTerminalOutput()
+		if (terminalCountEl) terminalCountEl.textContent = "0"
+		sendToServer({ type: "clearTerminalLogs" })
+	})
+
+	copyTerminalBtn?.addEventListener("click", () => {
+		const activeSession = terminalSessions.find((s) => s.id === selectedTerminalSessionId)
+		if (!activeSession || !activeSession.output) return
+		const cleanText = stripAnsi(activeSession.output)
+		navigator.clipboard.writeText(cleanText).then(() => {
+			if (terminalCopyText) {
+				const orig = terminalCopyText.textContent
+				terminalCopyText.textContent = tDesktop("terminalCopied")
+				setTimeout(() => {
+					terminalCopyText.textContent = orig
+				}, 1500)
+			}
+		})
 	})
 
 	// Files Search Filter
@@ -1171,6 +1243,23 @@
 
 			case "extensionMessage":
 				forwardToWebview(msg.message)
+				if (msg.message?.type === "terminalSessionStarted") {
+					handleServerMessage({ type: "terminalSessionStarted", ...msg.message })
+				} else if (msg.message?.type === "terminalOutput") {
+					handleServerMessage({ type: "terminalOutput", ...msg.message })
+				} else if (msg.message?.type === "terminalSessionEnded") {
+					handleServerMessage({ type: "terminalSessionEnded", ...msg.message })
+				} else if (msg.message?.type === "workspaceFilesChanged") {
+					handleServerMessage({ type: "workspaceFilesChanged", ...msg.message })
+				} else if (msg.message?.type === "clearTask") {
+					terminalLogs = []
+					diffFiles = []
+					selectedDiffFile = null
+					renderTerminalLogs()
+					renderDiffs()
+					if (terminalCountEl) terminalCountEl.textContent = "0"
+					if (diffsCountEl) diffsCountEl.textContent = "0"
+				}
 				if (msg.message?.type === "state" && msg.message.state) {
 					latestExtensionState = { ...(latestExtensionState || {}), ...msg.message.state }
 					if (msg.message.state.language) {
@@ -1207,6 +1296,15 @@
 				break
 
 			case "workspaceInfo":
+				if (msg.workspace?.path && (!currentWorkspace?.path || pathNormalize(msg.workspace.path) !== pathNormalize(currentWorkspace.path))) {
+					terminalLogs = []
+					diffFiles = []
+					selectedDiffFile = null
+					renderTerminalLogs()
+					renderDiffs()
+					if (terminalCountEl) terminalCountEl.textContent = "0"
+					if (diffsCountEl) diffsCountEl.textContent = "0"
+				}
 				currentWorkspace = msg.workspace
 				renderWorkspaceInfo(msg.workspace)
 				if (msg.workspace?.path) {
@@ -1223,17 +1321,149 @@
 				updateAgentStatus(msg.status)
 				break
 
-			case "terminalLog":
-				terminalLogs.push(msg.entry)
-				if (terminalLogs.length > 100) terminalLogs.shift()
-				renderTerminalLogs()
-				terminalCountEl.textContent = String(terminalLogs.length)
+			case "terminalSessionStarted": {
+				const id = String(msg.id || `cmd-${Date.now()}`)
+				let session = terminalSessions.find((s) => s.id === id)
+				if (!session) {
+					session = {
+						id,
+						command: msg.command || "",
+						cwd: msg.cwd || currentWorkspace?.path || "",
+						timestamp: typeof msg.timestamp === "number" ? msg.timestamp : Date.now(),
+						output: "",
+						status: "running",
+					}
+					terminalSessions.unshift(session)
+					if (terminalSessions.length > 200) terminalSessions.pop()
+				} else {
+					if (msg.command) session.command = msg.command
+					if (msg.cwd) session.cwd = msg.cwd
+					session.timestamp = typeof msg.timestamp === "number" ? msg.timestamp : session.timestamp
+					session.status = "running"
+				}
+				if (!selectedTerminalSessionId || terminalSessions.length === 1) {
+					selectedTerminalSessionId = id
+				}
+				renderTerminalSessions()
+				if (selectedTerminalSessionId === id) {
+					renderActiveTerminalOutput()
+				}
 				break
+			}
+
+			case "terminalOutput": {
+				const id = String(msg.id || "")
+				let session = id ? terminalSessions.find((s) => s.id === id) : undefined
+				if (!session && terminalSessions.length > 0) {
+					session = terminalSessions[0]
+				}
+				if (session) {
+					session.output = (session.output || "") + (msg.data || "")
+					if (selectedTerminalSessionId === session.id) {
+						renderActiveTerminalOutput()
+					}
+				}
+				break
+			}
+
+			case "terminalSessionEnded": {
+				const id = String(msg.id || "")
+				const exitCode = typeof msg.exitCode === "number" ? msg.exitCode : 0
+				let session = id ? terminalSessions.find((s) => s.id === id) : undefined
+				if (!session && terminalSessions.length > 0) {
+					session = terminalSessions[0]
+				}
+				if (session) {
+					session.exitCode = exitCode
+					session.status = exitCode === 0 ? "completed" : "error"
+					renderTerminalSessions()
+					if (selectedTerminalSessionId === session.id) {
+						renderActiveTerminalOutput()
+					}
+				}
+				break
+			}
+
+			case "terminalLogsCleared":
+				terminalSessions = []
+				terminalLogs = []
+				selectedTerminalSessionId = null
+				renderTerminalSessions()
+				renderActiveTerminalOutput()
+				break
+
+			case "terminalLog": {
+				if (msg.entry && msg.entry.id) {
+					const id = String(msg.entry.id)
+					let session = terminalSessions.find((s) => s.id === id)
+					if (!session) {
+						session = {
+							id,
+							command: msg.entry.command || "",
+							cwd: msg.entry.cwd || currentWorkspace?.path || "",
+							timestamp: typeof msg.entry.timestamp === "number" ? msg.entry.timestamp : Date.now(),
+							output: msg.entry.output || "",
+							exitCode: msg.entry.exitCode,
+							status: msg.entry.status || "running",
+						}
+						terminalSessions.unshift(session)
+						if (terminalSessions.length > 200) terminalSessions.pop()
+					} else {
+						if (msg.entry.command) session.command = msg.entry.command
+						if (msg.entry.cwd) session.cwd = msg.entry.cwd
+						if (msg.entry.output) session.output = msg.entry.output
+						if (msg.entry.exitCode !== undefined) session.exitCode = msg.entry.exitCode
+						if (msg.entry.status) session.status = msg.entry.status
+					}
+					if (!selectedTerminalSessionId) {
+						selectedTerminalSessionId = session.id
+					}
+					renderTerminalSessions()
+					if (selectedTerminalSessionId === session.id) {
+						renderActiveTerminalOutput()
+					}
+				}
+				break
+			}
 
 			case "diffsUpdated":
 				diffFiles = msg.diffs || []
 				renderDiffs()
 				diffsCountEl.textContent = String(diffFiles.length)
+				break
+
+			case "workspaceFilesChanged":
+				if (Array.isArray(msg.files) && msg.files.length > 0) {
+					msg.files.forEach((f) => {
+						const relPath = (f.path || "").replace(/\\/g, "/")
+						if (!relPath) return
+						const existingIdx = diffFiles.findIndex((d) => d.filePath.replace(/\\/g, "/") === relPath)
+						const entry = {
+							filePath: relPath,
+							status: f.changeType || "modified",
+							additions: typeof f.additions === "number" ? f.additions : 1,
+							deletions: typeof f.deletions === "number" ? f.deletions : 0,
+						}
+						if (existingIdx >= 0) {
+							diffFiles[existingIdx] = { ...diffFiles[existingIdx], ...entry }
+						} else {
+							diffFiles.push(entry)
+						}
+					})
+					renderDiffs()
+					if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
+				} else {
+					fetch("/api/diffs")
+						.then((r) => (r.ok ? r.json() : []))
+						.then((data) => {
+							if (Array.isArray(data)) {
+								diffFiles = data
+								renderDiffs()
+								if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
+							}
+						})
+						.catch(() => {})
+				}
 				break
 
 			case "fileContent":
@@ -1309,147 +1539,500 @@
 	}
 
 	function renderDiffs() {
-		diffFileCounterEl.textContent = tDesktop("filesCount", diffFiles.length)
-		if (diffFiles.length === 0) {
-			diffsFileListEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("noChangesAgent"))}</div>`
-			diffContentEl.innerHTML = `
-				<div class="diff-placeholder">
-					<p id="diffs-placeholder-text">${escapeHtml(tDesktop("diffsPlaceholder"))}</p>
-				</div>
-			`
+		const count = diffFiles.length
+		if (diffsCountEl) diffsCountEl.textContent = String(count)
+		if (diffFileCounterEl) diffFileCounterEl.textContent = tDesktop("filesCount", count)
+
+		const listPane = document.getElementById("diffs-list-pane")
+		const targetList = diffsFileListEl || listPane?.querySelector(".diffs-list") || listPane
+
+		if (!targetList) return
+
+		if (count === 0) {
+			targetList.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("noChangesAgent"))}</div>`
+			if (diffViewerHeaderEl) {
+				diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(tDesktop("selectFileToReview"))}</span>`
+			}
+			if (diffContentEl) {
+				diffContentEl.innerHTML = `
+					<div class="diff-placeholder">
+						<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<circle cx="18" cy="18" r="3"></circle>
+							<circle cx="6" cy="6" r="3"></circle>
+							<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+							<line x1="6" y1="9" x2="6" y2="21"></line>
+						</svg>
+						<p id="diffs-placeholder-text">${escapeHtml(tDesktop("diffsPlaceholder"))}</p>
+					</div>
+				`
+			}
 			return
 		}
 
-		diffsFileListEl.innerHTML = ""
+		// If no file is selected or selected file is no longer in diffFiles, select the first one
+		if (!selectedDiffFile || !diffFiles.some((f) => f.filePath === selectedDiffFile)) {
+			selectedDiffFile = diffFiles[0].filePath
+		}
+
+		targetList.innerHTML = ""
 		diffFiles.forEach((file) => {
+			const status = (file.status || "modified").toLowerCase()
+			const isCreated = status === "created" || status === "added"
+			const isDeleted = status === "deleted"
+			const statusClass = isCreated ? "created" : isDeleted ? "deleted" : "modified"
+			const statusChar = isCreated ? "A" : isDeleted ? "D" : "M"
+			const statusTitle = isCreated ? "Created" : isDeleted ? "Deleted" : "Modified"
+
 			const item = document.createElement("div")
 			item.className = `diff-item ${selectedDiffFile === file.filePath ? "selected" : ""}`
 			item.innerHTML = `
-				<span>${file.filePath}</span>
+				<div class="diff-item-left">
+					<span class="diff-type-badge ${statusClass}" title="${statusTitle}">${statusChar}</span>
+					<span class="diff-file-path" title="${escapeHtml(file.filePath)}">${escapeHtml(file.filePath)}</span>
+				</div>
 				<div class="diff-stats">
-					<span class="add">+${file.additions}</span>
-					<span class="del">-${file.deletions}</span>
+					<span class="add">+${file.additions || 0}</span>
+					<span class="del">-${file.deletions || 0}</span>
 				</div>
 			`
 			item.addEventListener("click", () => {
 				selectedDiffFile = file.filePath
 				renderDiffs()
-				renderSelectedDiff(file)
+				loadAndRenderSelectedDiff(file)
 			})
-			diffsFileListEl.appendChild(item)
+			targetList.appendChild(item)
 		})
 
-		if (!selectedDiffFile && diffFiles.length > 0) {
-			selectedDiffFile = diffFiles[0].filePath
-			renderSelectedDiff(diffFiles[0])
+		const activeFile = diffFiles.find((f) => f.filePath === selectedDiffFile) || diffFiles[0]
+		if (activeFile) {
+			loadAndRenderSelectedDiff(activeFile)
 		}
 	}
 
-	function computeLCSDiff(oldLines, newLines) {
-		const m = oldLines.length
-		const n = newLines.length
-		if (m > 1200 || n > 1200) {
-			const result = []
-			const max = Math.max(m, n)
-			for (let i = 0; i < max; i++) {
-				const o = oldLines[i]
-				const nw = newLines[i]
-				if (o !== undefined && nw !== undefined) {
-					if (o === nw) result.push({ type: "same", line: o, oldNum: i + 1, newNum: i + 1 })
-					else {
-						result.push({ type: "del", line: o, oldNum: i + 1 })
-						result.push({ type: "add", line: nw, newNum: i + 1 })
+	async function loadAndRenderSelectedDiff(file) {
+		if (!file) return
+
+		const status = (file.status || "modified").toLowerCase()
+		const isCreated = status === "created" || status === "added"
+		const isDeleted = status === "deleted"
+		const statusClass = isCreated ? "created" : isDeleted ? "deleted" : "modified"
+		const statusChar = isCreated ? "A" : isDeleted ? "D" : "M"
+		const statusTitle = isCreated ? "Created" : isDeleted ? "Deleted" : "Modified"
+
+		if (diffViewerHeaderEl) {
+			diffViewerHeaderEl.innerHTML = `
+				<div class="diff-viewer-title-row">
+					<span class="diff-type-badge ${statusClass}" title="${statusTitle}">${statusChar}</span>
+					<span class="diff-filename" style="font-weight:600; color:var(--text-primary);">${escapeHtml(file.filePath)}</span>
+					<span style="font-size:11px; color:var(--text-muted); text-transform:capitalize;">(${escapeHtml(statusTitle)})</span>
+				</div>
+				<div class="diff-viewer-actions">
+					<div class="diff-stats">
+						<span class="add">+${file.additions || 0}</span>
+						<span class="del">-${file.deletions || 0}</span>
+					</div>
+				</div>
+			`
+		}
+
+		let diffData = file
+
+		// If diff text or content not already present, fetch from /api/diff
+		if (!diffData.diff && (diffData.newContent === undefined || diffData.oldContent === undefined)) {
+			try {
+				const res = await fetch(`/api/diff?path=${encodeURIComponent(file.filePath)}`)
+				if (res.ok) {
+					const data = await res.json()
+					diffData = { ...file, ...data }
+				}
+			} catch (e) {
+				console.warn("Error fetching /api/diff:", e)
+			}
+		}
+
+		renderDiffContent(diffData)
+	}
+
+	function renderDiffContent(file) {
+		if (!diffContentEl) return
+
+		// 1. If we have unified diff output (from git diff or unified patch)
+		if (file.diff && typeof file.diff === "string" && file.diff.trim().length > 0) {
+			const lines = file.diff.split("\n")
+			let html = ""
+			let oldLineNum = 0
+			let newLineNum = 0
+			let inHunk = false
+
+			for (const line of lines) {
+				if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+					continue
+				}
+				if (line.startsWith("@@")) {
+					const match = line.match(/@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/)
+					if (match) {
+						oldLineNum = parseInt(match[1], 10)
+						newLineNum = parseInt(match[2], 10)
 					}
-				} else if (o !== undefined) {
-					result.push({ type: "del", line: o, oldNum: i + 1 })
-				} else if (nw !== undefined) {
-					result.push({ type: "add", line: nw, newNum: i + 1 })
+					html += `<div class="diff-line hunk-header"><span class="diff-gutter"></span><span class="diff-prefix"></span><span class="diff-text">${escapeHtml(line)}</span></div>`
+					inHunk = true
+					continue
 				}
-			}
-			return result
-		}
+				if (!inHunk) continue
 
-		const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
-		for (let i = 0; i < m; i++) {
-			for (let j = 0; j < n; j++) {
-				if (oldLines[i] === newLines[j]) {
-					dp[i + 1][j + 1] = dp[i][j] + 1
+				if (line.startsWith("+")) {
+					html += `<div class="diff-line addition"><span class="diff-gutter">${newLineNum}</span><span class="diff-prefix">+</span><span class="diff-text">${escapeHtml(line.slice(1))}</span></div>`
+					newLineNum++
+				} else if (line.startsWith("-")) {
+					html += `<div class="diff-line deletion"><span class="diff-gutter">${oldLineNum}</span><span class="diff-prefix">-</span><span class="diff-text">${escapeHtml(line.slice(1))}</span></div>`
+					oldLineNum++
 				} else {
-					dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1])
+					const text = line.startsWith(" ") ? line.slice(1) : line
+					html += `<div class="diff-line same"><span class="diff-gutter">${newLineNum}</span><span class="diff-prefix"> </span><span class="diff-text">${escapeHtml(text)}</span></div>`
+					oldLineNum++
+					newLineNum++
 				}
 			}
-		}
 
-		let i = m, j = n
-		const result = []
-		while (i > 0 || j > 0) {
-			if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-				result.push({ type: "same", line: oldLines[i - 1], oldNum: i, newNum: j })
-				i--
-				j--
-			} else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-				result.push({ type: "add", line: newLines[j - 1], newNum: j })
-				j--
-			} else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
-				result.push({ type: "del", line: oldLines[i - 1], oldNum: i })
-				i--
+			if (html) {
+				diffContentEl.innerHTML = html
+				return
 			}
 		}
-		return result.reverse()
-	}
 
-	function renderSelectedDiff(file) {
-		diffViewerHeaderEl.innerHTML = `<span class="diff-filename">${escapeHtml(file.filePath)} &nbsp;·&nbsp; <span style="text-transform: capitalize; color: var(--text-primary); font-weight: 600;">${escapeHtml(file.status)}</span></span>`
-		if (!file.newContent && !file.oldContent) {
-			diffContentEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("fileContentNotAvailable"))}</div>`
-			return
-		}
-
-		if (file.oldContent && file.newContent && file.oldContent !== file.newContent) {
+		// 2. If we have oldContent and newContent
+		if (file.oldContent !== undefined && file.newContent !== undefined && file.oldContent !== file.newContent) {
 			const oldLines = file.oldContent.split("\n")
 			const newLines = file.newContent.split("\n")
 			const diffItems = computeLCSDiff(oldLines, newLines)
 			let html = ""
 			diffItems.forEach((item) => {
 				if (item.type === "same") {
-					html += `<div class="diff-line"><span class="diff-gutter">${item.newNum || item.oldNum}</span>  ${escapeHtml(item.line)}</div>`
+					html += `<div class="diff-line same"><span class="diff-gutter">${item.newNum || item.oldNum}</span><span class="diff-prefix"> </span><span class="diff-text">${escapeHtml(item.line)}</span></div>`
 				} else if (item.type === "del") {
-					html += `<div class="diff-line deletion"><span class="diff-gutter">${item.oldNum}</span>- ${escapeHtml(item.line)}</div>`
+					html += `<div class="diff-line deletion"><span class="diff-gutter">${item.oldNum}</span><span class="diff-prefix">-</span><span class="diff-text">${escapeHtml(item.line)}</span></div>`
 				} else if (item.type === "add") {
-					html += `<div class="diff-line addition"><span class="diff-gutter">${item.newNum}</span>+ ${escapeHtml(item.line)}</div>`
+					html += `<div class="diff-line addition"><span class="diff-gutter">${item.newNum}</span><span class="diff-prefix">+</span><span class="diff-text">${escapeHtml(item.line)}</span></div>`
 				}
 			})
 			diffContentEl.innerHTML = html
-		} else {
+			return
+		}
+
+		// 3. Brand new file (all additions)
+		if (file.status === "added" || file.status === "created" || (!file.oldContent && file.newContent)) {
+			const lines = (file.newContent || "").split("\n")
+			let html = ""
+			lines.forEach((line, idx) => {
+				html += `<div class="diff-line addition"><span class="diff-gutter">${idx + 1}</span><span class="diff-prefix">+</span><span class="diff-text">${escapeHtml(line)}</span></div>`
+			})
+			diffContentEl.innerHTML = html || `<div class="empty-state">Empty new file</div>`
+			return
+		}
+
+		// 4. Deleted file (all deletions)
+		if (file.status === "deleted" || (file.oldContent && !file.newContent)) {
+			const lines = (file.oldContent || "").split("\n")
+			let html = ""
+			lines.forEach((line, idx) => {
+				html += `<div class="diff-line deletion"><span class="diff-gutter">${idx + 1}</span><span class="diff-prefix">-</span><span class="diff-text">${escapeHtml(line)}</span></div>`
+			})
+			diffContentEl.innerHTML = html || `<div class="empty-state">Deleted file</div>`
+			return
+		}
+
+		// 5. Fallback or no changes
+		if (file.newContent || file.oldContent) {
 			const lines = (file.newContent || file.oldContent || "").split("\n")
 			let html = ""
 			lines.forEach((line, idx) => {
-				html += `<div class="diff-line addition"><span class="diff-gutter">${idx + 1}</span>+ ${escapeHtml(line)}</div>`
+				html += `<div class="diff-line same"><span class="diff-gutter">${idx + 1}</span><span class="diff-prefix"> </span><span class="diff-text">${escapeHtml(line)}</span></div>`
 			})
 			diffContentEl.innerHTML = html
+			return
 		}
+
+		diffContentEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("fileContentNotAvailable"))}</div>`
 	}
 
-	function renderTerminalLogs() {
-		if (terminalLogs.length === 0) {
-			terminalOutputEl.innerHTML = `<div class="terminal-empty" id="terminal-empty-text">${escapeHtml(tDesktop("terminalEmpty"))}</div>`
+	// ANSI escape sequence parser & converter
+	const ANSI_FG_COLORS = {
+		30: "#4b5563", // Black / Dark gray
+		31: "#ef4444", // Red
+		32: "#10b981", // Green
+		33: "#f59e0b", // Yellow
+		34: "#3b82f6", // Blue
+		35: "#ec4899", // Magenta
+		36: "#06b6d4", // Cyan
+		37: "#f1f5f9", // White
+		90: "#64748b", // Bright Black (Gray)
+		91: "#f87171", // Bright Red
+		92: "#34d399", // Bright Green
+		93: "#fbbf24", // Bright Yellow
+		94: "#60a5fa", // Bright Blue
+		95: "#f472b6", // Bright Magenta
+		96: "#22d3ee", // Bright Cyan
+		97: "#ffffff", // Bright White
+	}
+
+	const ANSI_BG_COLORS = {
+		40: "#1f2937",
+		41: "rgba(239, 68, 68, 0.25)",
+		42: "rgba(16, 185, 129, 0.25)",
+		43: "rgba(245, 158, 11, 0.25)",
+		44: "rgba(59, 130, 246, 0.25)",
+		45: "rgba(236, 72, 153, 0.25)",
+		46: "rgba(6, 182, 212, 0.25)",
+		47: "#f8fafc",
+		100: "#374151",
+		101: "rgba(248, 113, 113, 0.35)",
+		102: "rgba(52, 211, 153, 0.35)",
+		103: "rgba(251, 191, 36, 0.35)",
+		104: "rgba(96, 165, 250, 0.35)",
+		105: "rgba(244, 114, 182, 0.35)",
+		106: "rgba(34, 211, 238, 0.35)",
+		107: "#ffffff",
+	}
+
+	function stripAnsi(text) {
+		if (!text || typeof text !== "string") return ""
+		return text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\r/g, "")
+	}
+
+	function get256Color(n) {
+		if (n < 8) return ANSI_FG_COLORS[30 + n] || "#f1f5f9"
+		if (n < 16) return ANSI_FG_COLORS[90 + (n - 8)] || "#f1f5f9"
+		if (n < 232) {
+			const index = n - 16
+			const r = Math.floor(index / 36) * 51
+			const g = Math.floor((index % 36) / 6) * 51
+			const b = (index % 6) * 51
+			return `rgb(${r}, ${g}, ${b})`
+		}
+		const gray = 8 + (n - 232) * 10
+		return `rgb(${gray}, ${gray}, ${gray})`
+	}
+
+	function ansiToHtml(text) {
+		if (!text || typeof text !== "string") return ""
+		const cleaned = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+		const regex = /\x1b\[([0-9;?]*)m/g
+		let html = ""
+		let lastIndex = 0
+		let currentStyles = {
+			fg: null,
+			bg: null,
+			bold: false,
+			dim: false,
+			italic: false,
+			underline: false,
+		}
+
+		function getSpanStyle() {
+			const styles = []
+			if (currentStyles.fg) styles.push(`color: ${currentStyles.fg}`)
+			if (currentStyles.bg) styles.push(`background-color: ${currentStyles.bg}`)
+			return styles.join("; ")
+		}
+
+		function getSpanClasses() {
+			const classes = []
+			if (currentStyles.bold) classes.push("ansi-bold")
+			if (currentStyles.dim) classes.push("ansi-dim")
+			if (currentStyles.italic) classes.push("ansi-italic")
+			if (currentStyles.underline) classes.push("ansi-underline")
+			return classes.join(" ")
+		}
+
+		function appendChunk(raw) {
+			if (!raw) return
+			const escaped = escapeHtml(raw.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ""))
+			const style = getSpanStyle()
+			const classes = getSpanClasses()
+			if (style || classes) {
+				const styleAttr = style ? ` style="${style}"` : ""
+				const classAttr = classes ? ` class="${classes}"` : ""
+				html += `<span${classAttr}${styleAttr}>${escaped}</span>`
+			} else {
+				html += escaped
+			}
+		}
+
+		let match
+		while ((match = regex.exec(cleaned)) !== null) {
+			const textChunk = cleaned.slice(lastIndex, match.index)
+			appendChunk(textChunk)
+			lastIndex = regex.lastIndex
+
+			const codes = (match[1] || "0").split(";").map((c) => parseInt(c, 10))
+			for (let i = 0; i < codes.length; i++) {
+				const code = codes[i]
+				if (isNaN(code) || code === 0) {
+					currentStyles = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false }
+				} else if (code === 1) {
+					currentStyles.bold = true
+				} else if (code === 2) {
+					currentStyles.dim = true
+				} else if (code === 3) {
+					currentStyles.italic = true
+				} else if (code === 4) {
+					currentStyles.underline = true
+				} else if (code === 22) {
+					currentStyles.bold = false
+					currentStyles.dim = false
+				} else if (code === 23) {
+					currentStyles.italic = false
+				} else if (code === 24) {
+					currentStyles.underline = false
+				} else if (code === 39) {
+					currentStyles.fg = null
+				} else if (code === 49) {
+					currentStyles.bg = null
+				} else if (ANSI_FG_COLORS[code]) {
+					currentStyles.fg = ANSI_FG_COLORS[code]
+				} else if (ANSI_BG_COLORS[code]) {
+					currentStyles.bg = ANSI_BG_COLORS[code]
+				} else if (code === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+					const n = codes[i + 2]
+					currentStyles.fg = get256Color(n)
+					i += 2
+				} else if (code === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+					const n = codes[i + 2]
+					currentStyles.bg = get256Color(n)
+					i += 2
+				} else if (code === 38 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+					currentStyles.fg = `rgb(${codes[i + 2]}, ${codes[i + 3]}, ${codes[i + 4]})`
+					i += 4
+				} else if (code === 48 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+					currentStyles.bg = `rgb(${codes[i + 2]}, ${codes[i + 3]}, ${codes[i + 4]})`
+					i += 4
+				}
+			}
+		}
+
+		appendChunk(cleaned.slice(lastIndex))
+		return html
+	}
+
+	function renderTerminalSessions() {
+		if (terminalSessionCounter) {
+			terminalSessionCounter.textContent = tDesktop("terminalSessionsCount", terminalSessions.length)
+		}
+		if (terminalCountEl) {
+			terminalCountEl.textContent = String(terminalSessions.length)
+		}
+
+		if (!terminalSessionsList) return
+
+		if (terminalSessions.length === 0) {
+			terminalSessionsList.innerHTML = `<div class="empty-state" id="terminal-sessions-empty">${escapeHtml(tDesktop("terminalSessionsEmpty"))}</div>`
 			return
 		}
 
 		let html = ""
-		terminalLogs.slice().reverse().forEach((log) => {
-			const time = new Date(log.timestamp).toLocaleTimeString()
+		terminalSessions.forEach((session) => {
+			const isSelected = session.id === selectedTerminalSessionId
+			const timeStr = session.timestamp ? new Date(session.timestamp).toLocaleTimeString() : ""
+			const cwdDisplay = session.cwd ? session.cwd.split(/[/\\]/).filter(Boolean).pop() || session.cwd : ""
+
+			let badgeHtml = ""
+			if (session.status === "running") {
+				badgeHtml = `<span class="session-badge badge-running"><span class="badge-dot"></span>${escapeHtml(tDesktop("sessionRunning"))}</span>`
+			} else if (session.status === "error" || (typeof session.exitCode === "number" && session.exitCode !== 0)) {
+				badgeHtml = `<span class="session-badge badge-error">exit ${session.exitCode ?? 1}</span>`
+			} else {
+				badgeHtml = `<span class="session-badge badge-completed">0</span>`
+			}
+
 			html += `
-				<div class="terminal-log-card">
-					<div class="terminal-card-header">
-						<span class="terminal-cmd">$ ${escapeHtml(log.command)}</span>
-						<span>${time}</span>
+				<div class="terminal-session-item ${isSelected ? "selected" : ""}" data-session-id="${escapeHtml(session.id)}">
+					<div class="terminal-session-header">
+						<span class="terminal-session-cmd" title="${escapeHtml(session.command)}">$ ${escapeHtml(session.command || "command")}</span>
+						${badgeHtml}
 					</div>
-					<div class="terminal-cmd-body">${escapeHtml(log.output)}</div>
+					<div class="terminal-session-footer">
+						<span class="terminal-session-cwd" title="${escapeHtml(session.cwd || "")}">${escapeHtml(cwdDisplay)}</span>
+						<span class="terminal-session-time">${escapeHtml(timeStr)}</span>
+					</div>
 				</div>
 			`
 		})
-		terminalOutputEl.innerHTML = html
+
+		terminalSessionsList.innerHTML = html
+
+		terminalSessionsList.querySelectorAll(".terminal-session-item").forEach((el) => {
+			el.addEventListener("click", () => {
+				const sessionId = el.getAttribute("data-session-id")
+				if (sessionId && sessionId !== selectedTerminalSessionId) {
+					selectedTerminalSessionId = sessionId
+					renderTerminalSessions()
+					renderActiveTerminalOutput()
+				}
+			})
+		})
+	}
+
+	function renderActiveTerminalOutput() {
+		if (!terminalOutputEl) return
+
+		if (terminalSessions.length === 0) {
+			terminalOutputEl.innerHTML = `<div class="terminal-empty" id="terminal-empty-text">${escapeHtml(tDesktop("terminalEmpty"))}</div>`
+			if (terminalTitleText) terminalTitleText.textContent = tDesktop("terminalTitle")
+			if (terminalSessionStatusBadge) terminalSessionStatusBadge.style.display = "none"
+			return
+		}
+
+		let activeSession = terminalSessions.find((s) => s.id === selectedTerminalSessionId)
+		if (!activeSession) {
+			activeSession = terminalSessions[0]
+			selectedTerminalSessionId = activeSession.id
+			renderTerminalSessions()
+		}
+
+		if (terminalTitleText) {
+			terminalTitleText.textContent = activeSession.command ? `$ ${activeSession.command}` : tDesktop("terminalTitle")
+			terminalTitleText.title = activeSession.cwd ? `${activeSession.command} (in ${activeSession.cwd})` : activeSession.command
+		}
+
+		if (terminalSessionStatusBadge) {
+			terminalSessionStatusBadge.style.display = "inline-flex"
+			if (activeSession.status === "running") {
+				terminalSessionStatusBadge.className = "terminal-session-status-badge session-badge badge-running"
+				terminalSessionStatusBadge.innerHTML = `<span class="badge-dot"></span>${escapeHtml(tDesktop("sessionRunning"))}`
+			} else if (activeSession.status === "error" || (typeof activeSession.exitCode === "number" && activeSession.exitCode !== 0)) {
+				terminalSessionStatusBadge.className = "terminal-session-status-badge session-badge badge-error"
+				terminalSessionStatusBadge.textContent = `exit ${activeSession.exitCode ?? 1}`
+			} else {
+				terminalSessionStatusBadge.className = "terminal-session-status-badge session-badge badge-completed"
+				terminalSessionStatusBadge.textContent = "exit 0"
+			}
+		}
+
+		const isNearBottom = terminalOutputEl.scrollHeight - terminalOutputEl.scrollTop - terminalOutputEl.clientHeight < 80
+
+		if (!activeSession.output || !activeSession.output.trim()) {
+			if (activeSession.status === "running") {
+				terminalOutputEl.innerHTML = `
+					<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n[Running command in workspace...]</span></div>
+				`
+			} else {
+				terminalOutputEl.innerHTML = `
+					<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n(Command completed with no output)</span></div>
+				`
+			}
+		} else {
+			const parsedHtml = ansiToHtml(activeSession.output)
+			terminalOutputEl.innerHTML = `<pre class="terminal-ansi-pre"><code>${parsedHtml}</code></pre>`
+		}
+
+		if (isNearBottom || activeSession.status === "running") {
+			terminalOutputEl.scrollTop = terminalOutputEl.scrollHeight
+		}
+	}
+
+	function renderTerminalLogs() {
+		renderTerminalSessions()
+		renderActiveTerminalOutput()
 	}
 
 	function formatBytes(bytes, decimals = 1) {
@@ -2518,6 +3101,15 @@
 
 	// Initial pill sync
 	updateApiPill(currentApiConfig)
+
+	// Electron IPC Bridge
+	if (window.__desktopAPI?.onExtensionMessage) {
+		window.__desktopAPI.onExtensionMessage((_event, msg) => {
+			if (msg && typeof msg === "object") {
+				handleServerMessage(msg)
+			}
+		})
+	}
 
 	// Initialize
 	connectWebSocket()

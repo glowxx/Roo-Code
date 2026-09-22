@@ -95,9 +95,27 @@ export interface ExtensionMessage {
 		| "skills"
 		| "fileContent"
 		| "testConnectionResult"
+		// Terminal & Workspace events for desktop shell
+		| "terminalSessionStarted"
+		| "terminalOutput"
+		| "terminalSessionEnded"
+		| "workspaceFilesChanged"
 	text?: string
 	/** For fileContent: { path, content, error? } */
 	fileContent?: { path: string; content: string | null; error?: string }
+	id?: string
+	command?: string
+	cwd?: string
+	timestamp?: number
+	data?: string
+	exitCode?: number
+	files?: Array<{
+		path: string
+		absolutePath: string
+		changeType: "modified" | "created" | "deleted"
+		additions?: number
+		deletions?: number
+	}>
 	payload?: any // eslint-disable-line @typescript-eslint/no-explicit-any
 	checkpointWarning?: {
 		type: "WAIT_TIMEOUT" | "INIT_TIMEOUT"

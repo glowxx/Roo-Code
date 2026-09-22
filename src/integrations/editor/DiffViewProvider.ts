@@ -279,6 +279,23 @@ export class DiffViewProvider {
 		// Just in case the new content has a mix of varying EOL characters.
 		const normalizedNewContent = this.newContent.replace(/\r\n|\n/g, newContentEOL)
 
+		// Notify webview/host of file change with diff statistics
+		const fileExists = this.editType === "modify"
+		const changeType: "modified" | "created" | "deleted" = fileExists ? "modified" : "created"
+		const oldContent = this.originalContent ?? ""
+		let additions = 0
+		let deletions = 0
+		try {
+			const diffParts = diff.diffLines(oldContent, normalizedEditedContent)
+			for (const part of diffParts) {
+				if (part.added) additions += part.count || 0
+				if (part.removed) deletions += part.count || 0
+			}
+		} catch {
+			additions = normalizedEditedContent.split("\n").length
+		}
+		await this.notifyWorkspaceFilesChanged(this.relPath, changeType, additions, deletions)
+
 		if (normalizedEditedContent !== normalizedNewContent) {
 			// User made changes before approving edit.
 			const userEdits = formatResponse.createPrettyPatch(
@@ -655,9 +672,36 @@ export class DiffViewProvider {
 		// Get diagnostics before editing the file
 		this.preDiagnostics = vscode.languages.getDiagnostics()
 
+		let oldContent = this.originalContent
+		let fileExists = this.editType === "modify"
+		if (oldContent === undefined) {
+			try {
+				oldContent = await fs.readFile(absolutePath, "utf-8")
+				fileExists = true
+			} catch {
+				oldContent = ""
+				fileExists = false
+			}
+		}
+		const changeType: "modified" | "created" | "deleted" = fileExists ? "modified" : "created"
+
 		// Write the content directly to the file
 		await createDirectoriesForFile(absolutePath)
 		await fs.writeFile(absolutePath, content, "utf-8")
+
+		// Notify webview/host of file change with diff statistics
+		let additions = 0
+		let deletions = 0
+		try {
+			const diffParts = diff.diffLines(oldContent, content)
+			for (const part of diffParts) {
+				if (part.added) additions += part.count || 0
+				if (part.removed) deletions += part.count || 0
+			}
+		} catch {
+			additions = content.split("\n").length
+		}
+		await this.notifyWorkspaceFilesChanged(relPath, changeType, additions, deletions)
 
 		// Open the document to ensure diagnostics are loaded
 		// When openFile is false (PREVENT_FOCUS_DISRUPTION enabled), we only open in memory
@@ -722,6 +766,35 @@ export class DiffViewProvider {
 			newProblemsMessage,
 			userEdits: undefined,
 			finalContent: content,
+		}
+	}
+
+	/**
+	 * Notifies the webview / host of file changes with diff statistics.
+	 */
+	public async notifyWorkspaceFilesChanged(
+		relPath: string,
+		changeType: "modified" | "created" | "deleted",
+		additions: number,
+		deletions: number,
+	): Promise<void> {
+		try {
+			const absolutePath = path.resolve(this.cwd, relPath)
+			const task = this.taskRef.deref()
+			await task?.providerRef.deref()?.postMessageToWebview({
+				type: "workspaceFilesChanged",
+				files: [
+					{
+						path: relPath,
+						absolutePath,
+						changeType,
+						additions,
+						deletions,
+					},
+				],
+			})
+		} catch (err) {
+			console.error("Failed to notify workspaceFilesChanged:", err)
 		}
 	}
 }

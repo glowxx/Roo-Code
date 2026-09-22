@@ -7,6 +7,6 @@
 			"@/*": ["src/*"]
 		}
 	},
-	"include": ["src", "*.mjs"],
+	"include": ["src", "*.mjs", "test"],
 	"exclude": ["node_modules", "dist"]
 }

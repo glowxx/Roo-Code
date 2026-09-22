@@ -428,8 +428,23 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	agentHost.on("terminalLog", (entry) => {
 		broadcast({ type: "terminalLog", entry })
 	})
+	agentHost.on("terminalSessionStarted", (session) => {
+		broadcast({ type: "terminalSessionStarted", ...session })
+	})
+	agentHost.on("terminalOutput", (output) => {
+		broadcast({ type: "terminalOutput", ...output })
+	})
+	agentHost.on("terminalSessionEnded", (result) => {
+		broadcast({ type: "terminalSessionEnded", ...result })
+	})
 	agentHost.on("diffsUpdated", (diffs) => {
 		broadcast({ type: "diffsUpdated", diffs })
+	})
+	agentHost.on("workspaceFilesChanged", (files) => {
+		broadcast({ type: "workspaceFilesChanged", files })
+	})
+	agentHost.on("terminalLogsCleared", () => {
+		broadcast({ type: "terminalLogsCleared" } as any)
 	})
 	agentHost.on("workspaceChanged", (wsPath) => {
 		const normalized = wsPath && wsPath.trim() ? path.normalize(path.resolve(wsPath)) : ""
@@ -704,6 +719,82 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		if (pathname === "/api/diffs") {
 			res.writeHead(200, { "Content-Type": "application/json" })
 			res.end(JSON.stringify(agentHost.getDiffFiles()))
+			return
+		}
+
+		if (pathname === "/api/diff") {
+			const targetFilePath = parsedUrl.searchParams.get("path")
+			if (!targetFilePath) {
+				res.writeHead(400, { "Content-Type": "application/json" })
+				res.end(JSON.stringify({ error: "Missing path parameter" }))
+				return
+			}
+			const curWs = agentHost.getWorkspace()
+			if (!curWs) {
+				res.writeHead(400, { "Content-Type": "application/json" })
+				res.end(JSON.stringify({ error: "No workspace open" }))
+				return
+			}
+			const normTarget = targetFilePath.replace(/\\/g, "/")
+			const diffFiles = agentHost.getDiffFiles()
+			let entry = diffFiles.find((f) => f.filePath.replace(/\\/g, "/") === normTarget)
+			const absPath = path.resolve(curWs, normTarget)
+
+			let oldContent = entry?.oldContent
+			let newContent = entry?.newContent
+			let diffText = ""
+
+			try {
+				diffText = execSync(`git diff HEAD -- "${normTarget}"`, {
+					cwd: curWs,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "ignore"],
+					timeout: 4000,
+				})
+			} catch {}
+
+			if (!diffText) {
+				try {
+					diffText = execSync(`git diff -- "${normTarget}"`, {
+						cwd: curWs,
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "ignore"],
+						timeout: 3000,
+					})
+				} catch {}
+			}
+
+			if (oldContent === undefined) {
+				try {
+					oldContent = execSync(`git show HEAD:"${normTarget}"`, {
+						cwd: curWs,
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "ignore"],
+						timeout: 3000,
+					})
+				} catch {
+					oldContent = ""
+				}
+			}
+
+			if (newContent === undefined && fs.existsSync(absPath)) {
+				try {
+					newContent = fs.readFileSync(absPath, "utf-8")
+				} catch {}
+			}
+
+			res.writeHead(200, { "Content-Type": "application/json" })
+			res.end(
+				JSON.stringify({
+					filePath: normTarget,
+					status: entry?.status || (fs.existsSync(absPath) ? "modified" : "deleted"),
+					oldContent: oldContent ?? "",
+					newContent: newContent ?? "",
+					diff: diffText,
+					additions: entry?.additions ?? 0,
+					deletions: entry?.deletions ?? 0,
+				})
+			)
 			return
 		}
 
@@ -1532,6 +1623,9 @@ window.addEventListener("keydown", function(e) {
 						safeSend(ws, { type: "error", message: validation.error || "Access outside workspace forbidden" })
 					}
 				} else if (clientMsg.type === "getDiffs") {
+					if (typeof (agentHost as any).refreshDiffsFromGit === "function") {
+						;(agentHost as any).refreshDiffsFromGit()
+					}
 					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 				} else if (clientMsg.type === "clearTerminalLogs") {
 					if (typeof (agentHost as any).clearTerminalLogs === "function") {

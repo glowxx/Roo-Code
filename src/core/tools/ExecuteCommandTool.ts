@@ -295,6 +295,12 @@ export async function executeCommandInTerminal(
 			// Write to interceptor for persisted output
 			interceptor?.write(lines)
 
+			provider?.postMessageToWebview({
+				type: "terminalOutput",
+				id: executionId,
+				data: lines,
+			})
+
 			// Continue sending compressed output to webview for UI display (unchanged behavior)
 			const compressedOutput = Terminal.compressTerminalOutput(accumulatedOutput)
 			latestCompressedOutput = compressedOutput
@@ -342,6 +348,12 @@ export async function executeCommandInTerminal(
 				await commandOutputSayChain
 				await queueCommandOutputMessage(result, false, true)
 				completed = true
+
+				provider?.postMessageToWebview({
+					type: "terminalSessionEnded",
+					id: executionId,
+					exitCode: exitDetails?.exitCode ?? 0,
+				})
 			} finally {
 				// Signal that onCompleted has finished, so the main code can safely use persistedResult
 				resolveOnCompleted?.()
@@ -355,6 +367,11 @@ export async function executeCommandInTerminal(
 			const status: CommandExecutionStatus = { executionId, status: "exited", exitCode: details.exitCode }
 			provider?.postMessageToWebview({ type: "commandExecutionStatus", text: JSON.stringify(status) })
 			exitDetails = details
+			provider?.postMessageToWebview({
+				type: "terminalSessionEnded",
+				id: executionId,
+				exitCode: details?.exitCode ?? 0,
+			})
 		},
 	}
 
@@ -368,6 +385,14 @@ export async function executeCommandInTerminal(
 		// command actually executed.
 		workingDir = terminal.getCurrentWorkingDirectory()
 	}
+
+	provider?.postMessageToWebview({
+		type: "terminalSessionStarted",
+		id: executionId,
+		command,
+		cwd: workingDir,
+		timestamp: Date.now(),
+	})
 
 	const process = terminal.runCommand(command, callbacks)
 	task.terminalProcess = process

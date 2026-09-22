@@ -310,6 +310,38 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 				saveBounds()
 			})
 
+			// Forward agentHost terminal events to Electron renderer
+			agentHost.on("terminalSessionStarted", (session) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "terminalSessionStarted", ...session })
+				}
+			})
+			agentHost.on("terminalOutput", (output) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "terminalOutput", ...output })
+				}
+			})
+			agentHost.on("terminalSessionEnded", (result) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "terminalSessionEnded", ...result })
+				}
+			})
+			agentHost.on("terminalLog", (entry) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "terminalLog", entry })
+				}
+			})
+			agentHost.on("workspaceFilesChanged", (files) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "workspaceFilesChanged", files })
+				}
+			})
+			agentHost.on("diffsUpdated", (diffs) => {
+				if (!win.isDestroyed()) {
+					win.webContents.send("desktop:message-from-extension", { type: "diffsUpdated", diffs })
+				}
+			})
+
 			// IPC Handlers for communication with renderer
 			ipcMain.on("desktop:message-to-extension", (_event: any, message: any) => {
 				agentHost.sendToExtension(message as any)

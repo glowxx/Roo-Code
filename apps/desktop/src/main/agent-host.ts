@@ -3,6 +3,7 @@ import path from "path"
 import fs from "fs"
 import { fileURLToPath } from "url"
 import { EventEmitter } from "events"
+import { execSync } from "child_process"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -30,6 +31,7 @@ export class DesktopAgentHost extends EventEmitter {
 	private storageDir?: string
 	private status: AgentStatusType = "idle"
 	private terminalLogs: TerminalLogEntry[] = []
+	private archivedTerminalLogs: Array<{ workspace: string; timestamp: number; logs: TerminalLogEntry[] }> = []
 	private diffFiles: Map<string, DiffFileEntry> = new Map()
 	private provider: any = null
 	private currentWorkspaceEpoch = 0
@@ -55,10 +57,24 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 		this.pendingWorkspaceChangeAbortController = new AbortController()
 
+		// Archive active terminal sessions from previous workspace
+		if (this.terminalLogs.length > 0) {
+			this.archivedTerminalLogs.push({
+				workspace: this.currentWorkspace,
+				timestamp: Date.now(),
+				logs: [...this.terminalLogs],
+			})
+			if (this.archivedTerminalLogs.length > 20) {
+				this.archivedTerminalLogs.shift()
+			}
+		}
+		this.terminalLogs = []
+		this.emit("terminalLogsCleared")
+
 		if (!newWorkspace || typeof newWorkspace !== "string" || !newWorkspace.trim()) {
 			this.currentWorkspace = ""
 			this.diffFiles.clear()
-			this.terminalLogs = []
+			this.emit("diffsUpdated", [])
 			if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
 				const ws = (this.vscode as Record<string, unknown>).workspace as any
 				if (typeof ws.setWorkspaceFolders === "function") {
@@ -82,8 +98,7 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 
 		this.currentWorkspace = normalized
-		this.diffFiles.clear()
-		this.terminalLogs = []
+		this.refreshDiffsFromGit()
 		if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
 			const ws = (this.vscode as Record<string, unknown>).workspace as any
 			if (typeof ws.setWorkspaceFolders === "function") {
@@ -114,12 +129,121 @@ export class DesktopAgentHost extends EventEmitter {
 		return [...this.terminalLogs]
 	}
 
+	public getArchivedTerminalLogs(): Array<{ workspace: string; timestamp: number; logs: TerminalLogEntry[] }> {
+		return [...this.archivedTerminalLogs]
+	}
+
 	public clearTerminalLogs(): void {
+		if (this.terminalLogs.length > 0) {
+			this.archivedTerminalLogs.push({
+				workspace: this.currentWorkspace,
+				timestamp: Date.now(),
+				logs: [...this.terminalLogs],
+			})
+			if (this.archivedTerminalLogs.length > 20) {
+				this.archivedTerminalLogs.shift()
+			}
+		}
 		this.terminalLogs = []
+		this.emit("terminalLogsCleared")
 	}
 
 	public getDiffFiles(): DiffFileEntry[] {
 		return Array.from(this.diffFiles.values())
+	}
+
+	public refreshDiffsFromGit(): void {
+		this.diffFiles.clear()
+		if (!this.currentWorkspace || !fs.existsSync(this.currentWorkspace)) {
+			this.emit("diffsUpdated", this.getDiffFiles())
+			return
+		}
+
+		try {
+			const statusOutput = execSync("git status --porcelain -uall", {
+				cwd: this.currentWorkspace,
+				encoding: "utf-8",
+				timeout: 5000,
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim()
+
+			if (statusOutput) {
+				const lines = statusOutput.split("\n")
+				for (const line of lines) {
+					if (!line || line.length < 4) continue
+					const statusCode = line.substring(0, 2).trim()
+					let relPath = line.substring(3).trim()
+					if (relPath.startsWith('"') && relPath.endsWith('"')) {
+						relPath = relPath.slice(1, -1)
+					}
+					if (relPath.includes(" -> ")) {
+						relPath = relPath.split(" -> ")[1]!.trim()
+					}
+					const absPath = path.join(this.currentWorkspace, relPath)
+
+					let oldContent: string | undefined = undefined
+					let newContent: string | undefined = undefined
+					let fileStatus: "modified" | "added" | "deleted" = "modified"
+
+					if (statusCode === "??" || statusCode === "A") {
+						fileStatus = "added"
+						if (fs.existsSync(absPath)) {
+							try {
+								const stat = fs.statSync(absPath)
+								if (stat.size < 1024 * 1024) {
+									newContent = fs.readFileSync(absPath, "utf-8")
+								}
+							} catch {}
+						}
+					} else if (statusCode === "D") {
+						fileStatus = "deleted"
+						try {
+							oldContent = execSync(`git show HEAD:"${relPath.replace(/\\/g, "/")}"`, {
+								cwd: this.currentWorkspace,
+								encoding: "utf-8",
+								timeout: 3000,
+								stdio: ["ignore", "pipe", "ignore"],
+							})
+						} catch {}
+					} else {
+						fileStatus = "modified"
+						if (fs.existsSync(absPath)) {
+							try {
+								const stat = fs.statSync(absPath)
+								if (stat.size < 1024 * 1024) {
+									newContent = fs.readFileSync(absPath, "utf-8")
+								}
+							} catch {}
+						}
+						try {
+							oldContent = execSync(`git show HEAD:"${relPath.replace(/\\/g, "/")}"`, {
+								cwd: this.currentWorkspace,
+								encoding: "utf-8",
+								timeout: 3000,
+								stdio: ["ignore", "pipe", "ignore"],
+							})
+						} catch {}
+					}
+
+					const oldLines = oldContent ? oldContent.split("\n").length : 0
+					const newLines = newContent ? newContent.split("\n").length : 0
+
+					const entry: DiffFileEntry = {
+						filePath: relPath.replace(/\\/g, "/"),
+						oldContent,
+						newContent,
+						status: fileStatus,
+						additions: fileStatus === "added" ? Math.max(1, newLines) : Math.max(1, newLines >= oldLines ? newLines - oldLines : 1),
+						deletions: fileStatus === "deleted" ? Math.max(1, oldLines) : (oldLines > newLines ? oldLines - newLines : 0),
+					}
+					this.diffFiles.set(entry.filePath, entry)
+				}
+			}
+		} catch {
+			// Not a git repository or git command failed
+		}
+
+		this.emit("diffsUpdated", this.getDiffFiles())
 	}
 
 	public async init(): Promise<void> {
@@ -356,6 +480,20 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public async clearTask(): Promise<void> {
+		if (this.terminalLogs.length > 0) {
+			this.archivedTerminalLogs.push({
+				workspace: this.currentWorkspace,
+				timestamp: Date.now(),
+				logs: [...this.terminalLogs],
+			})
+			if (this.archivedTerminalLogs.length > 20) {
+				this.archivedTerminalLogs.shift()
+			}
+		}
+		this.terminalLogs = []
+		this.diffFiles.clear()
+		this.emit("terminalLogsCleared")
+		this.emit("diffsUpdated", [])
 		if (this.provider && typeof (this.provider as any).clearTask === "function") {
 			try {
 				await (this.provider as any).clearTask()
@@ -377,6 +515,163 @@ export class DesktopAgentHost extends EventEmitter {
 
 	private processExtensionMessage(msg: ExtensionMessage): void {
 		const raw = msg as Record<string, any>
+
+		// Handle terminal session lifecycle events from extension
+		if (raw.type === "terminalSessionStarted") {
+			const id = String(raw.id || `cmd-${Date.now()}`)
+			const command = String(raw.command || "")
+			const cwd = String(raw.cwd || this.currentWorkspace || "")
+			const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : Date.now()
+
+			let session = this.terminalLogs.find((s) => s.id === id)
+			if (!session) {
+				session = {
+					id,
+					command,
+					cwd,
+					timestamp,
+					output: "",
+					status: "running",
+				}
+				this.terminalLogs.push(session)
+				if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+			} else {
+				if (command) session.command = command
+				if (cwd) session.cwd = cwd
+				session.timestamp = timestamp
+				session.status = "running"
+			}
+			this.emit("terminalSessionStarted", {
+				id: session.id,
+				command: session.command,
+				cwd: session.cwd,
+				timestamp: session.timestamp,
+			})
+			this.emit("terminalLog", session)
+		} else if (raw.type === "terminalOutput") {
+			const id = String(raw.id || "")
+			const data = String(raw.data || "")
+			let session = id ? this.terminalLogs.find((s) => s.id === id) : undefined
+			if (!session && this.terminalLogs.length > 0) {
+				session = this.terminalLogs[this.terminalLogs.length - 1]
+			}
+			if (session) {
+				session.output = (session.output || "") + data
+				this.emit("terminalOutput", { id: session.id, data })
+				this.emit("terminalLog", session)
+			}
+		} else if (raw.type === "terminalSessionEnded") {
+			const id = String(raw.id || "")
+			const exitCode = typeof raw.exitCode === "number" ? raw.exitCode : 0
+			let session = id ? this.terminalLogs.find((s) => s.id === id) : undefined
+			if (!session && this.terminalLogs.length > 0) {
+				session = this.terminalLogs[this.terminalLogs.length - 1]
+			}
+			if (session) {
+				session.exitCode = exitCode
+				session.status = exitCode === 0 ? "completed" : "error"
+				this.emit("terminalSessionEnded", { id: session.id, exitCode })
+				this.emit("terminalLog", session)
+			}
+		} else if (raw.type === "commandExecutionStatus") {
+			let statusObj: any = null
+			try {
+				statusObj = typeof raw.text === "string" ? JSON.parse(raw.text) : (raw.status ? raw : null)
+			} catch {}
+
+			if (statusObj && statusObj.executionId) {
+				const execId = String(statusObj.executionId)
+				let session = this.terminalLogs.find((s) => s.id === execId)
+
+				if (statusObj.status === "started") {
+					if (!session) {
+						session = {
+							id: execId,
+							command: statusObj.command || "",
+							cwd: this.currentWorkspace || "",
+							timestamp: Date.now(),
+							output: "",
+							status: "running",
+						}
+						this.terminalLogs.push(session)
+						if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+						this.emit("terminalSessionStarted", {
+							id: session.id,
+							command: session.command,
+							cwd: session.cwd,
+							timestamp: session.timestamp,
+						})
+						this.emit("terminalLog", session)
+					}
+				} else if (statusObj.status === "output") {
+					if (!session) {
+						session = {
+							id: execId,
+							command: "",
+							cwd: this.currentWorkspace || "",
+							timestamp: Date.now(),
+							output: statusObj.output || "",
+							status: "running",
+						}
+						this.terminalLogs.push(session)
+						if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+					} else {
+						session.output = statusObj.output || session.output
+					}
+					this.emit("terminalOutput", { id: execId, data: statusObj.output || "" })
+					this.emit("terminalLog", session)
+				} else if (statusObj.status === "exited") {
+					const exitCode = typeof statusObj.exitCode === "number" ? statusObj.exitCode : 0
+					if (session) {
+						session.exitCode = exitCode
+						session.status = exitCode === 0 ? "completed" : "error"
+					}
+					this.emit("terminalSessionEnded", { id: execId, exitCode })
+					if (session) this.emit("terminalLog", session)
+				} else if (statusObj.status === "timeout" || statusObj.status === "fallback") {
+					if (session) {
+						session.status = "error"
+						session.exitCode = -1
+						this.emit("terminalSessionEnded", { id: execId, exitCode: -1 })
+						this.emit("terminalLog", session)
+					}
+				}
+			}
+		}
+
+		// Handle workspace files changed event from engine
+		if (raw.type === "workspaceFilesChanged" && Array.isArray(raw.files)) {
+			for (const file of raw.files) {
+				const relPath = (file.path || "").replace(/\\/g, "/")
+				const absPath = file.absolutePath || (this.currentWorkspace ? path.resolve(this.currentWorkspace, relPath) : relPath)
+				let newContent: string | undefined = undefined
+				const existing = this.diffFiles.get(relPath)
+				let oldContent: string | undefined = existing?.oldContent
+
+				if (file.changeType !== "deleted" && fs.existsSync(absPath)) {
+					try {
+						newContent = fs.readFileSync(absPath, "utf-8")
+					} catch {}
+				}
+
+				const status: "modified" | "added" | "deleted" =
+					file.changeType === "created" ? "added" : file.changeType === "deleted" ? "deleted" : "modified"
+
+				const entry: DiffFileEntry = {
+					filePath: relPath,
+					oldContent,
+					newContent,
+					status,
+					additions: typeof file.additions === "number" ? file.additions : 0,
+					deletions: typeof file.deletions === "number" ? file.deletions : 0,
+				}
+				this.diffFiles.set(relPath, entry)
+			}
+			this.emit("workspaceFilesChanged", raw.files)
+			this.emit("diffsUpdated", this.getDiffFiles())
+			this.refreshGitDiffs().catch(() => {})
+		}
+
 		// Detect agent status transitions
 		if (raw.type === "say") {
 			if (raw.say === "tool") {
@@ -386,8 +681,15 @@ export class DesktopAgentHost extends EventEmitter {
 					if (toolData && toolData.tool === "execute_command") {
 						this.recordTerminalLog(toolData.command || "")
 					}
-					if (toolData && (toolData.tool === "write_to_file" || toolData.tool === "apply_diff")) {
-						this.recordFileChange(toolData.path, toolData.content || toolData.diff)
+					if (
+						toolData &&
+						(toolData.tool === "write_to_file" ||
+							toolData.tool === "apply_diff" ||
+							toolData.tool === "editedExistingFile" ||
+							toolData.tool === "newFileCreated" ||
+							toolData.tool === "appliedDiff")
+					) {
+						this.handleToolFileChange(toolData)
 					}
 				} catch {
 					// text wasn't JSON
@@ -425,11 +727,18 @@ export class DesktopAgentHost extends EventEmitter {
 			id: `cmd-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
 			timestamp: Date.now(),
 			command,
+			cwd: this.currentWorkspace,
 			output: "Running command in workspace...",
 			status: "running",
 		}
 		this.terminalLogs.push(entry)
-		if (this.terminalLogs.length > 100) this.terminalLogs.shift()
+		if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+		this.emit("terminalSessionStarted", {
+			id: entry.id,
+			command: entry.command,
+			cwd: entry.cwd || "",
+			timestamp: entry.timestamp,
+		})
 		this.emit("terminalLog", entry)
 	}
 
@@ -439,6 +748,7 @@ export class DesktopAgentHost extends EventEmitter {
 			if (latest) {
 				latest.output = output || "(Command completed with no output)"
 				latest.status = "completed"
+				this.emit("terminalOutput", { id: latest.id, data: output })
 				this.emit("terminalLog", latest)
 			}
 		}
@@ -448,36 +758,178 @@ export class DesktopAgentHost extends EventEmitter {
 		for (const log of this.terminalLogs) {
 			if (log.status === "running") {
 				log.status = "completed"
+				this.emit("terminalSessionEnded", { id: log.id, exitCode: log.exitCode ?? 0 })
+				this.emit("terminalLog", log)
 			}
 		}
 	}
 
-	private recordFileChange(filePath: string, content?: string): void {
+	private handleToolFileChange(toolData: any): void {
+		const filePath = toolData.path
 		if (!filePath) return
-		const absPath = path.isAbsolute(filePath) ? filePath : path.join(this.currentWorkspace, filePath)
-		const relPath = path.relative(this.currentWorkspace, absPath)
-		let oldContent: string | undefined = undefined
+
+		const absPath = path.isAbsolute(filePath)
+			? path.normalize(filePath)
+			: path.normalize(path.resolve(this.currentWorkspace || "", filePath))
+		const relPath = this.currentWorkspace
+			? path.relative(this.currentWorkspace, absPath).replace(/\\/g, "/")
+			: filePath.replace(/\\/g, "/")
+
+		let oldContent: string | undefined = toolData.originalContent
+		let newContent: string | undefined = typeof toolData.content === "string" ? toolData.content : undefined
 		const fileExists = fs.existsSync(absPath)
-		if (fileExists) {
+
+		if (fileExists && newContent === undefined) {
 			try {
-				oldContent = fs.readFileSync(absPath, "utf-8")
-			} catch {
-				// file read error
+				newContent = fs.readFileSync(absPath, "utf-8")
+			} catch {}
+		}
+
+		const existing = this.diffFiles.get(relPath)
+		if (!oldContent && existing?.oldContent) {
+			oldContent = existing.oldContent
+		}
+
+		let status: "modified" | "added" | "deleted" = "modified"
+		if (toolData.tool === "newFileCreated" || (!fileExists && !existing)) {
+			status = "added"
+		} else if (toolData.tool === "deleted") {
+			status = "deleted"
+		}
+
+		let additions = 0
+		let deletions = 0
+
+		if (toolData.diffStats && typeof toolData.diffStats === "object") {
+			additions = toolData.diffStats.added ?? 0
+			deletions = toolData.diffStats.removed ?? 0
+		} else if (newContent) {
+			const newLines = newContent.split("\n").length
+			const oldLines = oldContent ? oldContent.split("\n").length : 0
+			if (status === "added") {
+				additions = newLines
+				deletions = 0
+			} else {
+				additions = Math.max(1, newLines)
+				deletions = oldLines > 0 && newLines > 0 ? Math.max(0, oldLines - newLines) : 0
 			}
 		}
 
-		const oldLines = oldContent ? oldContent.split("\n").length : 0
-		const newLines = content ? content.split("\n").length : 0
-
 		const entry: DiffFileEntry = {
 			filePath: relPath,
-			oldContent,
-			newContent: content,
-			status: fileExists ? "modified" : "added",
-			additions: Math.max(1, newLines),
-			deletions: oldLines > 0 && newLines > 0 ? Math.max(0, oldLines - newLines) : 0,
+			oldContent: oldContent ?? existing?.oldContent,
+			newContent: newContent ?? existing?.newContent,
+			status,
+			additions: additions || existing?.additions || 0,
+			deletions: deletions || existing?.deletions || 0,
 		}
+
 		this.diffFiles.set(relPath, entry)
 		this.emit("diffsUpdated", this.getDiffFiles())
+		this.emit("workspaceFilesChanged", [
+			{
+				path: relPath,
+				absolutePath: absPath,
+				changeType: status === "added" ? "created" : status === "deleted" ? "deleted" : "modified",
+				additions: entry.additions,
+				deletions: entry.deletions,
+			},
+		])
+		this.refreshGitDiffs().catch(() => {})
+	}
+
+	public async refreshGitDiffs(): Promise<void> {
+		if (!this.currentWorkspace) return
+		try {
+			const statusOutput = execSync("git status --porcelain", {
+				cwd: this.currentWorkspace,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 5000,
+			})
+
+			if (!statusOutput || !statusOutput.trim()) {
+				return
+			}
+
+			const lines = statusOutput.split("\n").filter((l) => l.trim().length > 0)
+			for (const line of lines) {
+				const statusCode = line.substring(0, 2)
+				let relPath = line.substring(3).trim()
+				if (relPath.startsWith('"') && relPath.endsWith('"')) {
+					relPath = relPath.slice(1, -1)
+				}
+				if (relPath.includes(" -> ")) {
+					relPath = relPath.split(" -> ")[1]?.trim() || relPath
+				}
+				const cleanRelPath = relPath.replace(/\\/g, "/")
+				const absPath = path.resolve(this.currentWorkspace, cleanRelPath)
+
+				const isDeleted = statusCode.includes("D")
+				const isUntracked = statusCode === "??"
+				const isAdded = statusCode.includes("A") || isUntracked
+
+				let status: "modified" | "added" | "deleted" = "modified"
+				if (isDeleted) status = "deleted"
+				else if (isAdded) status = "added"
+
+				let oldContent: string | undefined = undefined
+				let newContent: string | undefined = undefined
+				let additions = 0
+				let deletions = 0
+
+				if (!isDeleted && fs.existsSync(absPath)) {
+					try {
+						newContent = fs.readFileSync(absPath, "utf-8")
+					} catch {}
+				}
+
+				if (!isUntracked) {
+					try {
+						oldContent = execSync(`git show HEAD:"${cleanRelPath}"`, {
+							cwd: this.currentWorkspace,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "ignore"],
+							timeout: 3000,
+						})
+					} catch {}
+
+					try {
+						const numstat = execSync(`git diff --numstat HEAD -- "${cleanRelPath}"`, {
+							cwd: this.currentWorkspace,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "ignore"],
+							timeout: 3000,
+						}).trim()
+						if (numstat) {
+							const parts = numstat.split(/\s+/)
+							if (parts[0]) additions = parseInt(parts[0], 10) || 0
+							if (parts[1]) deletions = parseInt(parts[1], 10) || 0
+						}
+					} catch {}
+				}
+
+				if (isAdded && newContent) {
+					additions = newContent.split("\n").length
+					deletions = 0
+				} else if (isDeleted && oldContent) {
+					additions = 0
+					deletions = oldContent.split("\n").length
+				}
+
+				const existing = this.diffFiles.get(cleanRelPath)
+				this.diffFiles.set(cleanRelPath, {
+					filePath: cleanRelPath,
+					oldContent: oldContent ?? existing?.oldContent,
+					newContent: newContent ?? existing?.newContent,
+					status,
+					additions: additions || existing?.additions || 0,
+					deletions: deletions || existing?.deletions || 0,
+				})
+			}
+			this.emit("diffsUpdated", this.getDiffFiles())
+		} catch {
+			// Git error or not a git repository
+		}
 	}
 }

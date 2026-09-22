@@ -12,6 +12,7 @@ export interface TerminalLogEntry {
 	id: string
 	timestamp: number
 	command: string
+	cwd?: string
 	output: string
 	exitCode?: number
 	status: "running" | "completed" | "error"
@@ -67,6 +68,19 @@ export type DesktopServerMessage =
 	| { type: "workspaceInfo"; workspace: WorkspaceInfo }
 	| { type: "agentStatus"; status: AgentStatusType }
 	| { type: "terminalLog"; entry: TerminalLogEntry }
+	| { type: "terminalSessionStarted"; id: string; command: string; cwd: string; timestamp: number }
+	| { type: "terminalOutput"; id: string; data: string }
+	| { type: "terminalSessionEnded"; id: string; exitCode: number }
+	| {
+			type: "workspaceFilesChanged"
+			files: Array<{
+				path: string
+				absolutePath: string
+				changeType: "modified" | "created" | "deleted"
+				additions?: number
+				deletions?: number
+			}>
+	  }
 	| { type: "diffsUpdated"; diffs: DiffFileEntry[] }
 	| { type: "sidebarData"; data: SidebarData }
 	| {
