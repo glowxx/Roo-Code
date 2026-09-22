@@ -1046,3 +1046,97 @@ describe("ChatView - Context Condensing Indicator Tests", () => {
 		)
 	})
 })
+
+describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
+	beforeEach(() => vi.clearAllMocks())
+
+	it("does NOT render the oversized [ Continue ] [ New Chat ] button bar when task is completed or idle", async () => {
+		const { queryByText } = renderChatView()
+
+		// Simulate task ending with completion_result ask
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Do some work",
+				},
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now(),
+					text: "Task completed successfully",
+					partial: false,
+				},
+			],
+		})
+
+		await waitFor(() => {
+			// Neither "Continue" nor "New Chat" button bar should be rendered above the textarea
+			expect(queryByText("Continue")).toBeNull()
+			expect(queryByText("New Chat")).toBeNull()
+		})
+	})
+
+	it("does NOT render [ Continue ] [ New Chat ] when task is resumed from history in resume_completed_task state", async () => {
+		const { queryByText } = renderChatView()
+
+		mockPostMessage({
+			resumeTaskId: "task-123",
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Do some work",
+				},
+				{
+					type: "say",
+					say: "text",
+					ts: Date.now() - 1000,
+					text: "Final summary of completed work",
+				},
+				{
+					type: "ask",
+					ask: "resume_completed_task",
+					ts: Date.now(),
+					text: "",
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(queryByText("Continue")).toBeNull()
+			expect(queryByText("New Chat")).toBeNull()
+		})
+	})
+
+	it("does NOT render the oversized full-width button bar for resume_task state", async () => {
+		const { queryByText } = renderChatView()
+
+		mockPostMessage({
+			resumeTaskId: "task-paused-123",
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Work paused",
+				},
+				{
+					type: "ask",
+					ask: "resume_task",
+					ts: Date.now(),
+					text: "",
+				},
+			],
+		})
+
+		await waitFor(() => {
+			// Oversized "New Chat" button must never appear in chat container
+			expect(queryByText("New Chat")).toBeNull()
+		})
+	})
+})
+

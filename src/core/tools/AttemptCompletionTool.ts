@@ -132,6 +132,24 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 
 			if (response === "yesButtonClicked") {
 				this.emitTaskCompleted(task)
+				try {
+					const provider = task.providerRef.deref() as any
+					if (
+						provider &&
+						typeof provider.getTaskWithId === "function" &&
+						typeof provider.updateTaskHistory === "function"
+					) {
+						const { historyItem } = await provider.getTaskWithId(task.taskId)
+						if (historyItem && historyItem.status !== "completed") {
+							await provider.updateTaskHistory({
+								...historyItem,
+								status: "completed",
+							})
+						}
+					}
+				} catch {
+					// non-fatal
+				}
 				return
 			}
 

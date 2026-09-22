@@ -218,8 +218,20 @@ export class ClineProvider
 
 			// Create named listener functions so we can remove them later.
 			const onTaskStarted = () => this.emit(RooCodeEventName.TaskStarted, instance.taskId)
-			const onTaskCompleted = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) =>
+			const onTaskCompleted = async (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => {
 				this.emit(RooCodeEventName.TaskCompleted, taskId, tokenUsage, toolUsage)
+				try {
+					const { historyItem } = await this.getTaskWithId(taskId)
+					if (historyItem && historyItem.status !== "completed") {
+						await this.updateTaskHistory({
+							...historyItem,
+							status: "completed",
+						})
+					}
+				} catch {
+					// non-fatal
+				}
+			}
 			const onTaskAborted = async () => {
 				this.emit(RooCodeEventName.TaskAborted, instance.taskId)
 

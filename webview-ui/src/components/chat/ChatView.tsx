@@ -378,36 +378,22 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							}
 							setSendingDisabled(isPartial)
 							setClineAsk("completion_result")
-							setEnableButtons(!isPartial)
+							setEnableButtons(false)
 							setPrimaryButtonText(undefined)
 							setSecondaryButtonText(undefined)
 							break
 						case "resume_task":
 							setSendingDisabled(false)
 							setClineAsk("resume_task")
-							setEnableButtons(true)
-							// For completed subtasks, show "Start New Task" instead of "Resume"
-							// A subtask is considered completed if:
-							// - It has a parentTaskId AND
-							// - Its messages contain a completion_result (either ask or say)
-							const isCompletedSubtask =
-								currentTaskItem?.parentTaskId &&
-								messages.some(
-									(msg) => msg.ask === "completion_result" || msg.say === "completion_result",
-								)
-							if (isCompletedSubtask) {
-								setPrimaryButtonText(undefined)
-								setSecondaryButtonText(undefined)
-							} else {
-								setPrimaryButtonText(t("chat:resumeTask.title"))
-								setSecondaryButtonText(t("chat:terminate.title"))
-							}
+							setEnableButtons(false)
+							setPrimaryButtonText(undefined)
+							setSecondaryButtonText(undefined)
 							setDidClickCancel(false) // special case where we reset the cancel button state
 							break
 						case "resume_completed_task":
 							setSendingDisabled(false)
 							setClineAsk("resume_completed_task")
-							setEnableButtons(true)
+							setEnableButtons(false)
 							setPrimaryButtonText(undefined)
 							setSecondaryButtonText(undefined)
 							setDidClickCancel(false)
@@ -449,19 +435,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			}
 		}
 	}, [lastMessage, secondLastMessage])
-
-	// Update button text when messages change (e.g., completion_result is added) for subtasks in resume_task state
-	useEffect(() => {
-		if (clineAsk === "resume_task" && currentTaskItem?.parentTaskId) {
-			const hasCompletionResult = messages.some(
-				(msg) => msg.ask === "completion_result" || msg.say === "completion_result",
-			)
-			if (hasCompletionResult) {
-				setPrimaryButtonText(t("chat:startNewTask.title"))
-				setSecondaryButtonText(undefined)
-			}
-		}
-	}, [clineAsk, currentTaskItem?.parentTaskId, messages, t])
 
 	useEffect(() => {
 		if (messages.length === 0) {
@@ -728,6 +701,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 	}, [inputValue, selectedImages])
 
+	const handleResumeTask = useCallback(() => {
+		vscode.postMessage({ type: "askResponse", askResponse: "yesButtonClicked" })
+		setClineAsk(undefined)
+	}, [])
+
 	// This logic depends on the useEffect[messages] above to set clineAsk,
 	// after which buttons are shown and we then send an askResponse to the
 	// extension.
@@ -821,7 +799,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			switch (clineAsk) {
 				case "api_req_failed":
 				case "mistake_limit_reached":
-				case "resume_task":
 					startNewTask()
 					break
 				case "command":
@@ -1749,9 +1726,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 																? t("chat:runCommand.tooltip")
 																: primaryButtonText === t("chat:startNewTask.title")
 																	? t("chat:startNewTask.tooltip")
-																	: primaryButtonText === t("chat:resumeTask.title")
-																		? t("chat:resumeTask.tooltip")
-																		: primaryButtonText ===
+																	: primaryButtonText ===
 																			  t("chat:proceedAnyways.title")
 																			? t("chat:proceedAnyways.tooltip")
 																			: primaryButtonText ===
@@ -1775,9 +1750,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 													? t("chat:startNewTask.tooltip")
 													: secondaryButtonText === t("chat:reject.title")
 														? t("chat:reject.tooltip")
-														: secondaryButtonText === t("chat:terminate.title")
-															? t("chat:terminate.tooltip")
-															: secondaryButtonText === t("chat:killCommand.title")
+														: secondaryButtonText === t("chat:killCommand.title")
 																? t("chat:killCommand.tooltip")
 																: secondaryButtonText === t("chat:cancel.title")
 																	? t("chat:cancel.tooltip")
@@ -1849,6 +1822,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				selectedImages={selectedImages}
 				setSelectedImages={setSelectedImages}
 				onSend={() => handleSendMessage(inputValue, selectedImages)}
+				onResume={clineAsk === "resume_task" ? handleResumeTask : undefined}
 				onSelectImages={selectImages}
 				shouldDisableImages={shouldDisableImages}
 				onHeightChange={() => {

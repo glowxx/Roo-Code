@@ -59,6 +59,7 @@ interface ChatTextAreaProps {
 	isStreaming?: boolean
 	onStop?: () => void
 	onEnqueueMessage?: () => void
+	onResume?: () => void
 	contextTokens?: number
 }
 
@@ -83,6 +84,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			isStreaming = false,
 			onStop,
 			onEnqueueMessage,
+			onResume,
 			contextTokens = 0,
 		},
 		ref,
@@ -1212,6 +1214,28 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 												"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
 											)}>
 											<ListEnd className="w-4 h-4" />
+										</button>
+									</StandardTooltip>
+								)}
+								{/* Discrete inline Resume button for paused/resumable tasks */}
+								{onResume && !hasInputContent && !isStreaming && (
+									<StandardTooltip content={t("chat:resumeTask.tooltip")}>
+										<button
+											aria-label={t("chat:resumeTask.title")}
+											type="button"
+											disabled={false}
+											onClick={onResume}
+											className={cn(
+												"relative inline-flex items-center justify-center gap-1",
+												"h-7 px-2 rounded-md",
+												"bg-vscode-button-background hover:bg-vscode-button-hoverBackground text-vscode-button-foreground",
+												"border-none cursor-pointer text-xs font-medium",
+												"transition-all duration-150",
+												"opacity-100 hover:opacity-100 pointer-events-auto",
+												"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
+											)}>
+											<span className="codicon codicon-play text-xs" />
+											<span>{t("chat:resumeTask.title")}</span>
 										</button>
 									</StandardTooltip>
 								)}

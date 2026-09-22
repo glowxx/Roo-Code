@@ -417,6 +417,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// Cloud Sync Tracking
 	// Initial status for the task's history item (set at creation time to avoid race conditions)
 	private readonly initialStatus?: "active" | "delegated" | "completed"
+	private readonly historyItem?: HistoryItem
 
 	// MessageManager for high-level message operations (lazy initialized)
 	private _messageManager?: MessageManager
@@ -501,6 +502,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.parentTask = parentTask
 		this.taskNumber = taskNumber
 		this.initialStatus = initialStatus
+		this.historyItem = historyItem
 
 		this.assistantMessageParser = undefined
 
@@ -2199,8 +2201,30 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				.reverse()
 				.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task")) // Could be multiple resume tasks.
 
+			// Determine whether the task is completed or resting in an idle state.
+			// A task is completed/idle if:
+			// 1. Its status is "completed".
+			// 2. The last message is a completion_result (ask or say).
+			// 3. Any message in history is a completion_result.
+			// 4. The model finished presenting output (e.g. say: "text") without unhandled errors or cancellations.
+			const hasCompletionMessage =
+				lastClineMessage?.ask === "completion_result" ||
+				lastClineMessage?.say === "completion_result" ||
+				this.clineMessages.some((m) => m.ask === "completion_result" || m.say === "completion_result")
+
+			const isFinishedTextResponse =
+				lastClineMessage?.say === "text" &&
+				!lastClineMessage.partial &&
+				!this.clineMessages.some((m) => m.say === "error" && m === lastClineMessage)
+
+			const isTaskCompletedOrIdle =
+				this.initialStatus === "completed" ||
+				this.historyItem?.status === "completed" ||
+				hasCompletionMessage ||
+				isFinishedTextResponse
+
 			let askType: ClineAsk
-			if (lastClineMessage?.ask === "completion_result") {
+			if (isTaskCompletedOrIdle) {
 				askType = "resume_completed_task"
 			} else {
 				askType = "resume_task"
