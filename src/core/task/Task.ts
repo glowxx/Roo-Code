@@ -1332,9 +1332,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		if (approval.decision === "approve") {
 			if (type === "command") {
-				if (!isSafetyModelConfigured(state)) {
-					approval = { decision: "ask" }
-				} else {
+				if (isSafetyModelConfigured(state)) {
 					const recentCommands = this.clineMessages
 						.filter((m) => m.ask === "command" && m.text && m.ts !== askTs)
 						.slice(-5)
@@ -1376,6 +1374,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						await this.say("command_safety_warning", JSON.stringify(evaluation || SAFETY_EVALUATION_FALLBACK_RESULT))
 						this.lastMessageTs = askTs
 					}
+				} else {
+					this.approveAsk()
 				}
 			} else {
 				this.approveAsk()

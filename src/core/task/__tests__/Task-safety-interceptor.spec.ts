@@ -269,7 +269,7 @@ describe("Task safety interceptor", () => {
 		expect(result.response).toBe("yesButtonClicked")
 	})
 
-	it("blocks auto-approval when safety model is not configured (disabled)", async () => {
+	it("allows auto-approval when safety model is not configured (disabled) and command is allowed", async () => {
 		mockProvider.getState.mockResolvedValue({
 			...defaultState,
 			commandSafetyConfig: {
@@ -281,26 +281,34 @@ describe("Task safety interceptor", () => {
 		})
 		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate")
 
-		const askPromise = task.ask("command", "echo hello")
+		const result = await task.ask("command", "echo hello")
 
-		await new Promise((r) => setTimeout(r, 50))
-
-		expect((task as any).askResponse).toBeUndefined()
-		expect(evaluateSpy).not.toHaveBeenCalled()
-
-		task.handleWebviewAskResponse("yesButtonClicked")
-		const result = await askPromise
 		expect(result.response).toBe("yesButtonClicked")
+		expect(evaluateSpy).not.toHaveBeenCalled()
 	})
 
-	it("blocks auto-approval when safety model is missing configuration", async () => {
+	it("allows auto-approval when safety model is missing configuration and command is allowed", async () => {
 		mockProvider.getState.mockResolvedValue({
 			...defaultState,
 			commandSafetyConfig: undefined,
 		})
 		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate")
 
-		const askPromise = task.ask("command", "echo hello")
+		const result = await task.ask("command", "echo hello")
+
+		expect(result.response).toBe("yesButtonClicked")
+		expect(evaluateSpy).not.toHaveBeenCalled()
+	})
+
+	it("blocks auto-approval when safety model is not configured and command is not allowed", async () => {
+		mockProvider.getState.mockResolvedValue({
+			...defaultState,
+			commandSafetyConfig: undefined,
+			allowedCommands: ["echo", "ls"],
+		})
+		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate")
+
+		const askPromise = task.ask("command", "reboot")
 
 		await new Promise((r) => setTimeout(r, 50))
 
@@ -312,32 +320,48 @@ describe("Task safety interceptor", () => {
 		expect(result.response).toBe("yesButtonClicked")
 	})
 
-	it("blocks auto-approval when safety model has no apiKey and cannot be resolved", async () => {
+	it("auto-approves git diff when alwaysAllowExecute is true and CommandSafetyJudge returns safe", async () => {
+		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: true,
+			riskLevel: "safe",
+			reason: "Safe git diff inspect operation",
+		})
+
+		const result = await task.ask("command", "git diff -- packages/types")
+
+		expect(result.response).toBe("yesButtonClicked")
+		expect(evaluateSpy).toHaveBeenCalledTimes(1)
+	})
+
+	it("auto-approves git diff even when allowedCommands list is empty (default safe commands)", async () => {
 		mockProvider.getState.mockResolvedValue({
 			...defaultState,
-			commandSafetyConfig: {
-				enabled: true,
-				provider: "openai",
-				modelId: "gpt-4o",
-				apiKey: "",
-			},
-			apiConfiguration: {
-				apiProvider: "anthropic",
-				apiKey: "anthropic-key-only",
-			},
+			allowedCommands: [],
+		})
+		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate").mockResolvedValue({
+			isSafe: true,
+			riskLevel: "safe",
+			reason: "Safe git diff inspect operation",
+		})
+
+		const result = await task.ask("command", "git diff")
+
+		expect(result.response).toBe("yesButtonClicked")
+		expect(evaluateSpy).toHaveBeenCalledTimes(1)
+	})
+
+	it("auto-approves git diff when safety model is disabled and allowedCommands is empty", async () => {
+		mockProvider.getState.mockResolvedValue({
+			...defaultState,
+			commandSafetyConfig: undefined,
+			allowedCommands: [],
 		})
 		const evaluateSpy = vi.spyOn(CommandSafetyJudge, "evaluate")
 
-		const askPromise = task.ask("command", "echo hello")
+		const result = await task.ask("command", "git diff")
 
-		await new Promise((r) => setTimeout(r, 50))
-
-		expect((task as any).askResponse).toBeUndefined()
-		expect(evaluateSpy).not.toHaveBeenCalled()
-
-		task.handleWebviewAskResponse("yesButtonClicked")
-		const result = await askPromise
 		expect(result.response).toBe("yesButtonClicked")
+		expect(evaluateSpy).not.toHaveBeenCalled()
 	})
 
 	it("extracts recent commands from clineMessages for contextual analysis", async () => {

@@ -228,6 +228,8 @@
 	"commandOutput": "Wyjście polecenia",
 	"commandExecution": {
 		"running": "Wykonywanie",
+		"awaitingApproval": "Wymaga zatwierdzenia",
+		"command": "Polecenie",
 		"abort": "Przerwij",
 		"pid": "PID: {{pid}}",
 		"exitStatus": "Zakończono ze statusem {{exitCode}}",

@@ -1,4 +1,5 @@
 import { parseCommand } from "../../shared/parse-command"
+import { DEFAULT_SAFE_COMMANDS } from "@roo-code/types"
 
 /**
  * Detect dangerous parameter substitutions that could lead to command execution.
@@ -130,19 +131,21 @@ export function isAutoApprovedSingleCommand(
 		return true
 	}
 
+	const effectiveAllowed = [...new Set([...DEFAULT_SAFE_COMMANDS, ...(allowedCommands || [])])]
+
 	// If no allowlist configured, nothing can be auto-approved
-	if (!allowedCommands?.length) {
+	if (!effectiveAllowed.length) {
 		return false
 	}
 
 	// Check if wildcard is present in allowlist
-	const hasWildcard = allowedCommands.some((cmd) => cmd.toLowerCase() === "*")
+	const hasWildcard = effectiveAllowed.some((cmd) => cmd.toLowerCase() === "*")
 
 	// If no denylist provided (undefined), use simple allowlist logic
 	if (deniedCommands === undefined) {
 		const trimmedCommand = command.trim().toLowerCase()
 
-		return allowedCommands.some((prefix) => {
+		return effectiveAllowed.some((prefix) => {
 			const lowerPrefix = prefix.toLowerCase()
 			// Handle wildcard "*" - it matches any command
 			return lowerPrefix === "*" || trimmedCommand.startsWith(lowerPrefix)
@@ -151,7 +154,7 @@ export function isAutoApprovedSingleCommand(
 
 	// Find longest matching prefix in both lists
 	const longestDeniedMatch = findLongestPrefixMatch(command, deniedCommands)
-	const longestAllowedMatch = findLongestPrefixMatch(command, allowedCommands)
+	const longestAllowedMatch = findLongestPrefixMatch(command, effectiveAllowed)
 
 	// Special case: if wildcard is present and no denylist match, auto-approve
 	if (hasWildcard && !longestDeniedMatch) {
@@ -187,9 +190,11 @@ export function isAutoDeniedSingleCommand(
 	// If no denylist configured, nothing can be auto-denied
 	if (!deniedCommands?.length) return false
 
+	const effectiveAllowed = [...new Set([...DEFAULT_SAFE_COMMANDS, ...(allowedCommands || [])])]
+
 	// Find longest matching prefix in both lists
 	const longestDeniedMatch = findLongestPrefixMatch(command, deniedCommands)
-	const longestAllowedMatch = findLongestPrefixMatch(command, allowedCommands || [])
+	const longestAllowedMatch = findLongestPrefixMatch(command, effectiveAllowed)
 
 	// Must have a denylist match to be auto-denied
 	if (!longestDeniedMatch) return false
@@ -344,8 +349,10 @@ export function getSingleCommandDecision(
 ): CommandDecision {
 	if (!command) return "auto_approve"
 
+	const effectiveAllowed = [...new Set([...DEFAULT_SAFE_COMMANDS, ...(allowedCommands || [])])]
+
 	// Find longest matching prefixes in both lists
-	const longestAllowedMatch = findLongestPrefixMatch(command, allowedCommands || [])
+	const longestAllowedMatch = findLongestPrefixMatch(command, effectiveAllowed)
 	const longestDeniedMatch = findLongestPrefixMatch(command, deniedCommands || [])
 
 	// If only allowlist has a match, auto-approve

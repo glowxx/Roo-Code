@@ -103,3 +103,20 @@ export function isSafetyModelConfigured(state?: Partial<ExtensionState> | null):
 	const fallbackKey = resolveProviderApiKey(provider, state.apiConfiguration)
 	return Boolean(fallbackKey && fallbackKey.trim() !== "")
 }
+
+/**
+ * Standard inspection, diff, and read-only commands that are considered safe by default
+ * and should not be blocked when execute auto-approval is enabled.
+ */
+export const DEFAULT_SAFE_COMMANDS: readonly string[] = [
+	"git diff",
+	"git status",
+	"git log",
+	"git show",
+	"git branch",
+	"git tag",
+	"git rev-parse",
+	"ls",
+	"dir",
+	"pwd",
+]

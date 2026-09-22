@@ -5,13 +5,14 @@ import {
 	type FollowUpData,
 	type ExtensionState,
 	isNonBlockingAsk,
+	isSafetyModelConfigured,
 } from "@roo-code/types"
 
 import { ClineAskResponse } from "../../shared/WebviewMessage"
 
 import { isWriteToolAction, isReadOnlyToolAction } from "./tools"
 import { isMcpToolAlwaysAllowed } from "./mcp"
-import { getCommandDecision } from "./commands"
+import { getCommandDecision, containsDangerousSubstitution } from "./commands"
 
 // We have auto-approval actions for different categories.
 export type AutoApprovalState =
@@ -117,12 +118,24 @@ export async function checkAutoApproval({
 		}
 
 		if (state.alwaysAllowExecute === true) {
+			if (containsDangerousSubstitution(text)) {
+				return { decision: "ask" }
+			}
+
 			const decision = getCommandDecision(text, state.allowedCommands || [], state.deniedCommands || [])
+
+			if (decision === "auto_deny") {
+				return { decision: "deny" }
+			}
+
+			// When the AI safety guardrail model is configured, delegate the candidate
+			// command to CommandSafetyJudge in Task for dynamic inspection
+			if (isSafetyModelConfigured(state)) {
+				return { decision: "approve" }
+			}
 
 			if (decision === "auto_approve") {
 				return { decision: "approve" }
-			} else if (decision === "auto_deny") {
-				return { decision: "deny" }
 			} else {
 				return { decision: "ask" }
 			}

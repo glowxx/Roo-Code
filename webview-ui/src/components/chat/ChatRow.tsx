@@ -279,7 +279,8 @@ export const ChatRowContent = ({
 			case "error":
 			case "mistake_limit_reached":
 				return [null, null] // These will be handled by ErrorRow component
-			case "command":
+			case "command": {
+				const isAwaitingApproval = isLast && message.type === "ask" && !isCommandExecuting
 				return [
 					isCommandExecuting ? (
 						<ProgressIndicator />
@@ -287,9 +288,14 @@ export const ChatRowContent = ({
 						<TerminalSquare className="size-4" aria-label="Terminal icon" />
 					),
 					<span style={{ color: normalColor, fontWeight: "bold" }}>
-						{t("chat:commandExecution.running")}
+						{isCommandExecuting
+							? t("chat:commandExecution.running")
+							: isAwaitingApproval
+							? t("chat:commandExecution.awaitingApproval")
+							: t("chat:commandExecution.command", { defaultValue: "Command" })}
 					</span>,
 				]
+			}
 			case "use_mcp_server":
 				const mcpServerUse = safeJsonParse<ClineAskUseMcpServer>(message.text)
 				if (mcpServerUse === undefined) {

@@ -98,4 +98,23 @@ describe("getCommandDecision — integration with dangerous substitution checks"
 	it("should ask user for dangerous parameter expansion even when command is allowed", () => {
 		expect(getCommandDecision('echo "${var@P}"', allowedCommands)).toBe("ask_user")
 	})
+
+	it("should auto-approve default safe commands (e.g. git diff, git status, ls) even with empty allowedCommands", () => {
+		expect(getCommandDecision("git diff", [])).toBe("auto_approve")
+		expect(getCommandDecision("git diff --staged", [])).toBe("auto_approve")
+		expect(getCommandDecision("git status", [])).toBe("auto_approve")
+		expect(getCommandDecision("ls -la", [])).toBe("auto_approve")
+		expect(getCommandDecision("dir", [])).toBe("auto_approve")
+		expect(getCommandDecision("pwd", [])).toBe("auto_approve")
+	})
+
+	it("should ask user for non-safe commands when allowedCommands is empty", () => {
+		expect(getCommandDecision("npm install", [])).toBe("ask_user")
+		expect(getCommandDecision("rm -rf node_modules", [])).toBe("ask_user")
+	})
+
+	it("should auto-deny default safe command if it is explicitly in deniedCommands", () => {
+		expect(getCommandDecision("git diff", [], ["git diff"])).toBe("auto_deny")
+	})
 })
+

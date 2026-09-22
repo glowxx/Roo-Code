@@ -277,6 +277,8 @@
 	"commandExecution": {
 		"abort": "Abort",
 		"running": "Running",
+		"awaitingApproval": "Awaiting Approval",
+		"command": "Command",
 		"pid": "PID: {{pid}}",
 		"exitStatus": "Exited with status {{exitCode}}",
 		"manageCommands": "Auto-approved commands",

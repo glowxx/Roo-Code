@@ -34,6 +34,7 @@ import {
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_MODES,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
+	DEFAULT_SAFE_COMMANDS,
 	getModelId,
 	isRetiredProvider,
 } from "@roo-code/types"
@@ -1966,7 +1967,9 @@ export class ClineProvider
 				: []
 
 			// Get workspace configuration commands
-			const workspaceCommands = vscode.workspace.getConfiguration(Package.name).get<string[]>(configKey) || []
+			const defaultCommands = configKey === "allowedCommands" ? [...DEFAULT_SAFE_COMMANDS] : []
+			const workspaceCommands =
+				vscode.workspace.getConfiguration(Package.name).get<string[]>(configKey, defaultCommands) || defaultCommands
 
 			// Validate and sanitize workspace commands
 			const validWorkspaceCommands = Array.isArray(workspaceCommands)

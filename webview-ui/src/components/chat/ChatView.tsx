@@ -16,7 +16,7 @@ import { isRetiredProvider } from "@roo-code/types"
 import { findLast } from "@roo/array"
 import { SuggestionItem } from "@roo-code/types"
 import { combineApiRequests } from "@roo/combineApiRequests"
-import { combineCommandSequences } from "@roo/combineCommandSequences"
+import { combineCommandSequences, COMMAND_OUTPUT_STRING } from "@roo/combineCommandSequences"
 import { getApiMetrics } from "@roo/getApiMetrics"
 import { getAllModes } from "@roo/modes"
 import { ProfileValidator } from "@roo/ProfileValidator"
@@ -341,13 +341,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 									break
 							}
 							break
-						case "command":
+						case "command": {
+							const isExecuting = !!lastMessage?.text?.includes(COMMAND_OUTPUT_STRING)
 							setSendingDisabled(isPartial)
 							setClineAsk("command")
-							setEnableButtons(!isPartial)
-							setPrimaryButtonText(t("chat:runCommand.title"))
-							setSecondaryButtonText(t("chat:reject.title"))
+							if (isExecuting) {
+								setEnableButtons(true)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(t("chat:cancel.title"))
+							} else {
+								setEnableButtons(!isPartial)
+								setPrimaryButtonText(t("chat:runCommand.title"))
+								setSecondaryButtonText(t("chat:reject.title"))
+							}
 							break
+						}
 						case "command_output":
 							setSendingDisabled(false)
 							setClineAsk("command_output")
@@ -817,6 +825,30 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					startNewTask()
 					break
 				case "command":
+					if (
+						secondaryButtonText === t("chat:cancel.title") ||
+						messagesRef.current.at(-1)?.text?.includes(COMMAND_OUTPUT_STRING)
+					) {
+						vscode.postMessage({ type: "cancelTask" })
+						setDidClickCancel(true)
+						break
+					}
+					// Only send text/images if they exist
+					if (trimmedInput || (images && images.length > 0)) {
+						vscode.postMessage({
+							type: "askResponse",
+							askResponse: "noButtonClicked",
+							text: trimmedInput,
+							images: images,
+						})
+						// Clear input state after sending
+						setInputValue("")
+						setSelectedImages([])
+					} else {
+						// Responds to the API with a "This operation failed" and lets it try again
+						vscode.postMessage({ type: "askResponse", askResponse: "noButtonClicked" })
+					}
+					break
 				case "tool":
 				case "use_mcp_server":
 					// Only send text/images if they exist
@@ -843,7 +875,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			setClineAsk(undefined)
 			setEnableButtons(false)
 		},
-		[clineAsk, startNewTask, isStreaming, setDidClickCancel],
+		[clineAsk, startNewTask, isStreaming, setDidClickCancel, secondaryButtonText, t],
 	)
 
 	const { info: model } = useSelectedModel(apiConfiguration)
@@ -1747,12 +1779,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 															? t("chat:terminate.tooltip")
 															: secondaryButtonText === t("chat:killCommand.title")
 																? t("chat:killCommand.tooltip")
-																: undefined
+																: secondaryButtonText === t("chat:cancel.title")
+																	? t("chat:cancel.tooltip")
+																	: undefined
 											}>
 											<Button
 												variant="secondary"
 												disabled={!enableButtons}
-												className="flex-1 ml-[6px]"
+												className={primaryButtonText ? "flex-1 ml-[6px]" : "w-full"}
 												onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
 												{secondaryButtonText}
 											</Button>
