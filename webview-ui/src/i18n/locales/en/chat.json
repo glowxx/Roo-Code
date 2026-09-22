@@ -29,7 +29,9 @@
 		"dismiss": "Dismiss"
 	},
 	"fileChangesInConversation": {
-		"header": "{{count}} file(s) changed in this conversation"
+		"header": "{{count}} files changed in this conversation",
+		"header_one": "{{count}} file changed in this conversation",
+		"header_other": "{{count}} files changed in this conversation"
 	},
 	"retry": {
 		"title": "Retry",

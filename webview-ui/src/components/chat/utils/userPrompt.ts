@@ -69,7 +69,7 @@ export function getLatestPromptModifiedMessages(
 	)
 
 	if (promptIndex === -1) {
-		return modifiedMessages
+		return []
 	}
 
 	return modifiedMessages.slice(promptIndex + 1)

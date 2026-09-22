@@ -973,7 +973,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			<div
 				className={cn(
 					"flex flex-col gap-1 bg-editor-background outline-none border border-none box-border",
-					isEditMode ? "p-2 w-full" : "relative px-1.5 pb-1 w-[calc(100%-16px)] ml-auto mr-auto",
+					isEditMode ? "p-2 w-full" : "relative px-1.5 pb-1 w-[calc(100%-16px)] max-w-[1240px] ml-auto mr-auto",
 				)}>
 				<div className={cn(!isEditMode && "relative")}>
 					<div
@@ -1334,7 +1334,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<ModelSelector
 							disabled={Boolean(isStreaming || selectApiConfigDisabled)}
 							triggerTestId="dropdown-trigger"
-							triggerClassName="min-w-0 max-w-[220px] w-auto inline-flex items-center text-ellipsis overflow-hidden px-2.5 py-1"
+							triggerClassName="min-w-0 max-w-[280px] sm:max-w-[320px] w-auto inline-flex items-center text-ellipsis overflow-hidden px-2.5 py-1"
 							currentConfigId={currentConfigId}
 							displayName={displayName}
 							listApiConfigMeta={listApiConfigMeta || []}

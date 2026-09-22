@@ -138,9 +138,43 @@ const ChatRow = memo(
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
 
+		const isFullWidthSurface = useMemo(() => {
+			if (message.ask === "command" || message.say === "command_output") {
+				return true
+			}
+			if (message.ask === "tool") {
+				try {
+					const tool = typeof message.text === "string" ? JSON.parse(message.text || "{}") : message.text
+					const t = tool?.tool
+					if (
+						t === "editedExistingFile" ||
+						t === "appliedDiff" ||
+						t === "newFileCreated" ||
+						t === "searchAndReplace" ||
+						t === "search_and_replace" ||
+						t === "search_replace" ||
+						t === "edit" ||
+						t === "edit_file" ||
+						t === "apply_patch" ||
+						t === "apply_diff" ||
+						Boolean(tool?.batchDiffs)
+					) {
+						return true
+					}
+				} catch {}
+			}
+			return false
+		}, [message])
+
 		const [chatrow, { height }] = useSize(
 			<div className="relative">
-				<ChatRowContent {...props} />
+				<div
+					className={cn(
+						"w-full",
+						isFullWidthSurface ? "px-3" : "max-w-[1240px] mx-auto px-3 sm:px-4",
+					)}>
+					<ChatRowContent {...props} />
+				</div>
 			</div>,
 		)
 

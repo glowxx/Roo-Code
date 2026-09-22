@@ -106,10 +106,13 @@ async function runBuild() {
 		)
 	}
 
-	// 5. Copy webview if built
+	// 5. Compile and copy webview UI
+	console.log("🎨 Compiling webview UI (@roo-code/vscode-webview)...")
+	execSync("pnpm --filter @roo-code/vscode-webview build", { cwd: rootDir, stdio: "inherit" })
+
 	const webviewSrc = path.join(rootDir, "src", "webview-ui", "build")
 	if (fs.existsSync(webviewSrc)) {
-		console.log("🎨 Bundling webview UI into dist/webview...")
+		console.log("📦 Bundling webview UI into dist/webview...")
 		copyDir(webviewSrc, path.join(outDir, "webview"))
 	}
 

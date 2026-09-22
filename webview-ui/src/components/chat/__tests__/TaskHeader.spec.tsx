@@ -345,4 +345,42 @@ describe("TaskHeader", () => {
 			expect(screen.queryByText("Initial Task A")).not.toBeInTheDocument()
 		})
 	})
+
+	describe("Prompt Cost and Total API Cost isolation", () => {
+		it("shows latest prompt cost in compact header when provided", () => {
+			renderTaskHeader({
+				totalCost: 1.5,
+				latestPromptCost: 0.12,
+			})
+			const compactCost = screen.getByTestId("compact-prompt-cost")
+			expect(compactCost).toHaveTextContent("$0.12")
+		})
+
+		it("shows $0.00 prompt cost when hasCompletedWork is true", () => {
+			renderTaskHeader({
+				totalCost: 0,
+				latestPromptCost: 0,
+				hasCompletedWork: true,
+			})
+			const compactCost = screen.getByTestId("compact-prompt-cost")
+			expect(compactCost).toHaveTextContent("$0.00")
+		})
+
+		it("displays both Prompt Cost and Total API Cost in expanded header", () => {
+			renderTaskHeader({
+				totalCost: 2.75,
+				latestPromptCost: 0.45,
+			})
+
+			// Click to expand task header
+			const headerCard = screen.getByText("Test task").closest(".cursor-pointer")
+			fireEvent.click(headerCard!)
+
+			const promptCost = screen.getByTestId("expanded-prompt-cost")
+			const totalCost = screen.getByTestId("expanded-total-cost")
+
+			expect(promptCost).toHaveTextContent("$0.45")
+			expect(totalCost).toHaveTextContent("$2.75")
+		})
+	})
 })

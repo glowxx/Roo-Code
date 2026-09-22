@@ -440,6 +440,14 @@
 	// Apply initial desktop translations immediately
 	applyDesktopTranslations(currentLanguage)
 
+	// Tab state & performance flags (instant keep-alive)
+	let diffsDirty = true
+	let diffsRenderedOnce = false
+	let terminalDirty = true
+	let terminalRenderedOnce = false
+	let lastRenderedTerminalSessionId = null
+	let filesDirty = true
+
 	function switchDesktopTab(targetTab, origin = "user", values = null) {
 		if (!targetTab) return
 		if (targetTab === "settings") {
@@ -449,6 +457,8 @@
 		// Loop guard / idempotency check
 		if (currentDesktopTab === targetTab) return
 
+		const t0 = performance.now()
+		const prevTab = currentDesktopTab
 		currentDesktopTab = targetTab
 
 		// Update nav tabs active styling (main tabs: chat, diffs, terminal, files)
@@ -462,18 +472,28 @@
 		// If switching to files tab and files tree is empty or requires refresh, load files
 		if (targetTab === "files") {
 			const isTreeEmpty = !filesTreeEl || filesTreeEl.children.length === 0 || filesTreeEl.querySelector(".empty-state")
-			if (!currentWorkspace?.files || currentWorkspace.files.length === 0 || isTreeEmpty) {
+			if (filesDirty || !currentWorkspace?.files || currentWorkspace.files.length === 0 || isTreeEmpty) {
 				loadWorkspaceFiles()
+				filesDirty = false
 			}
 		}
 
 		if (targetTab === "diffs") {
-			renderDiffs()
-			sendToServer({ type: "getDiffs" })
+			if (diffsDirty || !diffsRenderedOnce) {
+				renderDiffs()
+				diffsDirty = false
+				diffsRenderedOnce = true
+				sendToServer({ type: "getDiffs" })
+			}
 		}
 
 		if (targetTab === "terminal") {
-			renderTerminalLogs()
+			if (terminalDirty || !terminalRenderedOnce || lastRenderedTerminalSessionId !== selectedTerminalSessionId) {
+				renderTerminalLogs()
+				terminalDirty = false
+				terminalRenderedOnce = true
+				lastRenderedTerminalSessionId = selectedTerminalSessionId
+			}
 		}
 
 		// If user clicked in desktop shell, notify webview with origin: "sync"
@@ -486,6 +506,9 @@
 				})
 			}
 		}
+
+		const switchDur = performance.now() - t0
+		console.debug(`[TabPerf] Switched from ${prevTab || "none"} to ${targetTab} in ${switchDur.toFixed(2)}ms`)
 	}
 
 	// Setup Tabs Navigation
@@ -495,12 +518,6 @@
 	tabs.forEach((tab) => {
 		tab.addEventListener("click", () => {
 			const targetTab = tab.getAttribute("data-tab")
-			if (targetTab === "diffs") {
-				renderDiffs()
-				sendToServer({ type: "getDiffs" })
-			} else if (targetTab === "terminal") {
-				renderTerminalLogs()
-			}
 			switchDesktopTab(targetTab, "user")
 		})
 	})
@@ -1418,9 +1435,15 @@
 					if (!selectedTerminalSessionId) {
 						selectedTerminalSessionId = session.id
 					}
-					renderTerminalSessions()
-					if (selectedTerminalSessionId === session.id) {
-						renderActiveTerminalOutput()
+					terminalDirty = true
+					if (currentDesktopTab === "terminal") {
+						renderTerminalSessions()
+						if (selectedTerminalSessionId === session.id) {
+							renderActiveTerminalOutput()
+						}
+						terminalDirty = false
+						terminalRenderedOnce = true
+						lastRenderedTerminalSessionId = selectedTerminalSessionId
 					}
 				}
 				break
@@ -1428,11 +1451,18 @@
 
 			case "diffsUpdated":
 				diffFiles = msg.diffs || []
-				renderDiffs()
-				diffsCountEl.textContent = String(diffFiles.length)
+				diffsDirty = true
+				if (currentDesktopTab === "diffs") {
+					renderDiffs()
+					diffsDirty = false
+					diffsRenderedOnce = true
+				}
+				if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
 				break
 
 			case "workspaceFilesChanged":
+				diffsDirty = true
+				filesDirty = true
 				if (Array.isArray(msg.files) && msg.files.length > 0) {
 					msg.files.forEach((f) => {
 						const relPath = (f.path || "").replace(/\\/g, "/")
@@ -1450,7 +1480,11 @@
 							diffFiles.push(entry)
 						}
 					})
-					renderDiffs()
+					if (currentDesktopTab === "diffs") {
+						renderDiffs()
+						diffsDirty = false
+						diffsRenderedOnce = true
+					}
 					if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
 				} else {
 					fetch("/api/diffs")
@@ -1458,7 +1492,11 @@
 						.then((data) => {
 							if (Array.isArray(data)) {
 								diffFiles = data
-								renderDiffs()
+								if (currentDesktopTab === "diffs") {
+									renderDiffs()
+									diffsDirty = false
+									diffsRenderedOnce = true
+								}
 								if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
 							}
 						})
@@ -2011,18 +2049,25 @@
 		const isNearBottom = terminalOutputEl.scrollHeight - terminalOutputEl.scrollTop - terminalOutputEl.clientHeight < 80
 
 		if (!activeSession.output || !activeSession.output.trim()) {
-			if (activeSession.status === "running") {
-				terminalOutputEl.innerHTML = `
-					<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n[Running command in workspace...]</span></div>
-				`
-			} else {
-				terminalOutputEl.innerHTML = `
-					<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n(Command completed with no output)</span></div>
-				`
+			const emptyHtml = activeSession.status === "running"
+				? `<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n[Running command in workspace...]</span></div>`
+				: `<div class="terminal-ansi-pre"><span style="color: var(--text-muted);">$ ${escapeHtml(activeSession.command)}\n(Command completed with no output)</span></div>`
+			if (terminalOutputEl._lastSessionId !== activeSession.id || terminalOutputEl._lastHtml !== emptyHtml) {
+				terminalOutputEl.innerHTML = emptyHtml
+				terminalOutputEl._lastSessionId = activeSession.id
+				terminalOutputEl._lastHtml = emptyHtml
 			}
 		} else {
-			const parsedHtml = ansiToHtml(activeSession.output)
-			terminalOutputEl.innerHTML = `<pre class="terminal-ansi-pre"><code>${parsedHtml}</code></pre>`
+			if (activeSession._cachedOutput !== activeSession.output) {
+				activeSession._cachedHtml = ansiToHtml(activeSession.output)
+				activeSession._cachedOutput = activeSession.output
+			}
+			const parsedHtml = activeSession._cachedHtml
+			if (terminalOutputEl._lastSessionId !== activeSession.id || terminalOutputEl._lastHtml !== parsedHtml) {
+				terminalOutputEl.innerHTML = `<pre class="terminal-ansi-pre"><code>${parsedHtml}</code></pre>`
+				terminalOutputEl._lastSessionId = activeSession.id
+				terminalOutputEl._lastHtml = parsedHtml
+			}
 		}
 
 		if (isNearBottom || activeSession.status === "running") {

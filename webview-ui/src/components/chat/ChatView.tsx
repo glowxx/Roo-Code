@@ -138,6 +138,18 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		[latestPromptModifiedMessages],
 	)
 
+	// Whether the latest prompt has initiated or completed API requests
+	const hasCompletedWork = useMemo(() => {
+		return (
+			latestPromptApiMetrics.totalTokensIn > 0 ||
+			latestPromptApiMetrics.totalTokensOut > 0 ||
+			latestPromptApiMetrics.totalCost > 0 ||
+			latestPromptModifiedMessages.some(
+				(m) => m.say === "api_req_started" || m.say === "api_req_finished",
+			)
+		)
+	}, [latestPromptApiMetrics, latestPromptModifiedMessages])
+
 	const [inputValue, setInputValue] = useState("")
 	const inputValueRef = useRef(inputValue)
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
@@ -1634,16 +1646,15 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						tokensOut={latestPromptApiMetrics.totalTokensOut}
 						cacheWrites={latestPromptApiMetrics.totalCacheWrites}
 						cacheReads={latestPromptApiMetrics.totalCacheReads}
-						totalCost={latestPromptApiMetrics.totalCost}
+						latestPromptCost={latestPromptApiMetrics.totalCost}
+						totalCost={apiMetrics.totalCost}
+						hasCompletedWork={hasCompletedWork}
 						aggregatedCost={
-							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
-							currentTaskItem?.id &&
-							aggregatedCostsMap.has(currentTaskItem.id)
+							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
 								? aggregatedCostsMap.get(currentTaskItem.id)!.totalCost
 								: undefined
 						}
 						hasSubtasks={
-							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
 							!!(
 								currentTaskItem?.id &&
 								aggregatedCostsMap.has(currentTaskItem.id) &&
@@ -1652,13 +1663,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						}
 						parentTaskId={currentTaskItem?.parentTaskId}
 						costBreakdown={
-							(!latestUserPrompt || latestUserPrompt === task || latestUserPrompt.ts === task?.ts) &&
-							currentTaskItem?.id &&
-							aggregatedCostsMap.has(currentTaskItem.id)
+							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
 								? getCostBreakdownIfNeeded(aggregatedCostsMap.get(currentTaskItem.id)!, {
 										own: t("common:costs.own"),
 										subtasks: t("common:costs.subtasks"),
-									})
+								  })
 								: undefined
 						}
 						contextTokens={apiMetrics.contextTokens}
@@ -1707,133 +1716,137 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					</div>
 					<FileChangesPanel clineMessages={messages} />
 					{areButtonsVisible && (
-						<div
-							className={`flex h-9 items-center mb-1 px-[15px] ${
-								showScrollToBottom ? "opacity-100" : enableButtons ? "opacity-100" : "opacity-50"
-							}`}>
-							{showScrollToBottom ? (
-								<>
-									<StandardTooltip content={t("chat:scrollToBottom")}>
-										<Button
-											variant="secondary"
-											className={hasLatestCheckpoint ? "flex-1 mr-[6px]" : "flex-[2]"}
-											onClick={handleScrollToBottomAndResetCheckpointCursor}>
-											<span className="codicon codicon-chevron-down"></span>
-										</Button>
-									</StandardTooltip>
-									{hasLatestCheckpoint && (
-										<StandardTooltip content={t("chat:scrollToLatestCheckpoint")}>
+						<div className="w-full max-w-[1240px] mx-auto px-3 sm:px-4">
+							<div
+								className={`flex h-9 items-center mb-1 ${
+									showScrollToBottom ? "opacity-100" : enableButtons ? "opacity-100" : "opacity-50"
+								}`}>
+								{showScrollToBottom ? (
+									<>
+										<StandardTooltip content={t("chat:scrollToBottom")}>
 											<Button
 												variant="secondary"
-												className="flex-1 ml-[6px]"
-												onClick={handleScrollToLatestCheckpoint}
-												aria-label={t("chat:scrollToLatestCheckpoint")}>
-												<span className="codicon codicon-history"></span>
+												className={hasLatestCheckpoint ? "flex-1 mr-[6px]" : "flex-[2]"}
+												onClick={handleScrollToBottomAndResetCheckpointCursor}>
+												<span className="codicon codicon-chevron-down"></span>
 											</Button>
 										</StandardTooltip>
-									)}
-								</>
-							) : (
-								<>
-									{primaryButtonText && (
-										<StandardTooltip
-											content={
-												primaryButtonText === t("chat:retry.title")
-													? t("chat:retry.tooltip")
-													: primaryButtonText === t("chat:save.title")
-														? t("chat:save.tooltip")
-														: primaryButtonText === t("chat:approve.title")
-															? t("chat:approve.tooltip")
-															: primaryButtonText === t("chat:runCommand.title")
-																? t("chat:runCommand.tooltip")
-																: primaryButtonText === t("chat:startNewTask.title")
-																	? t("chat:startNewTask.tooltip")
-																	: primaryButtonText ===
-																			  t("chat:proceedAnyways.title")
-																			? t("chat:proceedAnyways.tooltip")
-																			: primaryButtonText ===
-																				  t("chat:proceedWhileRunning.title")
-																				? t("chat:proceedWhileRunning.tooltip")
-																				: undefined
-											}>
-											<Button
-												variant="primary"
-												disabled={!enableButtons}
-												className={secondaryButtonText ? "flex-1 mr-[6px]" : "flex-[2] mr-0"}
-												onClick={() => handlePrimaryButtonClick(inputValue, selectedImages)}>
-												{primaryButtonText}
-											</Button>
-										</StandardTooltip>
-									)}
-									{secondaryButtonText && (
-										<StandardTooltip
-											content={
-												secondaryButtonText === t("chat:startNewTask.title")
-													? t("chat:startNewTask.tooltip")
-													: secondaryButtonText === t("chat:reject.title")
-														? t("chat:reject.tooltip")
-														: secondaryButtonText === t("chat:killCommand.title")
-																? t("chat:killCommand.tooltip")
-																: secondaryButtonText === t("chat:cancel.title")
-																	? t("chat:cancel.tooltip")
-																	: undefined
-											}>
-											<Button
-												variant="secondary"
-												disabled={!enableButtons}
-												className={primaryButtonText ? "flex-1 ml-[6px]" : "w-full"}
-												onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
-												{secondaryButtonText}
-											</Button>
-										</StandardTooltip>
-									)}
-								</>
-							)}
+										{hasLatestCheckpoint && (
+											<StandardTooltip content={t("chat:scrollToLatestCheckpoint")}>
+												<Button
+													variant="secondary"
+													className="flex-1 ml-[6px]"
+													onClick={handleScrollToLatestCheckpoint}
+													aria-label={t("chat:scrollToLatestCheckpoint")}>
+													<span className="codicon codicon-history"></span>
+												</Button>
+											</StandardTooltip>
+										)}
+									</>
+								) : (
+									<>
+										{primaryButtonText && (
+											<StandardTooltip
+												content={
+													primaryButtonText === t("chat:retry.title")
+														? t("chat:retry.tooltip")
+														: primaryButtonText === t("chat:save.title")
+															? t("chat:save.tooltip")
+															: primaryButtonText === t("chat:approve.title")
+																? t("chat:approve.tooltip")
+																: primaryButtonText === t("chat:runCommand.title")
+																	? t("chat:runCommand.tooltip")
+																	: primaryButtonText === t("chat:startNewTask.title")
+																		? t("chat:startNewTask.tooltip")
+																		: primaryButtonText ===
+																				  t("chat:proceedAnyways.title")
+																				? t("chat:proceedAnyways.tooltip")
+																				: primaryButtonText ===
+																					  t("chat:proceedWhileRunning.title")
+																					? t("chat:proceedWhileRunning.tooltip")
+																					: undefined
+												}>
+												<Button
+													variant="primary"
+													disabled={!enableButtons}
+													className={secondaryButtonText ? "flex-1 mr-[6px]" : "flex-[2] mr-0"}
+													onClick={() => handlePrimaryButtonClick(inputValue, selectedImages)}>
+													{primaryButtonText}
+												</Button>
+											</StandardTooltip>
+										)}
+										{secondaryButtonText && (
+											<StandardTooltip
+												content={
+													secondaryButtonText === t("chat:startNewTask.title")
+														? t("chat:startNewTask.tooltip")
+														: secondaryButtonText === t("chat:reject.title")
+															? t("chat:reject.tooltip")
+															: secondaryButtonText === t("chat:killCommand.title")
+																	? t("chat:killCommand.tooltip")
+																	: secondaryButtonText === t("chat:cancel.title")
+																		? t("chat:cancel.tooltip")
+																		: undefined
+												}>
+												<Button
+													variant="secondary"
+													disabled={!enableButtons}
+													className={primaryButtonText ? "flex-1 ml-[6px]" : "w-full"}
+													onClick={() => handleSecondaryButtonClick(inputValue, selectedImages)}>
+													{secondaryButtonText}
+												</Button>
+											</StandardTooltip>
+										)}
+									</>
+								)}
+							</div>
 						</div>
 					)}
 				</>
 			)}
 
-			<QueuedMessages
-				queue={messageQueue}
-				onRemove={(index) => {
-					if (messageQueue[index]) {
-						vscode.postMessage({ type: "removeQueuedMessage", text: messageQueue[index].id })
-					}
-				}}
-				onUpdate={(index, newText) => {
-					if (messageQueue[index]) {
-						vscode.postMessage({
-							type: "editQueuedMessage",
-							payload: { id: messageQueue[index].id, text: newText, images: messageQueue[index].images },
-						})
-					}
-				}}
-			/>
-			{showRetiredProviderWarning && (
-				<div className="px-[15px] py-1">
-					<WarningRow
-						title={t("chat:retiredProvider.title")}
-						message={t(
-							apiConfiguration?.apiProvider === "roo"
-								? "chat:retiredProvider.rooMessage"
-								: "chat:retiredProvider.message",
-						)}
-						actionText={t("chat:retiredProvider.openSettings")}
-						onAction={() => vscode.postMessage({ type: "switchTab", tab: "settings" })}
-					/>
-				</div>
-			)}
-			{compactionError && (
-				<div className="px-[15px] py-1">
-					<WarningRow
-						title={t("chat:compactionError.title", { defaultValue: "Context Compaction Failed" })}
-						message={compactionError}
-						actionText={t("chat:compactionError.dismiss", { defaultValue: "Dismiss" })}
-						onAction={() => setCompactionError(null)}
-					/>
-				</div>
-			)}
+			<div className="w-full max-w-[1240px] mx-auto px-3 sm:px-4">
+				<QueuedMessages
+					queue={messageQueue}
+					onRemove={(index) => {
+						if (messageQueue[index]) {
+							vscode.postMessage({ type: "removeQueuedMessage", text: messageQueue[index].id })
+						}
+					}}
+					onUpdate={(index, newText) => {
+						if (messageQueue[index]) {
+							vscode.postMessage({
+								type: "editQueuedMessage",
+								payload: { id: messageQueue[index].id, text: newText, images: messageQueue[index].images },
+							})
+						}
+					}}
+				/>
+				{showRetiredProviderWarning && (
+					<div className="py-1">
+						<WarningRow
+							title={t("chat:retiredProvider.title")}
+							message={t(
+								apiConfiguration?.apiProvider === "roo"
+									? "chat:retiredProvider.rooMessage"
+									: "chat:retiredProvider.message",
+							)}
+							actionText={t("chat:retiredProvider.openSettings")}
+							onAction={() => vscode.postMessage({ type: "switchTab", tab: "settings" })}
+						/>
+					</div>
+				)}
+				{compactionError && (
+					<div className="py-1">
+						<WarningRow
+							title={t("chat:compactionError.title", { defaultValue: "Context Compaction Failed" })}
+							message={compactionError}
+							actionText={t("chat:compactionError.dismiss", { defaultValue: "Dismiss" })}
+							onAction={() => setCompactionError(null)}
+						/>
+					</div>
+				)}
+			</div>
 			<ChatTextArea
 				ref={textAreaRef}
 				inputValue={inputValue}

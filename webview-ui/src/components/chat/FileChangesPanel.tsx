@@ -102,36 +102,46 @@ const FileChangesPanel = memo(({ clineMessages, className }: FileChangesPanelPro
 	const fileCount = byPath.size
 
 	return (
-		<Collapsible open={panelExpanded} onOpenChange={setPanelExpanded} className={cn("px-3", className)}>
-			<CollapsibleTrigger
-				className={cn(
-					"flex items-center gap-2 w-full py-2 rounded-md text-left text-vscode-foreground",
-					"hover:bg-vscode-list-hoverBackground",
-				)}>
-				{panelExpanded ? (
-					<ChevronDown className="size-4 shrink-0" aria-hidden />
-				) : (
-					<ChevronRight className="size-4 shrink-0" aria-hidden />
-				)}
-				<FileDiff className="size-4 shrink-0" aria-hidden />
-				<span className="text-sm font-medium">
-					{t("chat:fileChangesInConversation.header", { count: fileCount })}
-				</span>
-				{totalStats.added > 0 || totalStats.removed > 0 ? (
-					<div
-						className="flex items-center gap-2 ml-auto shrink-0"
-						aria-label={`${totalStats.added} lines added, ${totalStats.removed} lines removed`}>
-						<span className="text-xs font-medium text-vscode-charts-green" data-testid="total-added">
-							+{totalStats.added}
-						</span>
-						<span className="text-xs font-medium text-vscode-charts-red" data-testid="total-removed">
-							-{totalStats.removed}
-						</span>
-					</div>
-				) : null}
-			</CollapsibleTrigger>
-			<CollapsibleContent>
-				<div className="flex flex-col gap-1 pb-2 pl-6">
+		<div className="w-full max-w-[1240px] mx-auto px-3 sm:px-4 my-1">
+			<Collapsible open={panelExpanded} onOpenChange={setPanelExpanded} className={cn("w-full", className)}>
+				<CollapsibleTrigger
+					className={cn(
+						"flex items-center gap-2.5 w-full px-3 py-1.5 rounded-lg text-left text-vscode-foreground",
+						"bg-vscode-input-background/50 hover:bg-vscode-input-background/90 border border-border/30 hover:border-border/60",
+						"transition-all duration-150 cursor-pointer shadow-sm group",
+					)}>
+					<FileDiff className="size-4 shrink-0 text-vscode-foreground/80 group-hover:text-vscode-foreground" aria-hidden />
+					<span className="text-xs font-medium text-vscode-foreground">
+						{t("chat:fileChangesInConversation.header", { count: fileCount })}
+					</span>
+					{totalStats.added > 0 || totalStats.removed > 0 ? (
+						<div
+							className="flex items-center gap-2 ml-auto shrink-0 font-mono text-[11px]"
+							aria-label={`${totalStats.added} lines added, ${totalStats.removed} lines removed`}>
+							{totalStats.added > 0 && (
+								<span className="font-medium text-vscode-charts-green" data-testid="total-added">
+									+{totalStats.added}
+								</span>
+							)}
+							{totalStats.removed > 0 && (
+								<span className="font-medium text-vscode-charts-red" data-testid="total-removed">
+									-{totalStats.removed}
+								</span>
+							)}
+						</div>
+					) : (
+						<div className="ml-auto" />
+					)}
+					<ChevronDown
+						className={cn(
+							"size-3.5 shrink-0 text-vscode-descriptionForeground transition-transform duration-200",
+							panelExpanded ? "rotate-0" : "-rotate-90",
+						)}
+						aria-hidden
+					/>
+				</CollapsibleTrigger>
+				<CollapsibleContent>
+					<div className="flex flex-col gap-1.5 pt-2 pb-1">
 					{Array.from(byPath.entries()).map(([path, entries]) => {
 						const originalContent = entries[0].originalContent
 						const lookupPath = path.startsWith("./") ? path.slice(2) : path
@@ -176,6 +186,7 @@ const FileChangesPanel = memo(({ clineMessages, className }: FileChangesPanelPro
 				</div>
 			</CollapsibleContent>
 		</Collapsible>
+	</div>
 	)
 })
 

@@ -24,7 +24,11 @@
 	"unpin": "Odepnij",
 	"pin": "Przypnij",
 	"fileChangesInConversation": {
-		"header": "{{count}} plik(ów) zmienionych w tej rozmowie"
+		"header": "{{count}} zmienionych plików w tej rozmowie",
+		"header_one": "{{count}} zmieniony plik w tej rozmowie",
+		"header_few": "{{count}} zmienione pliki w tej rozmowie",
+		"header_many": "{{count}} zmienionych plików w tej rozmowie",
+		"header_other": "{{count}} zmienionych plików w tej rozmowie"
 	},
 	"tokenProgress": {
 		"availableSpace": "Dostępne miejsce: {{amount}} tokenów",

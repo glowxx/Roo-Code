@@ -29,6 +29,8 @@ export interface TaskHeaderProps {
 	cacheWrites?: number
 	cacheReads?: number
 	totalCost: number
+	latestPromptCost?: number
+	hasCompletedWork?: boolean
 	aggregatedCost?: number
 	hasSubtasks?: boolean
 	parentTaskId?: string
@@ -48,6 +50,8 @@ const TaskHeader = ({
 	cacheWrites,
 	cacheReads,
 	totalCost,
+	latestPromptCost,
+	hasCompletedWork = false,
 	aggregatedCost,
 	hasSubtasks,
 	parentTaskId,
@@ -127,8 +131,11 @@ const TaskHeader = ({
 		}
 	}
 
+	const displayPromptCost = latestPromptCost ?? totalCost
+	const shouldShowPromptCost = displayPromptCost > 0 || (hasCompletedWork && displayPromptCost >= 0)
+
 	return (
-		<div className="group pt-2 pb-0 px-3">
+		<div className="w-full max-w-[1240px] mx-auto group pt-1 pb-0 px-3 sm:px-4">
 			{isSubtask && (
 				<div className="mb-2" onClick={(e) => e.stopPropagation()}>
 					<Button
@@ -143,7 +150,7 @@ const TaskHeader = ({
 			)}
 			<div
 				className={cn(
-					"px-3 pt-2.5 pb-2 flex flex-col gap-1.5 relative z-1 cursor-pointer",
+					"px-3 py-1.5 flex flex-col gap-1 relative z-1 cursor-pointer",
 					"bg-vscode-input-background hover:bg-vscode-input-background/90",
 					"text-vscode-foreground/80 hover:text-vscode-foreground",
 					"shadow-lg shadow-vscode-sideBar-background/50 rounded-xl",
@@ -216,40 +223,18 @@ const TaskHeader = ({
 						onClick={(e) => e.stopPropagation()}>
 						<div className="flex items-center gap-2">
 							{compactButton}
-							{!!totalCost && (
+							{shouldShowPromptCost && (
 								<>
 									<span>·</span>
 									<StandardTooltip
 										content={
-											hasSubtasks ? (
-												<div>
-													<div>
-														{t("chat:costs.totalWithSubtasks", {
-															cost: (aggregatedCost ?? totalCost).toFixed(2),
-														})}
-													</div>
-													{costBreakdown && (
-														<div className="text-xs mt-1">{costBreakdown}</div>
-													)}
-												</div>
-											) : (
-												<div>{t("chat:costs.total", { cost: totalCost.toFixed(2) })}</div>
-											)
+											<div>{t("chat:costs.promptCostTooltip", { defaultValue: "Current prompt cost: ${{cost}}", cost: displayPromptCost.toFixed(2) })}</div>
 										}
 										side="top"
 										sideOffset={8}>
-										<>
-											<span>
-												${(aggregatedCost ?? totalCost).toFixed(2)}
-												{hasSubtasks && (
-													<span
-														className="text-xs ml-1"
-														title={t("chat:costs.includesSubtasks")}>
-														*
-													</span>
-												)}
-											</span>
-										</>
+										<span data-testid="compact-prompt-cost">
+											${displayPromptCost.toFixed(2)}
+										</span>
 									</StandardTooltip>
 								</>
 							)}
@@ -336,7 +321,28 @@ const TaskHeader = ({
 										</tr>
 									)}
 
-									{!!totalCost && (
+									{shouldShowPromptCost && (
+										<tr>
+											<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">
+												{t("chat:task.promptCost", "Prompt Cost")}
+											</th>
+											<td className="font-light align-top">
+												<StandardTooltip
+													content={t("chat:costs.promptCostTooltip", {
+														defaultValue: "Current prompt cost: ${{cost}}",
+														cost: displayPromptCost.toFixed(2),
+													})}
+													side="top"
+													sideOffset={8}>
+													<span data-testid="expanded-prompt-cost">
+														${displayPromptCost.toFixed(2)}
+													</span>
+												</StandardTooltip>
+											</td>
+										</tr>
+									)}
+
+									{(totalCost > 0 || hasSubtasks) && (
 										<tr>
 											<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">
 												{t("chat:task.apiCost")}
@@ -363,7 +369,7 @@ const TaskHeader = ({
 													}
 													side="top"
 													sideOffset={8}>
-													<span>
+													<span data-testid="expanded-total-cost">
 														${(aggregatedCost ?? totalCost).toFixed(2)}
 														{hasSubtasks && (
 															<span

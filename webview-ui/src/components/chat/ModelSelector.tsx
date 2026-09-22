@@ -269,7 +269,13 @@ export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): s
 	if (lower.includes("deepseek-v4")) return "DeepSeek V4"
 
 	// Claude (Anthropic)
-	if (lower.includes("claude-4-5-sonnet") || lower.includes("claude-4.5-sonnet")) return "Claude 4.5 Sonnet"
+	if (
+		lower.includes("claude-4-5-sonnet") ||
+		lower.includes("claude-4.5-sonnet") ||
+		lower.includes("claude-sonnet-4-5") ||
+		lower.includes("claude-sonnet-4.5")
+	)
+		return "Claude 4.5 Sonnet"
 	if (lower.includes("claude-4-5-opus") || lower.includes("claude-4.5-opus")) return "Claude 4.5 Opus"
 	if (lower.includes("claude-4-sonnet") || lower.includes("claude-4.0-sonnet")) return "Claude 4 Sonnet"
 	if (lower.includes("claude-4-opus")) return "Claude 4 Opus"
@@ -282,13 +288,24 @@ export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): s
 
 	// OpenAI
 	if (lower.includes("gpt-6-astra") || lower.includes("gpt-6")) return "GPT-6 Astra"
+
+	// Handle specific GPT versions and named variants (e.g. gpt-5.6-terra -> GPT-5.6 Terra, gpt-5.6-sol -> GPT-5.6 Sol)
+	const gptNamedMatch = lower.match(/(?:^|[\/_\-])gpt-([0-9]+(?:\.[0-9]+)?)-([a-z0-9]+)(?:[\/_\-:]|$)/i)
+	if (gptNamedMatch) {
+		const version = gptNamedMatch[1]
+		const rawVariant = gptNamedMatch[2]
+		const capitalized = rawVariant.charAt(0).toUpperCase() + rawVariant.slice(1)
+		return `GPT-${version} ${capitalized}`
+	}
+
 	if (lower.includes("gpt-5-turbo")) return "GPT-5 Turbo"
 	if (lower.includes("gpt-5-mini") || lower.includes("gpt-5.4-mini") || lower.includes("gpt-5.1-mini")) return "GPT-5 Mini"
 	if (lower.includes("gpt-5-nano") || lower.includes("gpt-5.4-nano")) return "GPT-5 Nano"
 	if (lower.includes("gpt-5.1-codex-max")) return "GPT-5.1 Codex Max"
+	if (lower.includes("gpt-5.6")) return "GPT-5.6"
 	if (lower.includes("gpt-5.4")) return "GPT-5.4"
 	if (lower.includes("gpt-5.2")) return "GPT-5.2"
-	if (lower.includes("gpt-5")) return "GPT-5"
+	if (/(?:^|[\/_\-])gpt-5(?:[\/_\-:]|$)/i.test(lower)) return "GPT-5"
 	if (lower.includes("gpt-4-5-preview") || lower.includes("gpt-4.5-preview") || lower.includes("gpt-4.5")) return "GPT-4.5 Preview"
 	if (lower.includes("gpt-4o-mini")) return "GPT-4o Mini"
 	if (lower.includes("gpt-4o")) return "GPT-4o"
@@ -1007,9 +1024,16 @@ export const ModelSelector = ({
 	return (
 		<Popover open={open} onOpenChange={setOpen} data-testid="model-selector-root">
 			<StandardTooltip
-				content={`${activeDisplayName} · ${
-					effectiveProfileName === "default" ? currentProviderLabel : `${effectiveProfileName} (${currentProviderLabel})`
-				}`}>
+				content={
+					<div className="flex flex-col gap-0.5 text-xs text-left">
+						<div className="font-semibold text-vscode-foreground">{activeDisplayName}</div>
+						<div className="text-vscode-descriptionForeground font-mono text-[11px]">Model: {activeModelId}</div>
+						<div className="text-vscode-descriptionForeground text-[11px]">
+							Provider: {currentProviderLabel}
+							{effectiveProfileName && effectiveProfileName !== "default" ? ` (${effectiveProfileName})` : ""}
+						</div>
+					</div>
+				}>
 				<PopoverTrigger
 					disabled={disabled}
 					data-testid={triggerTestId || "model-selector-trigger"}
@@ -1024,8 +1048,8 @@ export const ModelSelector = ({
 					)}>
 					<ProviderIcon provider={activeProvider} />
 					<span className="truncate font-medium">{activeDisplayName}</span>
-					<span className="opacity-40 select-none text-[11px]">·</span>
-					<span className="truncate text-vscode-descriptionForeground opacity-80">
+					<span className="opacity-40 select-none text-[11px] shrink-0">·</span>
+					<span className="truncate text-vscode-descriptionForeground opacity-80 shrink-0">
 						{effectiveProfileName === "default" ? currentProviderLabel : effectiveProfileName}
 					</span>
 					<ChevronDown className="size-3 text-vscode-descriptionForeground opacity-60 flex-shrink-0 -mr-0.5" />
