@@ -127,6 +127,14 @@ import {
 import { processUserContentMentions } from "../mentions/processUserContentMentions"
 import { getMessagesSinceLastSummary, summarizeConversation, getEffectiveApiHistory } from "../condense"
 import { compactHistory } from "../context/ContextCompactor"
+import { optimizeEffectiveApiHistory } from "../context/effectiveContext"
+import {
+	isTokenAuditEnabled,
+	prepareTokenAuditRecord,
+	logTokenAudit,
+	recordProviderUsage,
+	type TokenAuditRecord,
+} from "../telemetry/TokenAudit"
 import { MessageQueueService } from "../message-queue/MessageQueueService"
 import { AutoApprovalHandler, checkAutoApproval, type CheckAutoApprovalResult } from "../auto-approval"
 import { MessageManager } from "../message-manager"
@@ -347,6 +355,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	userMessageContentReady = false
 	private isCompacting = false
 	private compactionAbortController?: AbortController
+	private currentAuditRecord?: TokenAuditRecord
 
 	public abortCompaction(): void {
 		this.compactionAbortController?.abort()
@@ -1779,6 +1788,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	public static readonly AUTO_COMPACT_THRESHOLD = 0.85
+	public static readonly MAX_WORKING_CONTEXT_TOKENS = 160_000
 
 	public checkContextCompactionThreshold(): boolean {
 		const { contextTokens } = this.getTokenUsage()
@@ -1790,7 +1800,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		if (!contextWindow || contextWindow <= 0) {
 			return false
 		}
-		return contextTokens / contextWindow >= Task.AUTO_COMPACT_THRESHOLD
+		const percentageThreshold = contextWindow * Task.AUTO_COMPACT_THRESHOLD
+		const effectiveThreshold = Math.min(percentageThreshold, Task.MAX_WORKING_CONTEXT_TOKENS)
+		return contextTokens >= effectiveThreshold
 	}
 
 	public async compactContext(autoTriggered = true): Promise<void> {
@@ -3150,6 +3162,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								cacheWriteTokens += chunk.cacheWriteTokens ?? 0
 								cacheReadTokens += chunk.cacheReadTokens ?? 0
 								totalCost = chunk.totalCost
+								if (isTokenAuditEnabled() && this.currentAuditRecord) {
+									recordProviderUsage(this.taskId, this.currentAuditRecord, {
+										inputTokens: chunk.inputTokens,
+										outputTokens: chunk.outputTokens,
+										cacheReadTokens: chunk.cacheReadTokens,
+									})
+								}
 								break
 							case "grounding":
 								// Handle grounding sources separately from regular content
@@ -4451,7 +4470,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// mergeConsecutiveApiMessages implementation) without mutating stored history.
 		const mergedForApi = mergeConsecutiveApiMessages(messagesSinceLastSummary, { roles: ["user"] })
 		const messagesWithoutImages = maybeRemoveImageBlocks(mergedForApi, this.api)
-		const cleanConversationHistory = this.buildCleanConversationHistory(messagesWithoutImages as ApiMessage[])
+		const optimizedForApi = optimizeEffectiveApiHistory(messagesWithoutImages as ApiMessage[])
+		const cleanConversationHistory = this.buildCleanConversationHistory(optimizedForApi)
 
 		// Check auto-approval limits
 		const approvalResult = await this.autoApprovalHandler.checkAutoApprovalLimits(
@@ -4527,6 +4547,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const abortSignal = this.currentRequestAbortController.signal
 		// Reset the flag after using it
 		this.skipPrevResponseIdOnce = false
+
+		// Prepare token audit telemetry if enabled
+		if (isTokenAuditEnabled()) {
+			this.currentAuditRecord = prepareTokenAuditRecord({
+				taskId: this.taskId,
+				model: this.api.getModel().id,
+				systemPrompt,
+				nativeTools: allTools,
+				messages: cleanConversationHistory,
+				isRetry: (retryAttempt ?? 0) > 0,
+				retryReason: (retryAttempt ?? 0) > 0 ? "retry" : undefined,
+				compactionState: this.isCompacting ? "compacting" : "normal",
+			})
+			logTokenAudit(this.currentAuditRecord)
+		}
 
 		// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
 		const stream = this.api.createMessage(
