@@ -280,3 +280,78 @@ export function buildStage2SafetyPrompt(options: BuildStage2SafetyPromptOptions)
 		userPrompt,
 	}
 }
+
+export const AUTONOMOUS_APPROVAL_SYSTEM_PROMPT = `You are an independent approval authority for an autonomous agent runtime.
+You are NOT the worker agent.
+
+Evaluate the proposed action using the user's explicit instruction, active task goal, execution boundary, and safety policy.
+
+Return one of three decisions:
+1. ALLOW_AUTO: The action is safe, scoped, and aligned with user intent. It may execute automatically without human intervention.
+2. DENY_AND_REPLAN: The action should not be executed as requested, but the task must NOT stop. Provide a concise explanation and replan guidance so the worker agent can adapt and achieve the goal using a safer alternative.
+3. HARD_BLOCK: The action violates non-overridable safety boundaries (host destruction, root escape, credential theft, exfiltration). Even if requested by the user, it cannot execute automatically.
+
+CRITICAL INVARIANTS:
+- User intent may justify necessary scoped operations within guest/workspace boundaries, but CANNOT override hard safety boundaries (e.g. escaping containers/WSL to host filesystem, deleting system files, exfiltrating secrets).
+- A denied operation MUST include concise reason and actionable replan guidance suitable for the worker agent to continue without asking the human user unless no viable alternative exists.
+
+Respond ONLY with a valid JSON object matching this schema:
+{
+  "decision": "ALLOW_AUTO" | "DENY_AND_REPLAN" | "HARD_BLOCK",
+  "risk": "safe" | "low" | "medium" | "high" | "critical",
+  "reason": "<concise explanation>",
+  "taskAligned": boolean,
+  "hardBoundaryViolation": boolean,
+  "replanGuidance": "<guidance for worker to replan, or null if allowed>"
+}`
+
+export interface BuildAutonomousApprovalPromptOptions {
+	actionType: string
+	target: Record<string, unknown>
+	executionBoundary?: Record<string, unknown>
+	taskContext: {
+		latestUserInstruction: string
+		activeGoal: string
+		currentStep?: string
+		explicitConstraints?: string[]
+		workspacePath: string
+		isWithinWorkspace: boolean
+	}
+	stage1Risk?: string
+	stage1Reason?: string
+	previousDenial?: {
+		actionType: string
+		reason: string
+		replanGuidance?: string
+	}
+}
+
+export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPromptOptions): SafetyPrompt {
+	const systemPrompt = AUTONOMOUS_APPROVAL_SYSTEM_PROMPT
+
+	const payload = {
+		actionType: options.actionType,
+		target: options.target,
+		executionBoundary: options.executionBoundary || { host: "local", targetType: "local", hostImpact: false },
+		taskContext: options.taskContext,
+		stage1: {
+			risk: options.stage1Risk || "unknown",
+			reason: options.stage1Reason || "Contextual assessment required",
+		},
+		previousDenial: options.previousDenial || null,
+	}
+
+	const userPrompt = [
+		"Please independently evaluate the following proposed action for autonomous execution:",
+		"```json",
+		JSON.stringify(payload, null, 2),
+		"```",
+		"Respond ONLY with the specified JSON object format.",
+	].join("\n")
+
+	return {
+		systemPrompt,
+		userPrompt,
+	}
+}
+

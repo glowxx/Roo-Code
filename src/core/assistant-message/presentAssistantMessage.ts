@@ -505,8 +505,24 @@ export async function presentAssistantMessage(cline: Task) {
 				if (response !== "yesButtonClicked") {
 					// Handle both messageResponse and noButtonClicked with text.
 					if (text) {
-						await cline.say("user_feedback", text, images)
-						pushToolResult(formatResponse.toolResult(formatResponse.toolDeniedWithFeedback(text), images))
+						let isAutonomousReplan = false
+						try {
+							const parsed = JSON.parse(text)
+							if (
+								(parsed.status === "denied" || parsed.status === "hard_blocked") &&
+								parsed.rejection_reason
+							) {
+								isAutonomousReplan = true
+							}
+						} catch {}
+
+						if (isAutonomousReplan) {
+							// Return structured replan guidance directly to the worker model without user speech bubble
+							pushToolResult(formatResponse.toolResult(text, images))
+						} else {
+							await cline.say("user_feedback", text, images)
+							pushToolResult(formatResponse.toolResult(formatResponse.toolDeniedWithFeedback(text), images))
+						}
 					} else {
 						pushToolResult(formatResponse.toolDenied())
 					}

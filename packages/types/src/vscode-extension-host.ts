@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-import type { GlobalSettings, RooCodeSettings } from "./global-settings.js"
+import type { GlobalSettings, RooCodeSettings, ApprovalMode } from "./global-settings.js"
 import type { ProviderSettings, ProviderSettingsEntry } from "./provider-settings.js"
 import type { HistoryItem } from "./history.js"
 import type { ModeConfig, PromptComponent } from "./mode.js"
@@ -15,6 +15,7 @@ import type { CostPrecision, CostSource, ModelInfo, ModelRecord, RouterModels } 
 import type { OpenAiCodexRateLimitInfo } from "./providers/openai-codex-rate-limits.js"
 import type { SkillMetadata } from "./skills.js"
 import type { WorktreeIncludeStatus } from "./worktree.js"
+import type { DecisionLogEntry } from "./command-safety.js"
 
 /**
  * ExtensionMessage
@@ -100,6 +101,7 @@ export interface ExtensionMessage {
 		| "terminalOutput"
 		| "terminalSessionEnded"
 		| "workspaceFilesChanged"
+		| "decisionLog"
 	text?: string
 	/** For fileContent: { path, content, error? } */
 	fileContent?: { path: string; content: string | null; error?: string }
@@ -244,6 +246,7 @@ export interface ExtensionMessage {
 	previousTokens?: number
 	newTokens?: number
 	savedTokensPercentage?: number
+	decisionLog?: DecisionLogEntry[]
 }
 
 export interface OpenAiCodexRateLimitsMessage {
@@ -260,6 +263,7 @@ export type ExtensionState = Pick<
 	| "customInstructions"
 	| "dismissedUpsells"
 	| "autoApprovalEnabled"
+	| "approvalMode"
 	| "alwaysAllowReadOnly"
 	| "alwaysAllowReadOnlyOutsideWorkspace"
 	| "alwaysAllowWrite"
@@ -554,7 +558,10 @@ export interface WebviewMessage {
 		| "updateSkillModes"
 		| "openSkillFile"
 		| "compactTask"
+		| "approvalMode"
+		| "getDecisionLog"
 	text?: string
+	approvalMode?: ApprovalMode
 	taskId?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat"

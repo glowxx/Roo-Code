@@ -17,6 +17,22 @@ export const formatResponse = {
 			feedback,
 		}),
 
+	toolDeniedAndReplan: (reason: string, replanGuidance?: string | null) =>
+		JSON.stringify({
+			status: "denied",
+			rejection_reason: reason,
+			replan_guidance: replanGuidance || null,
+			message: `Action rejected: ${reason}.${replanGuidance ? ` Guidance: ${replanGuidance}.` : ""} Continue the user's task using a safer alternative. Do not ask the user unless no safe viable path exists.`,
+		}),
+
+	toolHardBlocked: (reason: string, replanGuidance?: string | null) =>
+		JSON.stringify({
+			status: "hard_blocked",
+			rejection_reason: reason,
+			replan_guidance: replanGuidance || null,
+			message: `Action BLOCKED: ${reason}.${replanGuidance ? ` Guidance: ${replanGuidance}.` : ""} This operation violates hard safety boundaries. Formulate an alternative approach within safe bounds. Only ask the user if no viable safe path exists.`,
+		}),
+
 	toolApprovedWithFeedback: (feedback?: string) =>
 		JSON.stringify({
 			status: "approved",

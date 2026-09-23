@@ -46,10 +46,13 @@ import {
 	isIdleAsk,
 	isInteractiveAsk,
 	isResumableAsk,
+	isNonBlockingAsk,
 	isSafetyModelConfigured,
 	type SafetyEvaluationResult,
 	type CompactSafetyContext,
 	type TwoStageSafetyResult,
+	type UnifiedApprovalRequest,
+	type ApprovalActionType,
 	QueuedMessage,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -59,6 +62,7 @@ import {
 	countEnabledMcpTools,
 } from "@roo-code/types"
 import { CommandSafetyJudge, SAFETY_EVALUATION_FALLBACK_RESULT } from "../security/CommandSafetyJudge"
+import { ApprovalOrchestrator } from "../security/ApprovalOrchestrator"
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
@@ -235,6 +239,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	 * @see {@link waitForModeInitialization} - Public method to await this promise
 	 */
 	private taskModeReady: Promise<void>
+	private consecutiveReplanCount: number = 0
+	private totalReplanCount: number = 0
+	private deniedActionHistory: string[] = []
+	private approvalOrchestrator: ApprovalOrchestrator = new ApprovalOrchestrator()
 
 	/**
 	 * The API configuration name (provider profile) associated with this task.
@@ -1244,6 +1252,136 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		return undefined
 	}
 
+	private buildApprovalRequest({
+		askType,
+		text,
+		isProtected,
+		askTs,
+	}: {
+		askType: ClineAsk
+		text?: string
+		isProtected?: boolean
+		askTs: number
+	}): UnifiedApprovalRequest {
+		const latestUserFeedback = [...this.clineMessages]
+			.reverse()
+			.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
+		const latestUserInstruction = latestUserFeedback?.text || this.metadata?.task || ""
+
+		let activeStep: string | undefined = undefined
+		if (this.todoList && this.todoList.length > 0) {
+			const inProgressIndex = this.todoList.findIndex((t) => t.status === "in_progress")
+			const activeIndex =
+				inProgressIndex !== -1
+					? inProgressIndex
+					: this.todoList.findIndex((t) => t.status === "pending")
+			if (activeIndex !== -1) {
+				const item = this.todoList[activeIndex]
+				activeStep = `Step ${activeIndex + 1}/${this.todoList.length}: ${item.content} (${item.status})`
+			}
+		}
+
+		const isWithinWorkspace = Boolean(
+			this.workspacePath &&
+				(this.cwd === this.workspacePath ||
+					this.cwd.startsWith(this.workspacePath + path.sep) ||
+					this.cwd.startsWith(this.workspacePath + "/"))
+		)
+
+		let actionType: ApprovalActionType = "execute_command"
+		const target: UnifiedApprovalRequest["target"] = {}
+
+		if (askType === "command") {
+			actionType = "execute_command"
+			target.command = text || ""
+			target.cwd = this.cwd
+		} else if (askType === "tool") {
+			let tool: any
+			try {
+				tool = JSON.parse(text || "{}")
+			} catch {}
+
+			const toolName = tool?.tool
+			if (toolName === "newFileCreated") {
+				actionType = "write_to_file"
+				target.filePath = tool.path
+				target.isProtected = isProtected
+				target.isOutsideWorkspace = !!tool.isOutsideWorkspace
+			} else if (toolName === "editedExistingFile" || toolName === "appliedDiff") {
+				actionType = "replace_file_content"
+				target.filePath = tool.path
+				target.diff = tool.diff
+				target.isProtected = isProtected
+				target.isOutsideWorkspace = !!tool.isOutsideWorkspace
+			} else if (toolName === "readFile") {
+				actionType = "read_file"
+				target.filePath = tool.path
+				target.isOutsideWorkspace = !!tool.isOutsideWorkspace
+			} else if (
+				toolName === "listFiles" ||
+				toolName === "listFilesTopLevel" ||
+				toolName === "listFilesRecursive"
+			) {
+				actionType = "read_file"
+				target.filePath = tool.path
+				target.isOutsideWorkspace = !!tool.isOutsideWorkspace
+			} else if (toolName === "searchFiles" || toolName === "codebaseSearch") {
+				actionType = "read_file"
+				target.filePath = tool.path
+			} else if (toolName === "switchMode") {
+				actionType = "switch_mode"
+			} else if (toolName === "newTask") {
+				actionType = "new_task"
+				target.subtaskMode = tool.mode
+				target.subtaskMessage = tool.content
+			} else if (toolName === "finishTask") {
+				actionType = "attempt_completion"
+			} else {
+				actionType = "write_to_file"
+				target.filePath = tool?.path
+				target.isProtected = isProtected
+				target.isOutsideWorkspace = !!tool?.isOutsideWorkspace
+			}
+		} else if (askType === "use_mcp_server") {
+			let mcp: any
+			try {
+				mcp = JSON.parse(text || "{}")
+			} catch {}
+			if (mcp?.type === "access_mcp_resource") {
+				actionType = "access_mcp_resource"
+				target.mcpServerName = mcp.serverName
+			} else {
+				actionType = "use_mcp_tool"
+				target.mcpServerName = mcp?.serverName
+				target.mcpToolName = mcp?.toolName
+				target.mcpArguments = mcp?.arguments
+			}
+		} else if (askType === "completion_result") {
+			actionType = "attempt_completion"
+		}
+
+		return {
+			id: `req_${this.taskId}_${askTs}`,
+			taskId: this.taskId,
+			actionType,
+			timestamp: askTs,
+			target,
+			taskContext: {
+				latestUserInstruction,
+				activeGoal: this.metadata?.task || "",
+				currentStep: activeStep,
+				workspacePath: this.workspacePath || this.cwd,
+				isWithinWorkspace,
+				recentActionSignatures: [...this.deniedActionHistory],
+			},
+		}
+	}
+
+	private computeActionSignature(req: UnifiedApprovalRequest): string {
+		const targetStr = req.target.command || req.target.filePath || req.target.mcpToolName || ""
+		return `${req.actionType}:${targetStr.trim()}`
+	}
+
 	// Note that `partial` has three valid states true (partial message),
 	// false (completion of partial message), undefined (individual complete
 	// message).
@@ -1349,117 +1487,203 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Automatically approve if the ask according to the user's settings.
 		const provider = this.providerRef.deref()
 		const state = provider ? await provider.getState() : undefined
-		let approval: CheckAutoApprovalResult = await checkAutoApproval({ state, ask: type, text, isProtected })
+		let approval: CheckAutoApprovalResult = { decision: "ask" }
 
-		if (approval.decision === "approve") {
-			if (type === "command") {
-				if (isSafetyModelConfigured(state)) {
-					const recentCommands = this.clineMessages
-						.filter((m) => m.ask === "command" && m.text && m.ts !== askTs)
-						.slice(-5)
-						.map((m) => m.text!)
+		if (state?.approvalMode === "auto") {
+			if (isNonBlockingAsk(type)) {
+				this.approveAsk()
+			} else if (
+				type === "followup" ||
+				type === "auto_approval_max_req_reached" ||
+				type === "mistake_limit_reached" ||
+				type === "api_req_failed" ||
+				type === "resume_task" ||
+				type === "resume_completed_task"
+			) {
+				approval = await checkAutoApproval({ state, ask: type, text, isProtected })
+				if (approval.decision === "approve") {
+					this.approveAsk()
+				} else if (approval.decision === "deny") {
+					this.denyAsk()
+				} else if (approval.decision === "timeout") {
+					const timeoutApproval = approval
+					this.autoApprovalTimeoutRef = setTimeout(() => {
+						const { askResponse, text, images } = timeoutApproval.fn()
+						this.handleWebviewAskResponse(askResponse, text, images)
+						this.autoApprovalTimeoutRef = undefined
+					}, timeoutApproval.timeout)
+					timeouts.push(this.autoApprovalTimeoutRef)
+				}
+			} else {
+				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
+				const decisionResult = await this.approvalOrchestrator.evaluate(request, state)
 
-					// Extract compact safety context from Task
-					const latestUserFeedback = [...this.clineMessages]
-						.reverse()
-						.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
-					const latestUserInstruction = latestUserFeedback?.text || this.metadata?.task || ""
+				if (decisionResult.auditLog) {
+					console.log(decisionResult.auditLog)
+				}
 
-					let activeTodo: CompactSafetyContext["activeTodo"] = undefined
-					if (this.todoList && this.todoList.length > 0) {
-						const inProgressIndex = this.todoList.findIndex((t) => t.status === "in_progress")
-						const activeIndex =
-							inProgressIndex !== -1
-								? inProgressIndex
-								: this.todoList.findIndex((t) => t.status === "pending")
-						if (activeIndex !== -1) {
-							const item = this.todoList[activeIndex]
-							activeTodo = {
-								content: item.content,
-								status: item.status,
-								stepIndex: activeIndex + 1,
-								totalSteps: this.todoList.length,
-							}
-						}
+				if (decisionResult.decision === "ALLOW_AUTO") {
+					approval = { decision: "approve" }
+					this.approveAsk()
+					this.consecutiveReplanCount = 0
+				} else if (
+					decisionResult.decision === "DENY_AND_REPLAN" ||
+					decisionResult.decision === "HARD_BLOCK"
+				) {
+					const signature = this.computeActionSignature(request)
+					const isRepeated = this.deniedActionHistory.includes(signature)
+					this.deniedActionHistory.push(signature)
+					if (this.deniedActionHistory.length > 5) {
+						this.deniedActionHistory.shift()
 					}
+					this.consecutiveReplanCount = (this.consecutiveReplanCount || 0) + 1
+					this.totalReplanCount = (this.totalReplanCount || 0) + 1
 
-					const isWithinWorkspace = Boolean(
-						this.workspacePath &&
-							(this.cwd === this.workspacePath ||
-								this.cwd.startsWith(this.workspacePath + path.sep) ||
-								this.cwd.startsWith(this.workspacePath + "/"))
-					)
+					// Loop / thrashing protection: repeated rejected action or consecutive limit > 3 or total > 10
+					const isThrashing = isRepeated || this.consecutiveReplanCount > 3 || this.totalReplanCount > 10
 
-					const context: CompactSafetyContext = {
-						taskGoal: this.metadata?.task || "",
-						latestUserInstruction,
-						activeTodo,
-						workspacePath: this.workspacePath || this.cwd,
-						commandCwd: this.cwd,
-						isWithinWorkspace,
-						taskMode: this._taskMode,
-						recentCommands,
-					}
-
-					let twoStageResult: TwoStageSafetyResult
-					try {
-						twoStageResult = await CommandSafetyJudge.evaluateTwoStage({
-							command: text || "",
-							cwd: this.cwd,
-							taskId: this.taskId,
-							context,
-							recentCommands,
-							config: state?.commandSafetyConfig!,
-							state,
-						})
-					} catch (error) {
-						const errorDetail = error instanceof Error ? error.message : String(error)
-						const fallbackStage1: SafetyEvaluationResult = {
-							isSafe: false,
-							riskLevel: "critical",
-							reason: `Command safety verification failed: ${errorDetail || "Unknown error"}. Manual approval required.`,
-						}
-						twoStageResult = {
-							decision: "ask",
-							stage1: fallbackStage1,
-							finalReason: fallbackStage1.reason,
-							auditLog: `[CommandSafety] commandId=${this.taskId} stage1=ERROR target=unknown stage2=ERROR final=MANUAL reason="${fallbackStage1.reason}"`,
-						}
-					}
-
-					if (twoStageResult.auditLog) {
-						console.log(twoStageResult.auditLog)
-					}
-
-					if (twoStageResult.decision === "approve") {
-						this.approveAsk()
-					} else {
+					if (isThrashing) {
 						approval = { decision: "ask" }
 						const warningPayload: SafetyEvaluationResult = {
-							isSafe: twoStageResult.stage1?.isSafe ?? false,
-							riskLevel: twoStageResult.stage1?.riskLevel ?? "critical",
-							reason: twoStageResult.finalReason || twoStageResult.stage1?.reason || SAFETY_EVALUATION_FALLBACK_RESULT.reason,
+							isSafe: false,
+							riskLevel: decisionResult.risk || "high",
+							reason: `Safety replan limit reached or action repeated (${decisionResult.reason}). Manual approval required.`,
 						}
 						await this.say("command_safety_warning", JSON.stringify(warningPayload))
 						this.lastMessageTs = askTs
+					} else {
+						approval = { decision: "deny" }
+						const payload =
+							decisionResult.decision === "HARD_BLOCK"
+								? formatResponse.toolHardBlocked(decisionResult.reason, decisionResult.replanGuidance)
+								: formatResponse.toolDeniedAndReplan(decisionResult.reason, decisionResult.replanGuidance)
+						this.denyAsk({ text: payload })
+					}
+				} else {
+					// MANUAL_APPROVAL (or fail-closed)
+					approval = { decision: "ask" }
+					const warningPayload: SafetyEvaluationResult = {
+						isSafe: false,
+						riskLevel: decisionResult.risk || "high",
+						reason: decisionResult.reason,
+					}
+					await this.say("command_safety_warning", JSON.stringify(warningPayload))
+					this.lastMessageTs = askTs
+				}
+			}
+		} else {
+			approval = await checkAutoApproval({ state, ask: type, text, isProtected })
+
+			if (approval.decision === "approve") {
+				if (type === "command") {
+					if (isSafetyModelConfigured(state)) {
+						const recentCommands = this.clineMessages
+							.filter((m) => m.ask === "command" && m.text && m.ts !== askTs)
+							.slice(-5)
+							.map((m) => m.text!)
+
+						// Extract compact safety context from Task
+						const latestUserFeedback = [...this.clineMessages]
+							.reverse()
+							.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
+						const latestUserInstruction = latestUserFeedback?.text || this.metadata?.task || ""
+
+						let activeTodo: CompactSafetyContext["activeTodo"] = undefined
+						if (this.todoList && this.todoList.length > 0) {
+							const inProgressIndex = this.todoList.findIndex((t) => t.status === "in_progress")
+							const activeIndex =
+								inProgressIndex !== -1
+									? inProgressIndex
+									: this.todoList.findIndex((t) => t.status === "pending")
+							if (activeIndex !== -1) {
+								const item = this.todoList[activeIndex]
+								activeTodo = {
+									content: item.content,
+									status: item.status,
+									stepIndex: activeIndex + 1,
+									totalSteps: this.todoList.length,
+								}
+							}
+						}
+
+						const isWithinWorkspace = Boolean(
+							this.workspacePath &&
+								(this.cwd === this.workspacePath ||
+									this.cwd.startsWith(this.workspacePath + path.sep) ||
+									this.cwd.startsWith(this.workspacePath + "/"))
+						)
+
+						const context: CompactSafetyContext = {
+							taskGoal: this.metadata?.task || "",
+							latestUserInstruction,
+							activeTodo,
+							workspacePath: this.workspacePath || this.cwd,
+							commandCwd: this.cwd,
+							isWithinWorkspace,
+							taskMode: this._taskMode,
+							recentCommands,
+						}
+
+						let twoStageResult: TwoStageSafetyResult
+						try {
+							twoStageResult = await CommandSafetyJudge.evaluateTwoStage({
+								command: text || "",
+								cwd: this.cwd,
+								taskId: this.taskId,
+								context,
+								recentCommands,
+								config: state?.commandSafetyConfig!,
+								state,
+							})
+						} catch (error) {
+							const errorDetail = error instanceof Error ? error.message : String(error)
+							const fallbackStage1: SafetyEvaluationResult = {
+								isSafe: false,
+								riskLevel: "critical",
+								reason: `Command safety verification failed: ${errorDetail || "Unknown error"}. Manual approval required.`,
+							}
+							twoStageResult = {
+								decision: "ask",
+								stage1: fallbackStage1,
+								finalReason: fallbackStage1.reason,
+								auditLog: `[CommandSafety] commandId=${this.taskId} stage1=ERROR target=unknown stage2=ERROR final=MANUAL reason="${fallbackStage1.reason}"`,
+							}
+						}
+
+						if (twoStageResult.auditLog) {
+							console.log(twoStageResult.auditLog)
+						}
+
+						if (twoStageResult.decision === "approve") {
+							this.approveAsk()
+						} else {
+							approval = { decision: "ask" }
+							const warningPayload: SafetyEvaluationResult = {
+								isSafe: twoStageResult.stage1?.isSafe ?? false,
+								riskLevel: twoStageResult.stage1?.riskLevel ?? "critical",
+								reason: twoStageResult.finalReason || twoStageResult.stage1?.reason || SAFETY_EVALUATION_FALLBACK_RESULT.reason,
+							}
+							await this.say("command_safety_warning", JSON.stringify(warningPayload))
+							this.lastMessageTs = askTs
+						}
+					} else {
+						this.approveAsk()
 					}
 				} else {
 					this.approveAsk()
 				}
-			} else {
-				this.approveAsk()
+			} else if (approval.decision === "deny") {
+				this.denyAsk()
+			} else if (approval.decision === "timeout") {
+				const timeoutApproval = approval
+				// Store the auto-approval timeout so it can be cancelled if user interacts
+				this.autoApprovalTimeoutRef = setTimeout(() => {
+					const { askResponse, text, images } = timeoutApproval.fn()
+					this.handleWebviewAskResponse(askResponse, text, images)
+					this.autoApprovalTimeoutRef = undefined
+				}, timeoutApproval.timeout)
+				timeouts.push(this.autoApprovalTimeoutRef)
 			}
-		} else if (approval.decision === "deny") {
-			this.denyAsk()
-		} else if (approval.decision === "timeout") {
-			const timeoutApproval = approval
-			// Store the auto-approval timeout so it can be cancelled if user interacts
-			this.autoApprovalTimeoutRef = setTimeout(() => {
-				const { askResponse, text, images } = timeoutApproval.fn()
-				this.handleWebviewAskResponse(askResponse, text, images)
-				this.autoApprovalTimeoutRef = undefined
-			}, timeoutApproval.timeout)
-			timeouts.push(this.autoApprovalTimeoutRef)
 		}
 
 		// The state is mutable if the message is complete and the task will

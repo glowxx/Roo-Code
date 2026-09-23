@@ -123,6 +123,7 @@ export const globalSettingsSchema = z.object({
 	autoCondenseContext: z.boolean().optional(),
 	autoCondenseContextPercent: z.number().optional(),
 	commandSafetyConfig: commandSafetyConfigSchema.optional(),
+	approvalMode: z.enum(["manual", "auto"]).default("manual").optional(),
 
 	/**
 	 * Whether to include current time in the environment details
@@ -255,6 +256,7 @@ export const globalSettingsSchema = z.object({
 })
 
 export type GlobalSettings = z.infer<typeof globalSettingsSchema>
+export type ApprovalMode = "manual" | "auto"
 
 export const GLOBAL_SETTINGS_KEYS = globalSettingsSchema.keyof().options
 

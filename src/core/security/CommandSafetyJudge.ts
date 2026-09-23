@@ -756,7 +756,7 @@ export class CommandSafetyJudge {
 	/**
 	 * Dispatches request to the appropriate LLM provider client.
 	 */
-	protected async callProvider({
+	public async callProvider({
 		provider,
 		modelId,
 		apiKey,

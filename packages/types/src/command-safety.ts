@@ -259,3 +259,114 @@ export interface TwoStageSafetyResult {
 	auditLog: string
 }
 
+export type ApprovalActionType =
+	| "execute_command"
+	| "write_to_file"
+	| "replace_file_content"
+	| "delete_file"
+	| "read_file"
+	| "use_mcp_tool"
+	| "access_mcp_resource"
+	| "switch_mode"
+	| "new_task"
+	| "attempt_completion"
+
+export type OrchestratorDecision = "ALLOW_AUTO" | "DENY_AND_REPLAN" | "HARD_BLOCK" | "MANUAL_APPROVAL"
+
+export const orchestratorDecisionSchema = z.enum([
+	"ALLOW_AUTO",
+	"DENY_AND_REPLAN",
+	"HARD_BLOCK",
+	"MANUAL_APPROVAL",
+])
+
+export interface CompactApprovalContext {
+	latestUserInstruction: string
+	activeGoal: string
+	currentStep?: string
+	explicitConstraints?: string[]
+	workspacePath: string
+	isWithinWorkspace: boolean
+	recentActionSignatures?: string[]
+}
+
+export const compactApprovalContextSchema = z.object({
+	latestUserInstruction: z.string(),
+	activeGoal: z.string(),
+	currentStep: z.string().optional(),
+	explicitConstraints: z.array(z.string()).optional(),
+	workspacePath: z.string(),
+	isWithinWorkspace: z.boolean(),
+	recentActionSignatures: z.array(z.string()).optional(),
+})
+
+export interface UnifiedApprovalRequest {
+	id: string
+	taskId: string
+	actionType: ApprovalActionType
+	timestamp: number
+	target: {
+		command?: string
+		cwd?: string
+		filePath?: string
+		diff?: string
+		isOutsideWorkspace?: boolean
+		isProtected?: boolean
+		mcpServerName?: string
+		mcpToolName?: string
+		mcpArguments?: Record<string, unknown>
+		subtaskMode?: string
+		subtaskMessage?: string
+		completionSummary?: string
+	}
+	executionBoundary?: ExecutionBoundary
+	taskContext: CompactApprovalContext
+	previousDenial?: {
+		actionType: ApprovalActionType
+		reason: string
+		replanGuidance?: string
+	}
+}
+
+export interface ApprovalDecisionResult {
+	decision: OrchestratorDecision
+	risk: CommandSafetyRiskLevel
+	reason: string
+	taskAligned: boolean
+	hardBoundaryViolation?: boolean
+	replanGuidance?: string | null
+	auditLog: string
+}
+
+export const approvalDecisionResultSchema = z.object({
+	decision: z.enum(["ALLOW_AUTO", "DENY_AND_REPLAN", "HARD_BLOCK"]),
+	risk: z.string().transform((val) => {
+		const lower = val.toLowerCase().trim()
+		if (["safe", "low", "medium", "high", "critical"].includes(lower)) {
+			return lower as CommandSafetyRiskLevel
+		}
+		return "high" as CommandSafetyRiskLevel
+	}),
+	reason: z.string(),
+	taskAligned: z.boolean().default(false),
+	hardBoundaryViolation: z.boolean().default(false),
+	replanGuidance: z.string().nullable().optional(),
+})
+
+export interface DecisionLogEntry {
+	id: string
+	timestamp: number
+	taskId: string
+	actionType: ApprovalActionType
+	target: string
+	boundaryTarget?: string
+	risk: CommandSafetyRiskLevel
+	decision: OrchestratorDecision
+	reason: string
+	replanGuidance?: string | null
+	evaluatorModel?: string
+	fastPath: boolean
+	latencyMs?: number
+}
+
+

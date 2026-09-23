@@ -1,0 +1,498 @@
+import type {
+	UnifiedApprovalRequest,
+	ApprovalDecisionResult,
+	CommandSafetyConfig,
+	CommandSafetyRiskLevel,
+	ProviderSettings,
+	ExtensionState,
+	DecisionLogEntry,
+} from "@roo-code/types"
+import {
+	approvalDecisionResultSchema,
+	isSafetyModelConfigured,
+	resolveProviderApiKey,
+} from "@roo-code/types"
+import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS } from "./CommandSafetyJudge"
+import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
+import { containsDangerousSubstitution } from "../auto-approval/commands"
+import { buildAutonomousApprovalPrompt, sanitizeForSafetyPrompt } from "./safetyPromptTemplate"
+import { DecisionLogStore } from "./DecisionLogStore"
+
+export interface ApprovalOrchestratorOptions {
+	timeoutMs?: number
+	judge?: CommandSafetyJudge
+}
+
+export class ApprovalOrchestrator {
+	private readonly timeoutMs: number
+	private readonly judge: CommandSafetyJudge
+
+	constructor(options?: ApprovalOrchestratorOptions) {
+		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+		this.judge = options?.judge ?? new CommandSafetyJudge({ timeoutMs: this.timeoutMs })
+	}
+
+	/**
+	 * Validates the core architectural invariant:
+	 * WORKER MODEL != APPROVAL AUTHORITY
+	 *
+	 * Returns false if the worker model and approval model are identical,
+	 * preventing the worker from approving its own actions.
+	 */
+	public validateAuthoritySeparation(
+		workerConfig?: ProviderSettings | null,
+		approvalConfig?: CommandSafetyConfig | null
+	): boolean {
+		if (!approvalConfig || !approvalConfig.enabled) {
+			return true
+		}
+
+		const workerModel = (workerConfig?.apiModelId || "").toLowerCase().trim()
+		const approvalModel = (approvalConfig?.modelId || "").toLowerCase().trim()
+		const workerProvider = (workerConfig?.apiProvider || "").toLowerCase().trim()
+		const approvalProvider = (approvalConfig?.provider || "").toLowerCase().trim()
+
+		if (
+			workerModel &&
+			approvalModel &&
+			workerModel === approvalModel &&
+			workerProvider &&
+			approvalProvider &&
+			workerProvider === approvalProvider
+		) {
+			return false
+		}
+
+		return true
+	}
+
+	/**
+	 * Evaluates an approval request within the autonomous runtime.
+	 *
+	 * Decision Hierarchy:
+	 * 1. Authority Separation Guard (Collusion Check) -> Fail-closed if worker == approval
+	 * 2. Deterministic Fast-Path (0ms, 0 tokens) -> ALLOW_AUTO or HARD_BLOCK
+	 * 3. Execution Boundary & Blast Radius Analysis -> HARD_BLOCK on uncontained host escapes
+	 * 4. Contextual AI Adjudication (Independent Model) -> ALLOW_AUTO / DENY_AND_REPLAN / HARD_BLOCK
+	 * 5. Fail-Closed Fallback -> MANUAL_APPROVAL (never fallback to worker model)
+	 */
+	public async evaluate(
+		request: UnifiedApprovalRequest,
+		state?: Partial<ExtensionState> | null
+	): Promise<ApprovalDecisionResult> {
+		const approvalConfig = state?.commandSafetyConfig
+		const workerConfig = state?.apiConfiguration
+		const taskId = request.taskId || "unknown"
+
+		// 1. Anti-Collusion Check
+		const isSeparated = this.validateAuthoritySeparation(workerConfig, approvalConfig)
+		if (!isSeparated) {
+			const reason = `AI Collusion Hazard: Configured Approval Authority model ('${approvalConfig?.modelId}') is identical to Worker Model. Self-approval is forbidden. Manual approval required.`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=MANUAL_APPROVAL reason="${reason}"`
+			const result: ApprovalDecisionResult = {
+				decision: "MANUAL_APPROVAL",
+				risk: "critical",
+				reason,
+				taskAligned: false,
+				hardBoundaryViolation: true,
+				auditLog,
+			}
+			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+			return result
+		}
+
+		// 2. Deterministic Fast-Path Evaluation
+		const fastPathResult = this.evaluateDeterministicFastPath(request)
+		if (fastPathResult) {
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=${fastPathResult.decision} reason="${fastPathResult.reason}"`
+			const result: ApprovalDecisionResult = {
+				...fastPathResult,
+				auditLog,
+			}
+			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+			return result
+		}
+
+		// 3. Command-specific Execution Boundary Analysis
+		if (request.actionType === "execute_command" && request.target.command) {
+			const boundaryResult = this.evaluateCommandBoundary(request)
+			if (boundaryResult) {
+				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=${boundaryResult.decision} reason="${boundaryResult.reason}"`
+				const result: ApprovalDecisionResult = {
+					...boundaryResult,
+					auditLog,
+				}
+				this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+				return result
+			}
+		}
+
+		// 4. Contextual AI Adjudication via Independent Approval Model
+		const isConfigured = isSafetyModelConfigured(state)
+		if (!isConfigured) {
+			const reason = "Approval Model is not configured or lacks API key. Manual approval required."
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=false finalDecision=MANUAL_APPROVAL reason="${reason}"`
+			const result: ApprovalDecisionResult = {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason,
+				taskAligned: false,
+				auditLog,
+			}
+			this.recordDecision(request, result, undefined, false, state)
+			return result
+		}
+
+		return await this.evaluateWithApprovalAi(request, state!)
+	}
+
+	/**
+	 * Fast-path heuristic evaluation (0ms, 0 tokens).
+	 */
+	private evaluateDeterministicFastPath(
+		request: UnifiedApprovalRequest
+	): Omit<ApprovalDecisionResult, "auditLog"> | null {
+		const { actionType, target } = request
+
+		// Read-only file inspection inside workspace is guaranteed safe
+		if (
+			actionType === "read_file" &&
+			!target.isOutsideWorkspace
+		) {
+			return {
+				decision: "ALLOW_AUTO",
+				risk: "safe",
+				reason: "Routine read-only inspection in active workspace",
+				taskAligned: true,
+			}
+		}
+
+		// Safe mode switches and subtasks
+		if (actionType === "switch_mode" || actionType === "new_task") {
+			return {
+				decision: "ALLOW_AUTO",
+				risk: "safe",
+				reason: "Internal workflow transition",
+				taskAligned: true,
+			}
+		}
+
+		// File modifications
+		if (actionType === "write_to_file" || actionType === "replace_file_content") {
+			// Hard-block writes to protected files (rules, configs, keys)
+			if (target.isProtected) {
+				return {
+					decision: "HARD_BLOCK",
+					risk: "critical",
+					reason: "Target file is protected by safety policy (configuration, instructions, or credentials).",
+					taskAligned: false,
+					hardBoundaryViolation: true,
+					replanGuidance: "Do not attempt to modify protected project configuration or agent rules files. Work within project source code.",
+				}
+			}
+
+			// Hard-block writes outside workspace in autonomous mode
+			if (target.isOutsideWorkspace) {
+				return {
+					decision: "HARD_BLOCK",
+					risk: "high",
+					reason: "Target path is outside the active workspace directory.",
+					taskAligned: false,
+					hardBoundaryViolation: true,
+					replanGuidance: "Restrict all file modifications to the current workspace root.",
+				}
+			}
+
+			// Normal scoped writes within workspace are safe for autonomous work
+			return {
+				decision: "ALLOW_AUTO",
+				risk: "low",
+				reason: "File modification scoped within active workspace",
+				taskAligned: true,
+			}
+		}
+
+		// Command fast-paths
+		if (actionType === "execute_command" && target.command) {
+			const cmd = target.command.trim()
+
+			// Block dangerous parameter expansions immediately
+			if (containsDangerousSubstitution(cmd)) {
+				return {
+					decision: "HARD_BLOCK",
+					risk: "critical",
+					reason: "Command contains dangerous parameter substitution or code injection patterns.",
+					taskAligned: false,
+					hardBoundaryViolation: true,
+					replanGuidance: "Use simple standard command arguments without dangerous parameter expansions.",
+				}
+			}
+
+			// Check standard safe read-only/build commands
+			const fastPath = CommandSafetyJudge.evaluateFastPath(cmd)
+			if (fastPath && fastPath.isSafe) {
+				return {
+					decision: "ALLOW_AUTO",
+					risk: fastPath.riskLevel,
+					reason: fastPath.reason,
+					taskAligned: true,
+				}
+			}
+		}
+
+		return null
+	}
+
+	/**
+	 * Decomposes command execution boundaries and checks for host escapes.
+	 */
+	private evaluateCommandBoundary(
+		request: UnifiedApprovalRequest
+	): Omit<ApprovalDecisionResult, "auditLog"> | null {
+		const cmd = request.target.command || ""
+		const boundary = ExecutionBoundaryAnalyzer.analyze(cmd, {
+			userInstruction: request.taskContext.latestUserInstruction,
+			taskGoal: request.taskContext.activeGoal,
+			workspacePath: request.taskContext.workspacePath,
+		})
+
+		request.executionBoundary = boundary
+
+		// Invariant: Uncontained host impact or boundary escape -> DENY_AND_REPLAN or HARD_BLOCK
+		if (boundary.hostImpact.isHostEscape) {
+			const reasons = boundary.hostImpact.reasons.join("; ")
+			return {
+				decision: "DENY_AND_REPLAN",
+				risk: (boundary.hostImpact.highestRisk === "none" ? "low" : boundary.hostImpact.highestRisk) as CommandSafetyRiskLevel,
+				reason: `Command attempts Windows host modification or escape from guest sandbox (${reasons}).`,
+				taskAligned: false,
+				hardBoundaryViolation: true,
+				replanGuidance: "Confine operations strictly inside the guest environment filesystem. Do not access host mounts (/mnt/c) or execute host binaries.",
+			}
+		}
+
+		return null
+	}
+
+	/**
+	 * Evaluates complex or context-dependent actions using the independent Approval Model.
+	 */
+	private async evaluateWithApprovalAi(
+		request: UnifiedApprovalRequest,
+		state: Partial<ExtensionState>
+	): Promise<ApprovalDecisionResult> {
+		const approvalConfig = state.commandSafetyConfig!
+		const provider = approvalConfig.provider.toLowerCase().trim()
+		const modelId = approvalConfig.modelId.trim()
+		const apiKey = approvalConfig.apiKey || resolveProviderApiKey(provider, state.apiConfiguration) || ""
+		const taskId = request.taskId || "unknown"
+
+		// Extract known secrets for redaction
+		const knownSecrets = [
+			apiKey,
+			state.apiConfiguration?.apiKey,
+			state.apiConfiguration?.openAiApiKey,
+			state.apiConfiguration?.geminiApiKey,
+			state.apiConfiguration?.openRouterApiKey,
+		]
+
+		const sanitizedTarget = this.sanitizeTarget(request.target, knownSecrets)
+
+		const { systemPrompt, userPrompt } = buildAutonomousApprovalPrompt({
+			actionType: request.actionType,
+			target: sanitizedTarget,
+			executionBoundary: request.executionBoundary as any,
+			taskContext: {
+				latestUserInstruction: sanitizeForSafetyPrompt(request.taskContext.latestUserInstruction, knownSecrets),
+				activeGoal: sanitizeForSafetyPrompt(request.taskContext.activeGoal, knownSecrets),
+				currentStep: request.taskContext.currentStep
+					? sanitizeForSafetyPrompt(request.taskContext.currentStep, knownSecrets)
+					: undefined,
+				explicitConstraints: request.taskContext.explicitConstraints?.map((c) =>
+					sanitizeForSafetyPrompt(c, knownSecrets)
+				),
+				workspacePath: request.taskContext.workspacePath,
+				isWithinWorkspace: request.taskContext.isWithinWorkspace,
+			},
+			stage1Risk: request.executionBoundary?.hostImpact.highestRisk,
+			stage1Reason: request.executionBoundary?.hostImpact.reasons.join("; "),
+			previousDenial: request.previousDenial,
+		})
+
+		const abortController = new AbortController()
+		let timeoutId: NodeJS.Timeout | undefined
+
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeoutId = setTimeout(() => {
+				const timeoutError = new Error(`Approval AI evaluation timed out after ${this.timeoutMs}ms`)
+				abortController.abort(timeoutError)
+				reject(timeoutError)
+			}, this.timeoutMs)
+		})
+
+		try {
+			const callParams = {
+				provider,
+				modelId,
+				apiKey,
+				systemPrompt,
+				userPrompt,
+				state,
+				signal: abortController.signal,
+				maxTokens: 350,
+			}
+
+			const providerCall = CommandSafetyJudge.globalCallProviderOverride
+				? CommandSafetyJudge.globalCallProviderOverride(callParams)
+				: this.judge.callProvider(callParams)
+
+			const rawResponse = await Promise.race([providerCall, timeoutPromise])
+			if (timeoutId) clearTimeout(timeoutId)
+
+			const parsed = this.parseApprovalResponse(rawResponse)
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} finalDecision=${parsed.decision} reason="${parsed.reason}"`
+
+			const result: ApprovalDecisionResult = {
+				...parsed,
+				auditLog,
+			}
+
+			this.recordDecision(request, result, modelId, false, state)
+			return result
+		} catch (error: any) {
+			if (timeoutId) clearTimeout(timeoutId)
+			const errorMsg = error instanceof Error ? error.message : String(error)
+			const reason = `Approval AI adjudication failed (${errorMsg}). Fail closed to manual approval.`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+
+			const result: ApprovalDecisionResult = {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason,
+				taskAligned: false,
+				auditLog,
+			}
+
+			this.recordDecision(request, result, modelId, false, state)
+			return result
+		}
+	}
+
+	/**
+	 * Parses and validates the structured response from the Approval Authority model.
+	 * Fails closed to MANUAL_APPROVAL on parse error or schema invalidity.
+	 */
+	public parseApprovalResponse(rawResponse: string): Omit<ApprovalDecisionResult, "auditLog"> {
+		if (!rawResponse || typeof rawResponse !== "string" || rawResponse.trim().length === 0) {
+			return {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason: "Empty response from Approval Authority model. Fail closed to manual approval.",
+				taskAligned: false,
+			}
+		}
+
+		const trimmed = rawResponse.trim()
+		let parsedObject: any = null
+
+		// Attempt 1: Direct JSON parse
+		try {
+			parsedObject = JSON.parse(trimmed)
+		} catch {
+			// Attempt 2: Code block regex
+			const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+			if (match && match[1]) {
+				try {
+					parsedObject = JSON.parse(match[1].trim())
+				} catch {}
+			}
+
+			// Attempt 3: Outermost braces
+			if (!parsedObject) {
+				const start = trimmed.indexOf("{")
+				const end = trimmed.lastIndexOf("}")
+				if (start !== -1 && end > start) {
+					try {
+						parsedObject = JSON.parse(trimmed.substring(start, end + 1))
+					} catch {}
+				}
+			}
+		}
+
+		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
+			return {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason: "Malformed JSON response from Approval Authority model. Fail closed to manual approval.",
+				taskAligned: false,
+			}
+		}
+
+		const validated = approvalDecisionResultSchema.safeParse(parsedObject)
+		if (!validated.success) {
+			return {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason: `Approval response schema validation failed (${validated.error.issues.map((i) => i.message).join(", ")}). Fail closed.`,
+				taskAligned: false,
+			}
+		}
+
+		return {
+			decision: validated.data.decision,
+			risk: validated.data.risk,
+			reason: validated.data.reason,
+			taskAligned: validated.data.taskAligned,
+			hardBoundaryViolation: validated.data.hardBoundaryViolation,
+			replanGuidance: validated.data.replanGuidance,
+		}
+	}
+
+	private sanitizeTarget(
+		target: Record<string, unknown>,
+		knownSecrets: (string | undefined)[]
+	): Record<string, unknown> {
+		const sanitized: Record<string, unknown> = {}
+		for (const [key, val] of Object.entries(target)) {
+			if (typeof val === "string") {
+				sanitized[key] = sanitizeForSafetyPrompt(val, knownSecrets)
+			} else {
+				sanitized[key] = val
+			}
+		}
+		return sanitized
+	}
+
+	private recordDecision(
+		request: UnifiedApprovalRequest,
+		result: ApprovalDecisionResult,
+		modelId?: string,
+		fastPath: boolean = false,
+		state?: Partial<ExtensionState> | null
+	): void {
+		const knownSecrets = [
+			state?.commandSafetyConfig?.apiKey,
+			state?.apiConfiguration?.apiKey,
+			state?.apiConfiguration?.openAiApiKey,
+			state?.apiConfiguration?.geminiApiKey,
+			state?.apiConfiguration?.openRouterApiKey,
+		]
+
+		const entry: DecisionLogEntry = {
+			id: request.id,
+			timestamp: request.timestamp || Date.now(),
+			taskId: request.taskId,
+			actionType: request.actionType,
+			target: request.target.command || request.target.filePath || request.target.mcpToolName || request.actionType,
+			boundaryTarget: request.executionBoundary?.target.name || request.executionBoundary?.target.type || "local",
+			risk: result.risk,
+			decision: result.decision,
+			reason: result.reason,
+			replanGuidance: result.replanGuidance,
+			evaluatorModel: fastPath ? "deterministic-policy" : modelId || "unknown",
+			fastPath,
+		}
+
+		DecisionLogStore.getInstance().addEntry(entry, knownSecrets.filter(Boolean) as string[])
+	}
+}
