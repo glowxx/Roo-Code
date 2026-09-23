@@ -71,6 +71,8 @@ describe("attemptCompletionTool", () => {
 			taskId: "task_1",
 			apiConfiguration: { apiProvider: "test" } as any,
 			api: { getModel: vi.fn().mockReturnValue({ id: "test-model", info: {} }) } as any,
+			markTaskCompleted: vi.fn(),
+			flushPendingToolResultsToHistory: vi.fn().mockResolvedValue(true),
 		}
 	})
 
@@ -494,6 +496,11 @@ describe("attemptCompletionTool", () => {
 				await attemptCompletionTool.handle(mockTask as Task, block, callbacks)
 
 				expect(mockHandleError).not.toHaveBeenCalled()
+				expect(mockTask.markTaskCompleted).toHaveBeenCalled()
+				expect(mockPushToolResult).toHaveBeenCalledWith(
+					expect.stringContaining("Task completed successfully."),
+				)
+				expect(mockTask.flushPendingToolResultsToHistory).toHaveBeenCalled()
 				expect(mockTask.emit).toHaveBeenCalledWith(
 					RooCodeEventName.TaskCompleted,
 					"task_1",

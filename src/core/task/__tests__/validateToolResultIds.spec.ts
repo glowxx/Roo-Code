@@ -760,6 +760,34 @@ describe("validateAndFixToolResultIds", () => {
 			expect(resultContent[0].tool_use_id).toBe("tool-1")
 			expect(resultContent[0].content).toBe("Tool execution was interrupted before completion.")
 		})
+
+		it("should populate missing tool_result with 'Task completed successfully.' when tool is attempt_completion", () => {
+			const assistantMessage: Anthropic.MessageParam = {
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool-completion-1",
+						name: "attempt_completion",
+						input: { result: "All done!" },
+					},
+				],
+			}
+
+			const userMessage: Anthropic.MessageParam = {
+				role: "user",
+				content: [],
+			}
+
+			const result = validateAndFixToolResultIds(userMessage, [assistantMessage])
+
+			expect(Array.isArray(result.content)).toBe(true)
+			const resultContent = result.content as Anthropic.ToolResultBlockParam[]
+			expect(resultContent.length).toBe(1)
+			expect(resultContent[0].type).toBe("tool_result")
+			expect(resultContent[0].tool_use_id).toBe("tool-completion-1")
+			expect(resultContent[0].content).toBe("Task completed successfully.")
+		})
 	})
 
 	describe("ToolResultIdMismatchError", () => {

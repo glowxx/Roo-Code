@@ -185,7 +185,10 @@ export function validateAndFixToolResultIds(
 	const missingToolResults: Anthropic.ToolResultBlockParam[] = stillMissingToolUseIds.map((toolUse) => ({
 		type: "tool_result" as const,
 		tool_use_id: toolUse.id,
-		content: "Tool execution was interrupted before completion.",
+		content:
+			toolUse.name === "attempt_completion"
+				? "Task completed successfully."
+				: "Tool execution was interrupted before completion.",
 	}))
 
 	// Insert missing tool_results at the beginning of the content array

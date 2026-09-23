@@ -372,6 +372,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	presentAssistantMessageHasPendingUpdates = false
 	userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolResultBlockParam)[] = []
 	userMessageContentReady = false
+	isTaskCompleted = false
+
+	public markTaskCompleted(): void {
+		this.isTaskCompleted = true
+		console.log(`[StreamAudit] Task ${this.taskId}.${this.instanceId} marked as completed. Breaking task loop.`)
+	}
 	private isCompacting = false
 	private compactionAbortController?: AbortController
 	private currentAuditRecord?: TokenAuditRecord
@@ -1616,12 +1622,31 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 
 				if (decisionResult.decision === "ALLOW_AUTO") {
-					approval = { decision: "approve" }
-					this.approveAsk()
-					this.consecutiveReplanCount = 0
-					this.unresolvedDenialState = null
-					if (request.actionType !== "attempt_completion") {
+					if (request.actionType === "attempt_completion") {
+						this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
+						if (this.consecutiveAttemptCompletionCount > 2) {
+							// Hard loop protection: require explicit manual review if completion is repeatedly attempted
+							decisionResult.decision = "MANUAL_APPROVAL"
+							approval = { decision: "ask" }
+							const warningPayload: SafetyEvaluationResult = {
+								isSafe: false,
+								riskLevel: "medium",
+								reason: `Completion loop guard triggered: Worker attempted completion multiple times consecutively. Manual review required.`,
+							}
+							await this.say("command_safety_warning", JSON.stringify(warningPayload))
+							this.lastMessageTs = askTs
+						} else {
+							approval = { decision: "approve" }
+							this.approveAsk()
+							this.consecutiveReplanCount = 0
+							this.unresolvedDenialState = null
+						}
+					} else {
 						this.consecutiveAttemptCompletionCount = 0
+						approval = { decision: "approve" }
+						this.approveAsk()
+						this.consecutiveReplanCount = 0
+						this.unresolvedDenialState = null
 					}
 				} else if (decisionResult.decision === "CONTINUE_WORK") {
 					this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
@@ -3299,13 +3324,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		this.emit(RooCodeEventName.TaskStarted)
 
-		while (!this.abort) {
+		while (!this.abort && !this.isTaskCompleted) {
 			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
 			includeFileDetails = false // We only need file details the first time.
 
 			// The way this agentic loop works is that cline will be given a
-			// task that he then calls tools to complete. Unless there's an
-			// attempt_completion call, we keep responding back to him with his
+			// task that he then calls tools to complete. When attempt_completion
+			// succeeds or the task is marked completed, the loop breaks cleanly.
+			// Otherwise, we keep responding back to him with his
 			// tool's responses until he either attempt_completion or does not
 			// use anymore tools. If he does not use anymore tools, we ask him
 			// to consider if he's completed the task and then call
@@ -3314,9 +3340,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// requests, but Cline is prompted to finish the task as efficiently
 			// as he can.
 
-			if (didEndLoop) {
-				// For now a task never 'completes'. This will only happen if
-				// the user hits max requests and denies resetting the count.
+			if (didEndLoop || this.isTaskCompleted) {
 				break
 			} else {
 				nextUserContent = [{ type: "text", text: formatResponse.noToolsUsed() }]
@@ -3338,13 +3362,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const stack: StackItem[] = [{ userContent, includeFileDetails, retryAttempt: 0 }]
 
 		while (stack.length > 0) {
-			const currentItem = stack.pop()!
-			const currentUserContent = currentItem.userContent
-			const currentIncludeFileDetails = currentItem.includeFileDetails
-
 			if (this.abort) {
 				throw new Error(`[RooCode#recursivelyMakeRooRequests] task ${this.taskId}.${this.instanceId} aborted`)
 			}
+
+			if (this.isTaskCompleted) {
+				return true
+			}
+
+			const currentItem = stack.pop()!
+			const currentUserContent = currentItem.userContent
+			const currentIncludeFileDetails = currentItem.includeFileDetails
 
 			if (this.consecutiveMistakeLimit > 0 && this.consecutiveMistakeCount >= this.consecutiveMistakeLimit) {
 				const { response, text, images } = await this.ask(
@@ -3605,6 +3633,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// we can display the cost of the partial stream and the cancellation reason
 					updateApiReqMsg(cancelReason, streamingFailedMessage)
 					await this.saveClineMessages()
+
+					console.log(
+						`[StreamAudit] Task ${this.taskId}.${this.instanceId} stream aborted. Reason: ${cancelReason}, message: ${streamingFailedMessage ?? "none"}`,
+					)
 
 					// Signals to provider that it can retrieve the saved messages
 					// from disk, as abortTask can not be awaited on in nature.
@@ -4197,6 +4229,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 
 				this.didCompleteReadingStream = true
+				console.log(
+					`[StreamAudit] Task ${this.taskId}.${this.instanceId} stream ended successfully. Blocks: ${this.assistantMessageContent.length}, inputTokens: ${inputTokens}, outputTokens: ${outputTokens}, totalCost: ${totalCost}`,
+				)
 
 				// Set any blocks to be complete to allow `presentAssistantMessage`
 				// to finish and set `userMessageContentReady` to true.
@@ -4461,6 +4496,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// }
 
 					await pWaitFor(() => this.userMessageContentReady)
+
+					// If the task was marked completed, flush pending tool results and terminate
+					if (this.isTaskCompleted) {
+						await this.flushPendingToolResultsToHistory()
+						this.userMessageContent = []
+						return true
+					}
 
 					// If the model did not tool use, then we need to tell it to
 					// either use a tool or attempt_completion.
@@ -4863,6 +4905,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		retryAttempt: number = 0,
 		options: { skipProviderRateLimit?: boolean } = {},
 	): ApiStream {
+		if (this.abort || this.isTaskCompleted) {
+			return
+		}
+
 		const state = await this.providerRef.deref()?.getState()
 
 		const {

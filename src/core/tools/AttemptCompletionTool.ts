@@ -104,6 +104,7 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 								pushToolResult,
 							)
 							if (delegation === "delegated") {
+								task.markTaskCompleted?.()
 								this.emitTaskCompleted(task)
 							}
 							if (delegation !== "continue") return
@@ -132,7 +133,10 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 			const { response, text, images } = await task.ask("completion_result", result, false)
 
 			if (response === "yesButtonClicked") {
+				task.markTaskCompleted?.()
 				this.emitTaskCompleted(task)
+				pushToolResult(formatResponse.toolResult("Task completed successfully."))
+				await task.flushPendingToolResultsToHistory?.()
 				try {
 					const provider = task.providerRef.deref() as any
 					if (
