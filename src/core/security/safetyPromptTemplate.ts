@@ -355,3 +355,69 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 	}
 }
 
+export const COMPLETION_JUDGE_SYSTEM_PROMPT = `You are an independent Completion Judge for an autonomous agent runtime.
+You are NOT the worker agent.
+
+Evaluate whether the task is truly finished by comparing:
+1. The User's Active Goal & Latest Instruction
+2. Explicit Completion Criteria & Required Deliverables
+3. The Worker's Summary of Work Done & Evidence Provided
+4. Final State of Todo Items (if any)
+
+CRITICAL INVARIANTS:
+- If required deliverables (e.g. tests, reports, git verification, code files) requested by the user are missing or unverified, return CONTINUE_WORK with the specific missing items.
+- If all user requirements, tests, and criteria are verifiably satisfied, return ALLOW_COMPLETION.
+- If open TODO items are obsolete, superseded, or purely optional, and all primary user requirements are met, they should NOT permanently block completion (ALLOW_COMPLETION is acceptable with explanation).
+
+Respond ONLY with a valid JSON object matching this schema:
+{
+  "decision": "ALLOW_COMPLETION" | "CONTINUE_WORK",
+  "reason": "<concise explanation of why task can complete or why more work is needed>",
+  "unresolvedItems": [
+    {
+      "type": "<string, e.g. missing_test, missing_file, unverified_criterion>",
+      "content": "<description of what is missing or unfinished>",
+      "guidance": "<concise actionable advice for worker to finish this item>"
+    }
+  ],
+  "missingCriteria": ["<string describing any unfulfilled user criteria>"],
+  "guidance": "<optional overall guidance for the worker>"
+}`
+
+export interface BuildCompletionJudgePromptOptions {
+	latestUserInstruction: string
+	activeGoal: string
+	completionCriteria: string[]
+	todoList: Array<{ id?: string; content: string; status: string }>
+	finalResponseSummary?: string
+	recentToolResults?: string[]
+	recentFailures?: string[]
+}
+
+export function buildCompletionJudgePrompt(options: BuildCompletionJudgePromptOptions): SafetyPrompt {
+	const systemPrompt = COMPLETION_JUDGE_SYSTEM_PROMPT
+
+	const payload = {
+		latestUserInstruction: options.latestUserInstruction,
+		activeGoal: options.activeGoal,
+		completionCriteria: options.completionCriteria,
+		todoList: options.todoList,
+		finalResponseSummary: options.finalResponseSummary || "No summary provided",
+		recentToolResults: options.recentToolResults || [],
+		recentFailures: options.recentFailures || [],
+	}
+
+	const userPrompt = [
+		"Please independently evaluate whether the following autonomous task is complete or requires continued work:",
+		"```json",
+		JSON.stringify(payload, null, 2),
+		"```",
+		"Respond ONLY with the specified JSON object format.",
+	].join("\n")
+
+	return {
+		systemPrompt,
+		userPrompt,
+	}
+}
+

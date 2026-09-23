@@ -33,6 +33,32 @@ export const formatResponse = {
 			message: `Action BLOCKED: ${reason}.${replanGuidance ? ` Guidance: ${replanGuidance}.` : ""} This operation violates hard safety boundaries. Formulate an alternative approach within safe bounds. Only ask the user if no viable safe path exists.`,
 		}),
 
+	continueWork: (payload: {
+		reason: string
+		unresolvedItems?: Array<{ type: string; content: string; guidance?: string }>
+		missingCriteria?: string[]
+		guidance?: string
+	}) =>
+		JSON.stringify({
+			status: "continue_work",
+			decision: "CONTINUE_WORK",
+			reason: payload.reason,
+			unresolvedItems: payload.unresolvedItems || [],
+			missingCriteria: payload.missingCriteria || [],
+			guidance:
+				payload.guidance ||
+				"Continue the task and address all unresolved items before attempting completion again.",
+			message: `Completion rejected: ${payload.reason}.${
+				payload.unresolvedItems && payload.unresolvedItems.length > 0
+					? ` Unresolved: ${payload.unresolvedItems.map((i) => i.content).join("; ")}.`
+					: ""
+			}${
+				payload.missingCriteria && payload.missingCriteria.length > 0
+					? ` Missing criteria: ${payload.missingCriteria.join("; ")}.`
+					: ""
+			} Address these items and verify task completion before calling attempt_completion again.`,
+		}),
+
 	toolApprovedWithFeedback: (feedback?: string) =>
 		JSON.stringify({
 			status: "approved",

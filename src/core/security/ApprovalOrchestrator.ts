@@ -9,13 +9,18 @@ import type {
 } from "@roo-code/types"
 import {
 	approvalDecisionResultSchema,
+	completionJudgeResponseSchema,
 	isSafetyModelConfigured,
 	resolveProviderApiKey,
 } from "@roo-code/types"
 import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS } from "./CommandSafetyJudge"
 import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
 import { containsDangerousSubstitution } from "../auto-approval/commands"
-import { buildAutonomousApprovalPrompt, sanitizeForSafetyPrompt } from "./safetyPromptTemplate"
+import {
+	buildAutonomousApprovalPrompt,
+	buildCompletionJudgePrompt,
+	sanitizeForSafetyPrompt,
+} from "./safetyPromptTemplate"
 import { DecisionLogStore } from "./DecisionLogStore"
 
 export interface ApprovalOrchestratorOptions {
@@ -130,7 +135,10 @@ export class ApprovalOrchestrator {
 		// 4. Contextual AI Adjudication via Independent Approval Model
 		const isConfigured = isSafetyModelConfigured(state)
 		if (!isConfigured) {
-			const reason = "Approval Model is not configured or lacks API key. Manual approval required."
+			const reason =
+				request.actionType === "attempt_completion"
+					? "Approval Model is not configured or lacks API key to verify task completion criteria. Manual approval required."
+					: "Approval Model is not configured or lacks API key. Manual approval required."
 			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=false finalDecision=MANUAL_APPROVAL reason="${reason}"`
 			const result: ApprovalDecisionResult = {
 				decision: "MANUAL_APPROVAL",
@@ -143,6 +151,10 @@ export class ApprovalOrchestrator {
 			return result
 		}
 
+		if (request.actionType === "attempt_completion") {
+			return await this.evaluateCompletionWithApprovalAi(request, state!)
+		}
+
 		return await this.evaluateWithApprovalAi(request, state!)
 	}
 
@@ -153,6 +165,89 @@ export class ApprovalOrchestrator {
 		request: UnifiedApprovalRequest
 	): Omit<ApprovalDecisionResult, "auditLog"> | null {
 		const { actionType, target } = request
+
+		// Attempt completion deterministic gates
+		if (actionType === "attempt_completion") {
+			// Gate 1: Check unresolved denial state
+			if (target.unresolvedDenialState) {
+				return {
+					decision: "CONTINUE_WORK",
+					risk: "high",
+					reason: `Cannot complete task: previous action was rejected by safety policy (${target.unresolvedDenialState.reason}) and no safe alternative was executed.`,
+					taskAligned: false,
+					replanGuidance: target.unresolvedDenialState.replanGuidance,
+					unresolvedItems: [
+						{
+							type: "unresolved_safety_denial",
+							content: `Rejected action: ${target.unresolvedDenialState.actionType} (${target.unresolvedDenialState.reason})`,
+							guidance: target.unresolvedDenialState.replanGuidance || "Execute a safe alternative first.",
+						},
+					],
+				}
+			}
+
+			// Gate 2: Check in-flight background terminals / running tests
+			if (target.activeTerminalsCount && target.activeTerminalsCount > 0) {
+				return {
+					decision: "CONTINUE_WORK",
+					risk: "medium",
+					reason: `Cannot complete task: ${target.activeTerminalsCount} background terminal process(es) or tests are still executing.`,
+					taskAligned: false,
+					unresolvedItems: [
+						{
+							type: "active_process",
+							content: `${target.activeTerminalsCount} terminal process(es) still active`,
+							guidance: "Wait for background execution/tests to finish.",
+						},
+					],
+				}
+			}
+
+			// Gate 3: Check in_progress TODOs
+			const inProgress = target.todoListSnapshot?.filter((t) => t.status === "in_progress") || []
+			if (inProgress.length > 0) {
+				return {
+					decision: "CONTINUE_WORK",
+					risk: "medium",
+					reason: `Cannot complete task with ${inProgress.length} item(s) marked 'in_progress' on the todo list.`,
+					taskAligned: false,
+					unresolvedItems: inProgress.map((t) => ({
+						type: "in_progress_todo",
+						content: t.content,
+						guidance: "Finish this in-progress item before attempting completion.",
+					})),
+				}
+			}
+
+			// Gate 4: Check pending TODOs
+			const pending = target.todoListSnapshot?.filter((t) => t.status === "pending") || []
+			if (pending.length > 0) {
+				return {
+					decision: "CONTINUE_WORK",
+					risk: "medium",
+					reason: `Task still contains ${pending.length} pending item(s) on the todo list.`,
+					taskAligned: false,
+					unresolvedItems: pending.map((t) => ({
+						type: "pending_todo",
+						content: t.content,
+						guidance: "Complete pending item or update todo list if no longer applicable.",
+					})),
+				}
+			}
+
+			// Gate 5: If there are explicit completion criteria, delegate to AI Completion Judge
+			if (target.completionCriteria && target.completionCriteria.length > 0) {
+				return null // Delegate to independent AI Completion Judge
+			}
+
+			// If no open work, no pending/in-progress todos, no running terminals, and no explicit criteria
+			return {
+				decision: "ALLOW_AUTO",
+				risk: "safe",
+				reason: "All required work and todos resolved.",
+				taskAligned: true,
+			}
+		}
 
 		// Read-only file inspection inside workspace is guaranteed safe
 		if (
@@ -448,6 +543,159 @@ export class ApprovalOrchestrator {
 		}
 	}
 
+	/**
+	 * Evaluates attempt_completion with the independent Completion Judge (Approval Model).
+	 * Enforces Worker Model != Completion Authority invariant and fails closed.
+	 */
+	private async evaluateCompletionWithApprovalAi(
+		request: UnifiedApprovalRequest,
+		state: Partial<ExtensionState>
+	): Promise<ApprovalDecisionResult> {
+		const approvalConfig = state.commandSafetyConfig!
+		const provider = approvalConfig.provider.toLowerCase().trim()
+		const modelId = approvalConfig.modelId.trim()
+		const apiKey = approvalConfig.apiKey || resolveProviderApiKey(provider, state.apiConfiguration) || ""
+		const taskId = request.taskId || "unknown"
+
+		const knownSecrets = [
+			apiKey,
+			state.apiConfiguration?.apiKey,
+			state.apiConfiguration?.openAiApiKey,
+			state.apiConfiguration?.geminiApiKey,
+			state.apiConfiguration?.openRouterApiKey,
+		]
+
+		const { systemPrompt, userPrompt } = buildCompletionJudgePrompt({
+			latestUserInstruction: sanitizeForSafetyPrompt(request.taskContext.latestUserInstruction, knownSecrets),
+			activeGoal: sanitizeForSafetyPrompt(request.taskContext.activeGoal, knownSecrets),
+			completionCriteria: (request.target.completionCriteria || []).map((c) =>
+				sanitizeForSafetyPrompt(c, knownSecrets)
+			),
+			todoList: request.target.todoListSnapshot || [],
+			finalResponseSummary: request.target.completionResult
+				? sanitizeForSafetyPrompt(request.target.completionResult, knownSecrets)
+				: request.target.completionSummary
+					? sanitizeForSafetyPrompt(request.target.completionSummary, knownSecrets)
+					: undefined,
+		})
+
+		const abortController = new AbortController()
+		let timeoutId: NodeJS.Timeout | undefined
+
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeoutId = setTimeout(() => {
+				const timeoutError = new Error(`Completion Judge evaluation timed out after ${this.timeoutMs}ms`)
+				abortController.abort(timeoutError)
+				reject(timeoutError)
+			}, this.timeoutMs)
+		})
+
+		try {
+			const callParams = {
+				provider,
+				modelId,
+				apiKey,
+				systemPrompt,
+				userPrompt,
+				state,
+				signal: abortController.signal,
+				maxTokens: 400,
+			}
+
+			const providerCall = CommandSafetyJudge.globalCallProviderOverride
+				? CommandSafetyJudge.globalCallProviderOverride(callParams)
+				: this.judge.callProvider(callParams)
+
+			const rawResponse = await Promise.race([providerCall, timeoutPromise])
+			if (timeoutId) clearTimeout(timeoutId)
+
+			const parsed = this.parseCompletionJudgeResponse(rawResponse)
+			const mappedDecision = parsed.decision === "ALLOW_COMPLETION" ? "ALLOW_AUTO" : "CONTINUE_WORK"
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} finalDecision=${mappedDecision} reason="${parsed.reason}"`
+
+			const result: ApprovalDecisionResult = {
+				decision: mappedDecision,
+				risk: mappedDecision === "ALLOW_AUTO" ? "safe" : "medium",
+				reason: parsed.reason,
+				taskAligned: mappedDecision === "ALLOW_AUTO",
+				unresolvedItems: parsed.unresolvedItems,
+				missingCriteria: parsed.missingCriteria,
+				replanGuidance: parsed.guidance,
+				auditLog,
+			}
+
+			this.recordDecision(request, result, modelId, false, state)
+			return result
+		} catch (error: any) {
+			if (timeoutId) clearTimeout(timeoutId)
+			const errorMsg = error instanceof Error ? error.message : String(error)
+			const reason = `Completion Judge adjudication failed (${errorMsg}). Fail closed to manual approval.`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+
+			const result: ApprovalDecisionResult = {
+				decision: "MANUAL_APPROVAL",
+				risk: "high",
+				reason,
+				taskAligned: false,
+				auditLog,
+			}
+
+			this.recordDecision(request, result, modelId, false, state)
+			return result
+		}
+	}
+
+	/**
+	 * Parses structured JSON response from the Completion Judge.
+	 */
+	public parseCompletionJudgeResponse(rawResponse: string): {
+		decision: "ALLOW_COMPLETION" | "CONTINUE_WORK"
+		reason: string
+		unresolvedItems: Array<{ type: string; content: string; guidance?: string }>
+		missingCriteria: string[]
+		guidance?: string
+	} {
+		if (!rawResponse || typeof rawResponse !== "string" || rawResponse.trim().length === 0) {
+			throw new Error("Empty response from Completion Judge model")
+		}
+
+		const trimmed = rawResponse.trim()
+		let parsedObject: any = null
+
+		try {
+			parsedObject = JSON.parse(trimmed)
+		} catch {
+			const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+			if (match && match[1]) {
+				try {
+					parsedObject = JSON.parse(match[1].trim())
+				} catch {}
+			}
+			if (!parsedObject) {
+				const start = trimmed.indexOf("{")
+				const end = trimmed.lastIndexOf("}")
+				if (start !== -1 && end > start) {
+					try {
+						parsedObject = JSON.parse(trimmed.substring(start, end + 1))
+					} catch {}
+				}
+			}
+		}
+
+		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
+			throw new Error("Malformed JSON response from Completion Judge model")
+		}
+
+		const validated = completionJudgeResponseSchema.safeParse(parsedObject)
+		if (!validated.success) {
+			throw new Error(
+				`Completion response validation failed: ${validated.error.issues.map((i) => i.message).join(", ")}`
+			)
+		}
+
+		return validated.data
+	}
+
 	private sanitizeTarget(
 		target: Record<string, unknown>,
 		knownSecrets: (string | undefined)[]
@@ -483,7 +731,13 @@ export class ApprovalOrchestrator {
 			timestamp: request.timestamp || Date.now(),
 			taskId: request.taskId,
 			actionType: request.actionType,
-			target: request.target.command || request.target.filePath || request.target.mcpToolName || request.actionType,
+			target:
+				request.target.command ||
+				request.target.filePath ||
+				request.target.mcpToolName ||
+				request.target.completionSummary ||
+				request.target.completionResult ||
+				request.actionType,
 			boundaryTarget: request.executionBoundary?.target.name || request.executionBoundary?.target.type || "local",
 			risk: result.risk,
 			decision: result.decision,

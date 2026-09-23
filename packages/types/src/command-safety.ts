@@ -271,13 +271,14 @@ export type ApprovalActionType =
 	| "new_task"
 	| "attempt_completion"
 
-export type OrchestratorDecision = "ALLOW_AUTO" | "DENY_AND_REPLAN" | "HARD_BLOCK" | "MANUAL_APPROVAL"
+export type OrchestratorDecision = "ALLOW_AUTO" | "DENY_AND_REPLAN" | "HARD_BLOCK" | "MANUAL_APPROVAL" | "CONTINUE_WORK"
 
 export const orchestratorDecisionSchema = z.enum([
 	"ALLOW_AUTO",
 	"DENY_AND_REPLAN",
 	"HARD_BLOCK",
 	"MANUAL_APPROVAL",
+	"CONTINUE_WORK",
 ])
 
 export interface CompactApprovalContext {
@@ -318,6 +319,11 @@ export interface UnifiedApprovalRequest {
 		subtaskMode?: string
 		subtaskMessage?: string
 		completionSummary?: string
+		completionResult?: string
+		todoListSnapshot?: Array<{ id?: string; content: string; status: string }>
+		completionCriteria?: string[]
+		activeTerminalsCount?: number
+		unresolvedDenialState?: { actionType: string; reason: string; replanGuidance?: string } | null
 	}
 	executionBoundary?: ExecutionBoundary
 	taskContext: CompactApprovalContext
@@ -335,11 +341,13 @@ export interface ApprovalDecisionResult {
 	taskAligned: boolean
 	hardBoundaryViolation?: boolean
 	replanGuidance?: string | null
+	unresolvedItems?: ContinueWorkItem[]
+	missingCriteria?: string[]
 	auditLog: string
 }
 
 export const approvalDecisionResultSchema = z.object({
-	decision: z.enum(["ALLOW_AUTO", "DENY_AND_REPLAN", "HARD_BLOCK"]),
+	decision: z.enum(["ALLOW_AUTO", "DENY_AND_REPLAN", "HARD_BLOCK", "CONTINUE_WORK"]),
 	risk: z.string().transform((val) => {
 		const lower = val.toLowerCase().trim()
 		if (["safe", "low", "medium", "high", "critical"].includes(lower)) {
@@ -351,6 +359,83 @@ export const approvalDecisionResultSchema = z.object({
 	taskAligned: z.boolean().default(false),
 	hardBoundaryViolation: z.boolean().default(false),
 	replanGuidance: z.string().nullable().optional(),
+	unresolvedItems: z
+		.array(
+			z.object({
+				type: z.string(),
+				content: z.string(),
+				guidance: z.string().optional(),
+			})
+		)
+		.optional(),
+	missingCriteria: z.array(z.string()).optional(),
+})
+
+export interface CompactCompletionContext {
+	latestUserInstruction: string
+	activeGoal: string
+	completionCriteria: string[]
+	todoList: Array<{ id?: string; content: string; status: string }>
+	recentToolResults?: string[]
+	recentFailures?: string[]
+	finalResponseSummary?: string
+}
+
+export const compactCompletionContextSchema = z.object({
+	latestUserInstruction: z.string(),
+	activeGoal: z.string(),
+	completionCriteria: z.array(z.string()),
+	todoList: z.array(
+		z.object({
+			id: z.string().optional(),
+			content: z.string(),
+			status: z.string(),
+		})
+	),
+	recentToolResults: z.array(z.string()).optional(),
+	recentFailures: z.array(z.string()).optional(),
+	finalResponseSummary: z.string().optional(),
+})
+
+export interface ContinueWorkItem {
+	type: string
+	content: string
+	guidance?: string
+}
+
+export interface ContinueWorkPayload {
+	status: "continue_work"
+	decision: "CONTINUE_WORK"
+	reason: string
+	unresolvedItems: ContinueWorkItem[]
+	missingCriteria?: string[]
+	guidance?: string
+}
+
+export type CompletionDecision = "ALLOW_COMPLETION" | "CONTINUE_WORK" | "MANUAL_APPROVAL"
+
+export interface CompletionDecisionResult {
+	decision: CompletionDecision
+	reason: string
+	unresolvedItems?: ContinueWorkItem[]
+	missingCriteria?: string[]
+	auditLog: string
+}
+
+export const completionJudgeResponseSchema = z.object({
+	decision: z.enum(["ALLOW_COMPLETION", "CONTINUE_WORK"]),
+	reason: z.string(),
+	unresolvedItems: z
+		.array(
+			z.object({
+				type: z.string(),
+				content: z.string(),
+				guidance: z.string().optional(),
+			})
+		)
+		.default([]),
+	missingCriteria: z.array(z.string()).default([]),
+	guidance: z.string().optional(),
 })
 
 export interface DecisionLogEntry {

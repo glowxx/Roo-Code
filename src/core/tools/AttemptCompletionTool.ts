@@ -128,7 +128,8 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 				}
 			}
 
-			const { response, text, images } = await task.ask("completion_result", "", false)
+			task.setLastCompletionResultText?.(result)
+			const { response, text, images } = await task.ask("completion_result", result, false)
 
 			if (response === "yesButtonClicked") {
 				this.emitTaskCompleted(task)
@@ -153,11 +154,30 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 				return
 			}
 
-			// User provided feedback - push tool result to continue the conversation
-			await task.say("user_feedback", text ?? "", images)
+			// User provided feedback or autonomous CONTINUE_WORK feedback
+			if (text) {
+				let isAutonomousContinueWork = false
+				try {
+					const parsed = JSON.parse(text)
+					if (parsed.status === "continue_work" || parsed.decision === "CONTINUE_WORK") {
+						isAutonomousContinueWork = true
+					}
+				} catch {}
 
-			const feedbackText = `<user_message>\n${text}\n</user_message>`
-			pushToolResult(formatResponse.toolResult(feedbackText, images))
+				if (isAutonomousContinueWork) {
+					// Return structured continuation directly to worker model without fake user speech bubble
+					pushToolResult(formatResponse.toolResult(text, images))
+				} else {
+					await task.say("user_feedback", text ?? "", images)
+					const feedbackText = `<user_message>\n${text}\n</user_message>`
+					pushToolResult(formatResponse.toolResult(feedbackText, images))
+				}
+			} else {
+				await task.say("user_feedback", "", images)
+				pushToolResult(
+					formatResponse.toolResult("<user_message>\nTask completion not accepted.\n</user_message>", images)
+				)
+			}
 		} catch (error) {
 			await handleError("inspecting site", error as Error)
 		}

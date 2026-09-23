@@ -509,8 +509,11 @@ export async function presentAssistantMessage(cline: Task) {
 						try {
 							const parsed = JSON.parse(text)
 							if (
-								(parsed.status === "denied" || parsed.status === "hard_blocked") &&
-								parsed.rejection_reason
+								(parsed.status === "denied" ||
+									parsed.status === "hard_blocked" ||
+									parsed.status === "continue_work" ||
+									parsed.decision === "CONTINUE_WORK") &&
+								(parsed.rejection_reason || parsed.reason)
 							) {
 								isAutonomousReplan = true
 							}
@@ -529,6 +532,8 @@ export async function presentAssistantMessage(cline: Task) {
 					cline.didRejectTool = true
 					return false
 				}
+
+				cline.resetCompletionAttempts?.()
 
 				// Store approval feedback to be merged into tool result (GitHub #10465)
 				// Don't push it as a separate tool_result here - that would create duplicates.

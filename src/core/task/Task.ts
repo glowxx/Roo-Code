@@ -242,6 +242,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private consecutiveReplanCount: number = 0
 	private totalReplanCount: number = 0
 	private deniedActionHistory: string[] = []
+	private unresolvedDenialState: { actionType: string; reason: string; replanGuidance?: string } | null = null
+	private consecutiveAttemptCompletionCount: number = 0
+	private lastCompletionResultText?: string
 	private approvalOrchestrator: ApprovalOrchestrator = new ApprovalOrchestrator()
 
 	/**
@@ -1358,6 +1361,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 		} else if (askType === "completion_result") {
 			actionType = "attempt_completion"
+			target.completionResult = text || this.lastCompletionResultText || ""
+			target.todoListSnapshot = this.todoList ? structuredClone(this.todoList) : []
+			target.completionCriteria = this.extractCompletionCriteria()
+			try {
+				target.activeTerminalsCount = TerminalRegistry.getTerminals(true, this.taskId).length
+			} catch {
+				target.activeTerminalsCount = 0
+			}
+			target.unresolvedDenialState = this.unresolvedDenialState
 		}
 
 		return {
@@ -1378,8 +1390,63 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	private computeActionSignature(req: UnifiedApprovalRequest): string {
-		const targetStr = req.target.command || req.target.filePath || req.target.mcpToolName || ""
+		const targetStr =
+			req.target.command ||
+			req.target.filePath ||
+			req.target.mcpToolName ||
+			req.target.completionSummary ||
+			req.target.completionResult ||
+			""
 		return `${req.actionType}:${targetStr.trim()}`
+	}
+
+	public setLastCompletionResultText(text: string): void {
+		this.lastCompletionResultText = text
+	}
+
+	public resetCompletionAttempts(): void {
+		this.consecutiveAttemptCompletionCount = 0
+	}
+
+	private extractCompletionCriteria(): string[] {
+		const criteria: string[] = []
+
+		// 1. Check for context compaction handoff in conversation history
+		for (const msg of [...this.clineMessages].reverse()) {
+			const text = msg.text || ""
+			if (text.includes("### CONTEXT COMPACTION HANDOFF")) {
+				const match = text.match(
+					/\*\*(?:Completion Criteria & Required Report Structure|Completion Criteria)\*\*:\s*([\s\S]*?)(?=\n- \*\*|\n\n|$)/i
+				)
+				if (match && match[1]) {
+					const lines = match[1]
+						.split("\n")
+						.map((l) => l.replace(/^[-*•\d.]\s*/, "").trim())
+						.filter((l) => l.length > 0 && !l.startsWith("["))
+					criteria.push(...lines)
+					if (criteria.length > 0) return criteria
+				}
+			}
+		}
+
+		// 2. Check latest user instruction or initial task
+		const latestUserFeedback = [...this.clineMessages]
+			.reverse()
+			.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
+		const sourceText = latestUserFeedback?.text || this.metadata?.task || ""
+
+		if (sourceText) {
+			const lines = sourceText.split("\n")
+			for (const line of lines) {
+				const trimmed = line.trim()
+				const listMatch = trimmed.match(/^(?:[-*•]|\d+[.)])\s+(.+)$/)
+				if (listMatch && listMatch[1] && listMatch[1].length > 3) {
+					criteria.push(listMatch[1].trim())
+				}
+			}
+		}
+
+		return criteria
 	}
 
 	// Note that `partial` has three valid states true (partial message),
@@ -1526,10 +1593,42 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					approval = { decision: "approve" }
 					this.approveAsk()
 					this.consecutiveReplanCount = 0
+					this.unresolvedDenialState = null
+					if (request.actionType !== "attempt_completion") {
+						this.consecutiveAttemptCompletionCount = 0
+					}
+				} else if (decisionResult.decision === "CONTINUE_WORK") {
+					this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
+
+					// Loop protection: 3 consecutive completion attempts without resolving work items
+					if (this.consecutiveAttemptCompletionCount >= 3) {
+						approval = { decision: "ask" }
+						const warningPayload: SafetyEvaluationResult = {
+							isSafe: false,
+							riskLevel: "medium",
+							reason: `Completion loop guard triggered: Worker attempted completion 3 times consecutively without resolving unfinished items (${decisionResult.reason}). Manual review required.`,
+						}
+						await this.say("command_safety_warning", JSON.stringify(warningPayload))
+						this.lastMessageTs = askTs
+					} else {
+						approval = { decision: "deny" }
+						const payload = formatResponse.continueWork({
+							reason: decisionResult.reason,
+							unresolvedItems: decisionResult.unresolvedItems,
+							missingCriteria: decisionResult.missingCriteria,
+							guidance: decisionResult.replanGuidance || undefined,
+						})
+						this.denyAsk({ text: payload })
+					}
 				} else if (
 					decisionResult.decision === "DENY_AND_REPLAN" ||
 					decisionResult.decision === "HARD_BLOCK"
 				) {
+					this.unresolvedDenialState = {
+						actionType: request.actionType,
+						reason: decisionResult.reason,
+						replanGuidance: decisionResult.replanGuidance || undefined,
+					}
 					const signature = this.computeActionSignature(request)
 					const isRepeated = this.deniedActionHistory.includes(signature)
 					this.deniedActionHistory.push(signature)
