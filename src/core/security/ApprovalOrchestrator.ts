@@ -106,19 +106,7 @@ export class ApprovalOrchestrator {
 			return result
 		}
 
-		// 2. Deterministic Fast-Path Evaluation
-		const fastPathResult = this.evaluateDeterministicFastPath(request)
-		if (fastPathResult) {
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=${fastPathResult.decision} reason="${fastPathResult.reason}"`
-			const result: ApprovalDecisionResult = {
-				...fastPathResult,
-				auditLog,
-			}
-			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
-			return result
-		}
-
-		// 3. Command-specific Execution Boundary Analysis
+		// 2. Command-specific Execution Boundary Analysis (intercept boundary escapes first)
 		if (request.actionType === "execute_command" && request.target.command) {
 			const boundaryResult = this.evaluateCommandBoundary(request)
 			if (boundaryResult) {
@@ -130,6 +118,18 @@ export class ApprovalOrchestrator {
 				this.recordDecision(request, result, approvalConfig?.modelId, true, state)
 				return result
 			}
+		}
+
+		// 3. Deterministic Fast-Path Evaluation
+		const fastPathResult = this.evaluateDeterministicFastPath(request)
+		if (fastPathResult) {
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=${fastPathResult.decision} reason="${fastPathResult.reason}"`
+			const result: ApprovalDecisionResult = {
+				...fastPathResult,
+				auditLog,
+			}
+			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+			return result
 		}
 
 		// 4. Contextual AI Adjudication via Independent Approval Model

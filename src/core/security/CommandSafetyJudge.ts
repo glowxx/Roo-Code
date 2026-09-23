@@ -39,6 +39,7 @@ const FAST_PATH_PATTERNS = [
 	/^(ls|dir|pwd)(\s+.*)?$/i,
 	/^(echo|cat|type|head|tail)(\s+.*)?$/i,
 	/^(node|pnpm|npm|npx|yarn|bun|vitest|jest)(\s+.*)?$/i,
+	/^(uname|whoami|date|hostname)(\s+.*)?$/i,
 ]
 
 export interface EvaluateSafetyOptions {
@@ -131,6 +132,28 @@ export class CommandSafetyJudge {
 				riskLevel: "safe",
 				reason: "Verified read-only command via fast-path",
 			}
+		}
+
+		// Check wrapped command (WSL / Docker / subshell) if boundary analysis confirms no host escape
+		try {
+			const boundary = ExecutionBoundaryAnalyzer.analyze(trimmed)
+			if (!boundary.hostImpact.isHostEscape && boundary.innerCommand && boundary.innerCommand !== trimmed) {
+				const innerTrimmed = boundary.innerCommand.trim()
+				const innerHasModifier =
+					innerTrimmed.includes(">") ||
+					/\bsudo\b/i.test(innerTrimmed) ||
+					/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(innerTrimmed)
+
+				if (!innerHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(innerTrimmed))) {
+					return {
+						isSafe: true,
+						riskLevel: "safe",
+						reason: `Verified read-only guest command (${innerTrimmed}) via fast-path`,
+					}
+				}
+			}
+		} catch {
+			// fallback to full LLM evaluation
 		}
 
 		return null
