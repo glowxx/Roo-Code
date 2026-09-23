@@ -1369,8 +1369,32 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			} catch {
 				target.activeTerminalsCount = 0
 			}
-			target.unresolvedDenialState = this.unresolvedDenialState
 		}
+
+		let workerReason: string | undefined = undefined
+		if (this.assistantMessageContent && this.assistantMessageContent.length > 0) {
+			const textBlocks = (this.assistantMessageContent as any[])
+				.slice(0, this.currentStreamingContentIndex)
+				.filter(
+					(b) => b && b.type === "text" && typeof b.content === "string" && b.content.trim().length > 0
+				)
+			if (textBlocks.length > 0) {
+				workerReason = textBlocks[textBlocks.length - 1].content.trim()
+			}
+		}
+		if (!workerReason && this.clineMessages && this.clineMessages.length > 0) {
+			const lastAssistantMsg = [...this.clineMessages]
+				.reverse()
+				.find((m) => m.type === "say" && m.say === "text" && m.text && m.text.trim().length > 0)
+			if (lastAssistantMsg?.text) {
+				workerReason = lastAssistantMsg.text.trim()
+			}
+		}
+		if (workerReason && workerReason.length > 500) {
+			workerReason = workerReason.slice(0, 500) + "..."
+		}
+
+		target.workerReason = workerReason
 
 		return {
 			id: `req_${this.taskId}_${askTs}`,
@@ -1379,12 +1403,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			timestamp: askTs,
 			target,
 			taskContext: {
+				userTask: this.metadata?.task || "",
 				latestUserInstruction,
 				activeGoal: this.metadata?.task || "",
 				currentStep: activeStep,
+				workerReason,
 				workspacePath: this.workspacePath || this.cwd,
 				isWithinWorkspace,
-				recentActionSignatures: [...this.deniedActionHistory],
+				recentActionSignatures: [...(this.deniedActionHistory || [])],
 			},
 		}
 	}

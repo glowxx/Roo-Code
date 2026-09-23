@@ -188,12 +188,18 @@ export class ExecutionBoundaryAnalyzer {
 
 		let outerCommand: string | undefined
 
+		let wrapper: string = "none"
+		let targetEnvironment: string = "Local host"
+		let innerShell: string | undefined
+
 		if (chain.layers.length > 0) {
 			outerCommand = chain.layers.map((l) => l.wrapperCommand).join(" -> ")
 			const primaryLayer = chain.layers[0]
 
 			if (primaryLayer.domain === "wsl") {
 				const distroName = primaryLayer.targetEntity || "default"
+				wrapper = "wsl.exe"
+				targetEnvironment = "WSL guest"
 				target = {
 					type: "wsl",
 					name: distroName,
@@ -205,6 +211,8 @@ export class ExecutionBoundaryAnalyzer {
 				primaryLayer.domain === "compose_exec"
 			) {
 				const containerOrImage = primaryLayer.targetEntity || "container"
+				wrapper = primaryLayer.rawTokens[0]?.replace(/\\/g, "/").split("/").pop() || "docker"
+				targetEnvironment = "Docker container"
 				target = {
 					type: "docker",
 					name: containerOrImage,
@@ -212,15 +220,43 @@ export class ExecutionBoundaryAnalyzer {
 				}
 			} else if (primaryLayer.domain === "ssh") {
 				const hostOrUser = primaryLayer.targetEntity || "remote"
+				wrapper = "ssh"
+				targetEnvironment = "SSH remote"
 				target = {
 					type: "ssh",
 					name: hostOrUser,
 					classification: this.classifyEnvironment(hostOrUser, context),
 				}
 			}
+
+			// Find inner shell from subsequent layers
+			for (let idx = 1; idx < chain.layers.length; idx++) {
+				const l = chain.layers[idx]
+				if (l.domain === "subshell" || l.wrapperCommand) {
+					const firstTok = l.rawTokens[0]?.replace(/\\/g, "/") || ""
+					innerShell = firstTok || l.wrapperCommand.split(" ")[0]
+					break
+				}
+			}
 		}
 
-		return {
+		// Extract guest working directory if present
+		let guestWorkingDirectory: string | undefined
+		const primaryLayer = chain.layers[0]
+		if (primaryLayer?.workdir) {
+			guestWorkingDirectory = primaryLayer.workdir
+		} else {
+			const cdMatch = chain.leafCommand.match(/(?:^|[;&|]\s*)cd\s+([^\s;&|]+)/)
+			if (cdMatch && cdMatch[1]) {
+				guestWorkingDirectory = cdMatch[1].replace(/['"]/g, "")
+			}
+		}
+
+		const hostFilesystemAccess = hostImpact.affectedHostPaths.length > 0
+		const hostProcessEscape = hostImpact.hostEscapingBinaries.length > 0
+		const destructiveScope = this.determineDestructiveScope(chain.leafCommand, hostImpact, guestWorkingDirectory)
+
+		const boundary: ExecutionBoundary = {
 			host: {
 				os: process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux",
 				shell: process.env.SHELL || (process.platform === "win32" ? "powershell" : "bash"),
@@ -229,7 +265,126 @@ export class ExecutionBoundaryAnalyzer {
 			outerCommand,
 			innerCommand: chain.leafCommand,
 			hostImpact,
+			wrapper,
+			targetEnvironment,
+			innerShell,
+			guestWorkingDirectory,
+			hostFilesystemAccess,
+			hostProcessEscape,
+			destructiveScope,
 		}
+
+		boundary.operationSummary = this.generateOperationSummary(chain, boundary)
+
+		return boundary
+	}
+
+	/**
+	 * Determines the blast radius and destructive scope of the leaf command.
+	 */
+	public static determineDestructiveScope(
+		leafCommand: string,
+		hostImpact: HostImpactAssessment,
+		guestWorkingDirectory?: string
+	): "none" | "scoped_test_fixture" | "workspace" | "host_system" {
+		const hasDeletion = /(\b|^)(rm|del|rmdir|format|mkfs|unlink)(\b|$)/i.test(leafCommand)
+		if (!hasDeletion) {
+			return "none"
+		}
+
+		// Host system impact or deletion of host drives
+		if (hostImpact.affectedHostPaths.length > 0) {
+			return "host_system"
+		}
+
+		// Root / critical system directory wipe
+		if (/\b(rm|rmdir)\s+-[rfRF]*\s+(\/(?:\s|$|\*)|\/etc|\/usr|\/var|\/bin|\/boot|\/root)/.test(leafCommand)) {
+			return "host_system"
+		}
+
+		// Check if deletion is scoped to a temporary fixture created via mktemp or in /tmp
+		const createsFixture = /\bmktemp\b/.test(leafCommand)
+		const deletesFixture = /\brm\s+-[rfRF]*\s+[^;&|]*(\$\{?[a-zA-Z0-9_]*fixture[a-zA-Z0-9_]*\}?|\/tmp\/)/i.test(leafCommand)
+		const deletesOnlyTmp = /\brm\s+-[rfRF]*\s+\/tmp\/[^\s;&|]+/i.test(leafCommand)
+
+		if ((createsFixture && deletesFixture) || deletesOnlyTmp) {
+			return "scoped_test_fixture"
+		}
+
+		// Deletion within scoped test workspace or relative path
+		return "workspace"
+	}
+
+	/**
+	 * Produces a deterministic, step-by-step semantic summary of the execution plan.
+	 */
+	public static generateOperationSummary(
+		chain: ExecutionChain,
+		boundary: Partial<ExecutionBoundary>
+	): string[] {
+		const steps: string[] = []
+
+		// Step 1: Environment entry
+		if (boundary.target?.type === "wsl") {
+			steps.push(`Enter WSL distribution '${boundary.target.name || "default"}' via ${boundary.wrapper || "wsl.exe"}.`)
+		} else if (boundary.target?.type === "docker") {
+			steps.push(`Execute inside Docker container '${boundary.target.name || "container"}'.`)
+		} else if (boundary.target?.type === "ssh") {
+			steps.push(`Execute on remote SSH host '${boundary.target.name || "remote"}'.`)
+		} else {
+			steps.push(`Execute locally on host system.`)
+		}
+
+		// Step 2: Working directory
+		if (boundary.guestWorkingDirectory) {
+			steps.push(`Change directory to Linux workspace '${boundary.guestWorkingDirectory}'.`)
+		}
+
+		// Step 3: Decompose inner commands by splitting on semicolons or &&
+		const innerParts = boundary.innerCommand
+			? boundary.innerCommand
+					.split(/[;&]/)
+					.map((s) => s.trim())
+					.filter((s) => s.length > 0)
+			: []
+
+		for (const part of innerParts) {
+			if (/^cd\s+/i.test(part)) {
+				continue
+			}
+			if (/\bmktemp\b/i.test(part)) {
+				steps.push(`Create temporary test fixture via mktemp.`)
+			} else if (/^cp\s+/i.test(part)) {
+				steps.push(`Copy compiled library into test fixture (${part}).`)
+			} else if (/\b(node|vitest|jest|pytest|cargo test|npm test|pnpm test)\b/i.test(part)) {
+				steps.push(`Run test suite against fixture (${part}).`)
+			} else if (/^echo\s+NATIVE_RC|^echo\s+\$\?/i.test(part)) {
+				steps.push(`Capture test return code.`)
+			} else if (/^rm\s+/i.test(part)) {
+				if (boundary.destructiveScope === "scoped_test_fixture") {
+					steps.push(`Clean up temporary test fixture (${part}).`)
+				} else {
+					steps.push(`Remove file(s): ${part}.`)
+				}
+			} else if (/^git\s+/i.test(part)) {
+				steps.push(`Run Git command: ${part}.`)
+			}
+		}
+
+		// Step 4: Boundary safety observations
+		if (!boundary.hostFilesystemAccess) {
+			steps.push(`No Windows host filesystem paths (/mnt/*) accessed.`)
+		} else {
+			steps.push(`Windows host paths accessed: ${boundary.hostImpact?.affectedHostPaths.join(", ")}.`)
+		}
+
+		if (!boundary.hostProcessEscape) {
+			steps.push(`No Windows host process or shell escape detected.`)
+		} else {
+			steps.push(`Windows host process escape detected: ${boundary.hostImpact?.hostEscapingBinaries.join(", ")}.`)
+		}
+
+		return steps
 	}
 
 	/**
@@ -905,10 +1060,11 @@ export class HostImpactDetector {
 						/\.(exe|bat|cmd|ps1|vbs)$/i.test(innerLayer.wrapperCommand) ||
 						/\b(powershell|cmd|explorer)\b/i.test(innerLayer.wrapperCommand)
 					) {
-						hostEscapingBinaries.push(innerLayer.wrapperCommand)
+						const bin = innerLayer.rawTokens[0] || innerLayer.wrapperCommand.split(/\s+/)[0]
+						hostEscapingBinaries.push(bin)
 						setRisk(
 							"high",
-							`WSL invokes Windows host executable/shell (${innerLayer.wrapperCommand}): breaks Linux isolation and executes on Windows host`
+							`WSL invokes Windows host executable/shell (${bin}): breaks Linux isolation and executes on Windows host`
 						)
 					}
 				}

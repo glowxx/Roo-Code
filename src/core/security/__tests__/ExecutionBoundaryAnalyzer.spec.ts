@@ -166,4 +166,97 @@ describe("ExecutionBoundaryAnalyzer", () => {
 			expect(classification).toBe("test-environment")
 		})
 	})
+
+	describe("Boundary Context & Incident Regressions", () => {
+		it("analyzes the Velune WSL security regression test command with rich boundary context", () => {
+			const veluneCmd =
+				'wsl.exe -d GuildScout-Test -- /bin/bash -c "cd /home/guildscout/srv/velune; fixture=$(mktemp /tmp/velune-test.XXXXXX); cp tests/fixtures/valid_license.key ${fixture}; VELUNE_NATIVE_TEST_ADDON=${fixture} node tests/linux_native_security.test.js; echo NATIVE_RC=$?; rm -f ${fixture}"'
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(veluneCmd, {
+				targetName: "GuildScout-Test",
+				userInstruction: "Run linux native security tests in GuildScout-Test",
+				taskGoal: "Validate Velune license security",
+			})
+
+			expect(boundary.target.type).toBe("wsl")
+			expect(boundary.target.name).toBe("GuildScout-Test")
+			expect(boundary.target.classification).toBe("test-environment")
+			expect(boundary.targetEnvironment).toBe("WSL guest")
+			expect(boundary.wrapper).toBe("wsl.exe")
+			expect(boundary.innerShell).toBe("/bin/bash")
+			expect(boundary.guestWorkingDirectory).toBe("/home/guildscout/srv/velune")
+			expect(boundary.hostFilesystemAccess).toBe(false)
+			expect(boundary.hostProcessEscape).toBe(false)
+			expect(boundary.destructiveScope).toBe("scoped_test_fixture")
+			expect(boundary.operationSummary?.length).toBeGreaterThan(2)
+			expect(boundary.operationSummary?.some((s) => s.includes("temporary test fixture"))).toBe(true)
+			expect(boundary.operationSummary?.some((s) => s.includes("Clean up temporary test fixture"))).toBe(true)
+			expect(boundary.hostImpact.isHostEscape).toBe(false)
+			expect(boundary.hostImpact.highestRisk).toBe("none")
+		})
+
+		it("detects destructive host filesystem deletion via /mnt/c as critical host escape", () => {
+			const destructiveCmd =
+				'wsl.exe -d GuildScout-Test -- /bin/bash -c "rm -rf /mnt/c/Windows/System32"'
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(destructiveCmd)
+
+			expect(boundary.target.type).toBe("wsl")
+			expect(boundary.hostFilesystemAccess).toBe(true)
+			expect(boundary.hostImpact.isHostEscape).toBe(true)
+			expect(boundary.hostImpact.highestRisk).toBe("critical")
+			expect(boundary.destructiveScope).toBe("host_system")
+		})
+
+		it("detects host process escape when Windows binary powershell.exe is invoked inside WSL", () => {
+			const escapeCmd =
+				'wsl.exe -d GuildScout-Test -- /bin/bash -c "powershell.exe -NoProfile -Command \'Stop-Service WinDefend\'"'
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(escapeCmd)
+
+			expect(boundary.target.type).toBe("wsl")
+			expect(boundary.hostProcessEscape).toBe(true)
+			expect(boundary.hostImpact.isHostEscape).toBe(true)
+			expect(boundary.hostImpact.highestRisk).toBe("high")
+			expect(boundary.hostImpact.hostEscapingBinaries).toContain("powershell.exe")
+		})
+
+		it("classifies standalone /tmp deletion as scoped_test_fixture", () => {
+			const tmpCleanupCmd = 'wsl.exe -d GuildScout-Test -- rm -rf /tmp/velune-test.123456'
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(tmpCleanupCmd)
+
+			expect(boundary.target.type).toBe("wsl")
+			expect(boundary.hostFilesystemAccess).toBe(false)
+			expect(boundary.hostProcessEscape).toBe(false)
+			expect(boundary.destructiveScope).toBe("scoped_test_fixture")
+		})
+
+		it("classifies docker exec unit test command as scoped container without destruction", () => {
+			const dockerCmd = "docker exec -i test-runner npm test"
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(dockerCmd, {
+				targetName: "test-runner",
+				userInstruction: "Run npm test in container",
+			})
+
+			expect(boundary.target.type).toBe("docker")
+			expect(boundary.targetEnvironment).toBe("Docker container")
+			expect(boundary.destructiveScope).toBe("none")
+			expect(boundary.hostFilesystemAccess).toBe(false)
+			expect(boundary.hostProcessEscape).toBe(false)
+		})
+
+		it("detects destructive command targeting production SSH target as host_system", () => {
+			const sshCmd = 'ssh prod-server "rm -rf /var/data"'
+
+			const boundary = ExecutionBoundaryAnalyzer.analyze(sshCmd)
+
+			expect(boundary.target.type).toBe("ssh")
+			expect(boundary.targetEnvironment).toBe("SSH remote")
+			expect(boundary.target.classification).toBe("production")
+			expect(boundary.destructiveScope).toBe("host_system")
+		})
+	})
 })
+

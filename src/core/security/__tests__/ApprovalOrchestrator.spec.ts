@@ -240,4 +240,113 @@ describe("ApprovalOrchestrator", () => {
 			expect(entry.target).toContain("[REDACTED_SECRET]")
 		})
 	})
+
+	describe("Timeout & Infrastructure Recovery (Bounded Retry)", () => {
+		it("succeeds on attempt 2 after initial timeout and logs retry attempt count", async () => {
+			let callCount = 0
+			;(orchestrator as any).judge = {
+				callProvider: vi.fn().mockImplementation(async () => {
+					callCount++
+					if (callCount === 1) {
+						throw new Error("Approval AI evaluation timed out after 25000ms")
+					}
+					return JSON.stringify({
+						decision: "ALLOW_AUTO",
+						risk: "low",
+						reason: "Verified safe test command inside WSL",
+						taskAligned: true,
+					})
+				}),
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-retry-1",
+				taskId: "task-retry-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run tests in WSL",
+					activeGoal: "Run test suite",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, { ...mockState, approvalMode: "auto" })
+
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.approvalAttemptCount).toBe(2)
+			expect(result.auditLog).toContain("retry=true attempt=2")
+			expect(callCount).toBe(2)
+		})
+
+		it("fails-closed to DENY_AND_REPLAN in AUTO mode on persistent timeout without stopping task", async () => {
+			;(orchestrator as any).judge = {
+				callProvider: vi.fn().mockRejectedValue(new Error("Approval AI evaluation timed out after 30000ms")),
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-timeout-auto",
+				taskId: "task-timeout-auto",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run complex benchmark",
+					activeGoal: "Performance benchmark",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, { ...mockState, approvalMode: "auto" })
+
+			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.infrastructureFailure).toBe(true)
+			expect(result.approvalAttemptCount).toBe(2)
+			expect(result.replanGuidance).toContain("Approval authority was temporarily unavailable")
+			expect(result.auditLog).toContain("infrastructureFailure=true")
+			expect(result.auditLog).toContain("finalDecision=DENY_AND_REPLAN")
+
+			const entries = DecisionLogStore.getInstance().getEntries("task-timeout-auto")
+			expect(entries.length).toBe(1)
+			expect(entries[0].infrastructureFailure).toBe(true)
+			expect(entries[0].approvalAttempts).toBe(2)
+		})
+
+		it("fails-closed to MANUAL_APPROVAL in MANUAL mode on persistent timeout", async () => {
+			;(orchestrator as any).judge = {
+				callProvider: vi.fn().mockRejectedValue(new Error("Approval AI evaluation timed out after 30000ms")),
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-timeout-manual",
+				taskId: "task-timeout-manual",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run complex benchmark",
+					activeGoal: "Performance benchmark",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, { ...mockState, approvalMode: "manual" })
+
+			expect(result.decision).toBe("MANUAL_APPROVAL")
+			expect(result.infrastructureFailure).toBe(true)
+			expect(result.approvalAttemptCount).toBe(2)
+			expect(result.auditLog).toContain("finalDecision=MANUAL_APPROVAL")
+		})
+	})
 })
+

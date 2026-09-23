@@ -32,7 +32,7 @@ export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createF
 	"Command safety evaluation failed (timeout or network error). Auto-execution blocked defensively"
 )
 
-export const DEFAULT_TIMEOUT_MS = 15000
+export const DEFAULT_TIMEOUT_MS = 25000
 
 const FAST_PATH_PATTERNS = [
 	/^git\s+(diff|status|log|show|branch|rev-parse)(\s+.*)?$/i,

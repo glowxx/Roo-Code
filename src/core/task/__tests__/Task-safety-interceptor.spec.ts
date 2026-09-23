@@ -22,8 +22,10 @@ describe("Task safety interceptor", () => {
 		;(task as any).askResponse = undefined
 		;(task as any).askResponseText = undefined
 		;(task as any).askResponseImages = undefined
-		;(task as any).lastMessageTs = undefined
 		;(task as any).workspacePath = "/test/workspace"
+		;(task as any).deniedActionHistory = []
+		;(task as any).consecutiveReplanCount = 0
+		;(task as any).totalReplanCount = 0
 
 		;(task as any).messageQueueService = new MessageQueueService()
 		;(task as any).addToClineMessages = vi.fn(async (msg: any) => {
@@ -539,4 +541,112 @@ describe("Task safety interceptor", () => {
 		task.handleWebviewAskResponse("yesButtonClicked")
 		await askPromise
 	})
+
+	describe("Unified Context & Autonomous Timeout Recovery", () => {
+		it("extracts workerReason, userTask, activeGoal and currentStep in buildApprovalRequest", () => {
+			;(task as any).metadata = { task: "Run security compliance checks in GuildScout-Test" }
+			;(task as any).taskId = "task-context-1"
+			;(task as any).currentStreamingContentIndex = 2
+			;(task as any).assistantMessageContent = [
+				{
+					type: "text",
+					content: "I will now test the native security addon inside WSL to verify license enforcement.",
+				},
+				{
+					type: "tool_use",
+					name: "execute_command",
+					params: { command: "wsl.exe -d GuildScout-Test -- /bin/bash" },
+				},
+			]
+			;(task as any).todoList = [
+				{ content: "Setup environment", status: "completed" },
+				{ content: "Run native security tests", status: "in_progress" },
+			]
+			;(task as any).deniedActionHistory = []
+
+			const req = (task as any).buildApprovalRequest({
+				askType: "command",
+				text: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "node test.js"',
+				isProtected: false,
+				askTs: 5000,
+			})
+
+			expect(req.taskContext.userTask).toBe("Run security compliance checks in GuildScout-Test")
+			expect(req.taskContext.activeGoal).toBe("Run security compliance checks in GuildScout-Test")
+			expect(req.taskContext.currentStep).toContain("Run native security tests")
+			expect(req.taskContext.workerReason).toContain("verify license enforcement")
+			expect(req.target.workerReason).toContain("verify license enforcement")
+		})
+
+		it("auto-denies with replan guidance on infrastructure timeout in AUTO mode without stopping task", async () => {
+			;(task as any).taskId = "task-auto-timeout-1"
+			;(task as any).metadata = { task: "Automated regression testing" }
+			;(task as any).approvalOrchestrator = {
+				evaluate: vi.fn().mockResolvedValue({
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "Approval authority temporarily unavailable (timeout after 25000ms). Unverified action blocked.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					replanGuidance: "Approval authority was temporarily unavailable. Try a lower-risk or deterministic alternative.",
+					infrastructureFailure: true,
+					approvalAttemptCount: 2,
+					auditLog: "[ApprovalAudit] infrastructureFailure=true",
+				}),
+			}
+			const denySpy = vi.spyOn(task, "denyAsk")
+			const saySpy = vi.spyOn(task, "say")
+
+			defaultState.approvalMode = "auto"
+			mockProvider.getState.mockResolvedValue(defaultState)
+
+			const result = await task.ask("command", 'wsl.exe -d GuildScout-Test -- /bin/bash -c "node complex_suite.js"')
+
+			// In autonomous deny-and-replan, denyAsk is called and resolves with noButtonClicked + guidance
+			expect(result.response).toBe("noButtonClicked")
+			expect(result.text).toContain("Approval authority was temporarily unavailable")
+			expect(denySpy).toHaveBeenCalledTimes(1)
+			expect(saySpy).not.toHaveBeenCalledWith("command_safety_warning", expect.anything())
+			expect((task as any).consecutiveReplanCount).toBe(1)
+		})
+
+		it("escalates to manual approval when consecutive replan threshold is exceeded (thrashing protection)", async () => {
+			;(task as any).taskId = "task-thrash-1"
+			;(task as any).metadata = { task: "Automated regression testing" }
+			;(task as any).consecutiveReplanCount = 3 // Threshold reached
+			;(task as any).deniedActionHistory = []
+			;(task as any).approvalOrchestrator = {
+				evaluate: vi.fn().mockResolvedValue({
+					decision: "DENY_AND_REPLAN",
+					risk: "high",
+					reason: "Approval AI rejected unverified command.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					replanGuidance: "Do not repeat command.",
+				}),
+			}
+			const denySpy = vi.spyOn(task, "denyAsk")
+			const saySpy = vi.spyOn(task, "say")
+
+			defaultState.approvalMode = "auto"
+			mockProvider.getState.mockResolvedValue(defaultState)
+
+			const askPromise = task.ask("command", 'wsl.exe -d GuildScout-Test -- /bin/bash -c "node failing.js"')
+
+			// Give async evaluate a cycle
+			await new Promise((r) => setTimeout(r, 50))
+
+			// Thrashing threshold reached -> escalates to manual approval
+			expect(denySpy).not.toHaveBeenCalled()
+			expect(saySpy).toHaveBeenCalledWith(
+				"command_safety_warning",
+				expect.stringContaining("Safety replan limit reached")
+			)
+
+			// Resolve manual response
+			task.handleWebviewAskResponse("yesButtonClicked")
+			await askPromise
+		})
+	})
 })
+

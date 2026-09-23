@@ -167,6 +167,14 @@ export interface ExecutionBoundary {
 	outerCommand?: string
 	innerCommand: string
 	hostImpact: HostImpactAssessment
+	wrapper?: string
+	targetEnvironment?: string
+	innerShell?: string
+	guestWorkingDirectory?: string
+	hostFilesystemAccess?: boolean
+	hostProcessEscape?: boolean
+	destructiveScope?: "none" | "scoped_test_fixture" | "workspace" | "host_system"
+	operationSummary?: string[]
 }
 
 export interface CompactSafetyContext {
@@ -282,23 +290,77 @@ export const orchestratorDecisionSchema = z.enum([
 ])
 
 export interface CompactApprovalContext {
+	userTask?: string
 	latestUserInstruction: string
 	activeGoal: string
 	currentStep?: string
+	workerReason?: string
+	action?: {
+		type: string
+		rawCommand?: string
+		workingDirectory?: string
+		workerReason?: string
+	}
+	execution?: {
+		hostOS: string
+		wrapper?: string
+		targetEnvironment: string
+		targetName?: string
+		classification?: string
+		innerShell?: string
+		innerCommand?: string
+		guestWorkingDirectory?: string
+		hostFilesystemAccess: boolean
+		hostProcessEscape: boolean
+		networkImpact?: string
+		destructiveScope?: string
+		operationSummary?: string[]
+	}
+	riskFindings?: string[]
 	explicitConstraints?: string[]
 	workspacePath: string
 	isWithinWorkspace: boolean
 	recentActionSignatures?: string[]
+	previousRelevantResult?: string
 }
 
 export const compactApprovalContextSchema = z.object({
+	userTask: z.string().optional(),
 	latestUserInstruction: z.string(),
 	activeGoal: z.string(),
 	currentStep: z.string().optional(),
+	workerReason: z.string().optional(),
+	action: z
+		.object({
+			type: z.string(),
+			rawCommand: z.string().optional(),
+			workingDirectory: z.string().optional(),
+			workerReason: z.string().optional(),
+		})
+		.optional(),
+	execution: z
+		.object({
+			hostOS: z.string(),
+			wrapper: z.string().optional(),
+			targetEnvironment: z.string(),
+			targetName: z.string().optional(),
+			classification: z.string().optional(),
+			innerShell: z.string().optional(),
+			innerCommand: z.string().optional(),
+			guestWorkingDirectory: z.string().optional(),
+			hostFilesystemAccess: z.boolean(),
+			hostProcessEscape: z.boolean(),
+			networkImpact: z.string().optional(),
+			destructiveScope: z.string().optional(),
+			operationSummary: z.array(z.string()).optional(),
+		})
+		.optional(),
+	riskFindings: z.array(z.string()).optional(),
 	explicitConstraints: z.array(z.string()).optional(),
 	workspacePath: z.string(),
 	isWithinWorkspace: z.boolean(),
 	recentActionSignatures: z.array(z.string()).optional(),
+	previousRelevantResult: z.string().optional(),
 })
 
 export interface UnifiedApprovalRequest {
@@ -324,6 +386,7 @@ export interface UnifiedApprovalRequest {
 		completionCriteria?: string[]
 		activeTerminalsCount?: number
 		unresolvedDenialState?: { actionType: string; reason: string; replanGuidance?: string } | null
+		workerReason?: string
 	}
 	executionBoundary?: ExecutionBoundary
 	taskContext: CompactApprovalContext
@@ -339,10 +402,14 @@ export interface ApprovalDecisionResult {
 	risk: CommandSafetyRiskLevel
 	reason: string
 	taskAligned: boolean
+	boundary?: string
+	hostImpact?: boolean
 	hardBoundaryViolation?: boolean
 	replanGuidance?: string | null
 	unresolvedItems?: ContinueWorkItem[]
 	missingCriteria?: string[]
+	infrastructureFailure?: boolean
+	approvalAttemptCount?: number
 	auditLog: string
 }
 
@@ -357,6 +424,8 @@ export const approvalDecisionResultSchema = z.object({
 	}),
 	reason: z.string(),
 	taskAligned: z.boolean().default(false),
+	boundary: z.string().optional(),
+	hostImpact: z.boolean().optional(),
 	hardBoundaryViolation: z.boolean().default(false),
 	replanGuidance: z.string().nullable().optional(),
 	unresolvedItems: z
@@ -369,6 +438,7 @@ export const approvalDecisionResultSchema = z.object({
 		)
 		.optional(),
 	missingCriteria: z.array(z.string()).optional(),
+	infrastructureFailure: z.boolean().optional(),
 })
 
 export interface CompactCompletionContext {
@@ -452,6 +522,14 @@ export interface DecisionLogEntry {
 	evaluatorModel?: string
 	fastPath: boolean
 	latencyMs?: number
+	taskGoal?: string
+	currentStep?: string
+	environment?: string
+	boundary?: string
+	hostImpact?: boolean
+	approvalAttempts?: number
+	retry?: boolean
+	infrastructureFailure?: boolean
 }
 
 
