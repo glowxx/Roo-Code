@@ -156,6 +156,27 @@ export type ModelRecord = Record<string, ModelInfo>
 export type RouterModels = Record<DynamicProvider | LocalProvider, ModelRecord>
 
 /**
+ * CostSource
+ */
+export const costSources = [
+	"provider-reported",
+	"live-provider-pricing",
+	"configured-pricing",
+	"local-estimate",
+] as const
+
+export const costSourceSchema = z.enum(costSources)
+export type CostSource = z.infer<typeof costSourceSchema>
+
+/**
+ * CostPrecision
+ */
+export const costPrecisions = ["exact", "estimated"] as const
+
+export const costPrecisionSchema = z.enum(costPrecisions)
+export type CostPrecision = z.infer<typeof costPrecisionSchema>
+
+/**
  * Calculates the context window for a given model ID with a deterministic hierarchy
  * for modern model families, respecting base context or provider overrides.
  *

@@ -295,7 +295,8 @@ function getSelectedModel({
 			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
 			const liveInfo = openAiModelInfos?.[id]
 			const customOverride = (apiConfiguration as any).xkiroCustomContextWindow || (apiConfiguration as any).customContextWindow
-			const baseInfo = predefinedInfo ?? liveInfo ?? (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo ?? {
+			const userCustomInfo = (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo
+			const baseInfo = userCustomInfo ?? liveInfo ?? predefinedInfo ?? {
 				maxTokens: 8192,
 				contextWindow: getModelContextWindow(id),
 				supportsImages: true,
@@ -307,10 +308,32 @@ function getSelectedModel({
 			const supportsReasoningEffort =
 				baseInfo.supportsReasoningEffort ??
 				(modelSupportsReasoning(id, baseInfo) ? true : undefined)
+
+			const discountMultiplier =
+				typeof (apiConfiguration as any).xkiroDiscountMultiplier === "number"
+					? (apiConfiguration as any).xkiroDiscountMultiplier
+					: undefined
+
+			let inputPrice = baseInfo.inputPrice
+			let outputPrice = baseInfo.outputPrice
+			let cacheReadsPrice = baseInfo.cacheReadsPrice
+			let cacheWritesPrice = baseInfo.cacheWritesPrice
+
+			if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
+				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
+				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
+				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
+				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
+			}
+
 			const info: ModelInfo = {
 				...baseInfo,
 				contextWindow,
 				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+				...(inputPrice !== undefined ? { inputPrice } : {}),
+				...(outputPrice !== undefined ? { outputPrice } : {}),
+				...(cacheReadsPrice !== undefined ? { cacheReadsPrice } : {}),
+				...(cacheWritesPrice !== undefined ? { cacheWritesPrice } : {}),
 			}
 			return { id, info }
 		}

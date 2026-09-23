@@ -150,6 +150,23 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 			const supportsReasoningEffort =
 				customInfo?.supportsReasoningEffort ??
 				(modelSupportsReasoning(xkiroModelId, customInfo) ? true : undefined)
+			const discountMultiplier =
+				typeof (options as any).xkiroDiscountMultiplier === "number"
+					? (options as any).xkiroDiscountMultiplier
+					: undefined
+
+			let inputPrice = customInfo?.inputPrice
+			let outputPrice = customInfo?.outputPrice
+			let cacheReadsPrice = customInfo?.cacheReadsPrice
+			let cacheWritesPrice = customInfo?.cacheWritesPrice
+
+			if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
+				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
+				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
+				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
+				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
+			}
+
 			const modelInfo: ModelInfo = {
 				...(customInfo || {
 					maxTokens: 8192,
@@ -158,6 +175,10 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				}),
 				contextWindow,
 				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+				...(inputPrice !== undefined ? { inputPrice } : {}),
+				...(outputPrice !== undefined ? { outputPrice } : {}),
+				...(cacheReadsPrice !== undefined ? { cacheReadsPrice } : {}),
+				...(cacheWritesPrice !== undefined ? { cacheWritesPrice } : {}),
 			}
 			return new OpenAiHandler({
 				...options,

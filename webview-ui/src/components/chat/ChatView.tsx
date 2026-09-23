@@ -1648,6 +1648,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						cacheReads={latestPromptApiMetrics.totalCacheReads}
 						latestPromptCost={latestPromptApiMetrics.totalCost}
 						totalCost={apiMetrics.totalCost}
+						costSource={latestPromptApiMetrics.costSource ?? apiMetrics.costSource}
+						precision={latestPromptApiMetrics.precision ?? apiMetrics.precision}
 						hasCompletedWork={hasCompletedWork}
 						aggregatedCost={
 							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)

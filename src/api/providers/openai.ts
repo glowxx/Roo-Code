@@ -278,6 +278,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 
 	protected processUsageMetrics(usage: any, _modelInfo?: ModelInfo): ApiStreamUsageChunk {
 		const inputDetails = usage?.prompt_tokens_details ?? usage?.input_tokens_details
+		const outputDetails = usage?.completion_tokens_details ?? usage?.output_tokens_details
 		const cachedFromDetails = inputDetails?.cached_tokens
 		const cacheReadTokens =
 			usage?.cache_read_input_tokens ??
@@ -291,12 +292,27 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			inputDetails?.cache_write_tokens ??
 			undefined
 
+		const reasoningTokens =
+			usage?.reasoning_tokens ??
+			outputDetails?.reasoning_tokens ??
+			undefined
+
+		const rawCost =
+			usage?.cost ??
+			usage?.total_cost ??
+			usage?.billed_cost ??
+			usage?.usage_cost ??
+			usage?.cost_details?.upstream_inference_cost
+		const totalCost = typeof rawCost === "number" ? rawCost : undefined
+
 		return {
 			type: "usage",
 			inputTokens: usage?.prompt_tokens || 0,
 			outputTokens: usage?.completion_tokens || 0,
 			cacheWriteTokens,
 			cacheReadTokens,
+			reasoningTokens,
+			totalCost,
 		}
 	}
 
@@ -473,11 +489,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			}
 
 			if (chunk.usage) {
-				yield {
-					type: "usage",
-					inputTokens: chunk.usage.prompt_tokens || 0,
-					outputTokens: chunk.usage.completion_tokens || 0,
-				}
+				yield this.processUsageMetrics(chunk.usage)
 			}
 		}
 	}

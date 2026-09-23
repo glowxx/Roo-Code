@@ -423,3 +423,33 @@ cumulativeOutputTokens=${record.cumulativeOutputTokens}`)
 export function resetTokenAuditForTask(taskId: string): void {
 	taskCumulativeUsage.delete(taskId)
 }
+
+export function recordCostAudit(
+	taskId: string,
+	info: {
+		requestId?: string
+		model: string
+		provider?: string
+		inputTokens: number
+		outputTokens: number
+		cacheReadTokens?: number
+		cacheWriteTokens?: number
+		cost: number
+		costSource?: string
+		precision?: string
+	},
+): void {
+	if (isTokenAuditEnabled()) {
+		console.log(`[CostAudit]
+taskId=${taskId}
+requestId=${info.requestId ?? "N/A"}
+provider=${info.provider ?? "N/A"}
+model=${info.model}
+tokensIn=${info.inputTokens}
+tokensOut=${info.outputTokens}
+cacheRead=${info.cacheReadTokens ?? 0}
+cost=$${info.cost.toFixed(6)}
+costSource=${info.costSource ?? "local-estimate"}
+precision=${info.precision ?? "estimated"}`)
+	}
+}

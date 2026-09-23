@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft, Plus } from "lucide-react"
 import prettyBytes from "pretty-bytes"
 
-import { type ClineMessage, getModelContextWindow } from "@roo-code/types"
+import { type ClineMessage, type CostPrecision, type CostSource, getModelContextWindow } from "@roo-code/types"
 
 import { getModelMaxOutputTokens } from "@roo/api"
 
@@ -30,6 +30,8 @@ export interface TaskHeaderProps {
 	cacheReads?: number
 	totalCost: number
 	latestPromptCost?: number
+	costSource?: CostSource
+	precision?: CostPrecision
 	hasCompletedWork?: boolean
 	aggregatedCost?: number
 	hasSubtasks?: boolean
@@ -51,6 +53,8 @@ const TaskHeader = ({
 	cacheReads,
 	totalCost,
 	latestPromptCost,
+	costSource,
+	precision,
 	hasCompletedWork = false,
 	aggregatedCost,
 	hasSubtasks,
@@ -133,6 +137,56 @@ const TaskHeader = ({
 
 	const displayPromptCost = latestPromptCost ?? totalCost
 	const shouldShowPromptCost = displayPromptCost > 0 || (hasCompletedWork && displayPromptCost >= 0)
+
+	const formatCost = (val: number) => {
+		if (val === 0) return "$0.00"
+		if (val < 0.01) return `$${val.toFixed(4)}`
+		return `$${val.toFixed(2)}`
+	}
+
+	const getCostTooltip = (cost: number, isPrompt: boolean) => {
+		const sourceLabel =
+			costSource === "provider-reported"
+				? "Provider reported / billed"
+				: costSource === "live-provider-pricing"
+					? "Live provider pricing (/models)"
+					: costSource === "configured-pricing"
+						? "Configured rate / discount"
+						: "Catalog estimate"
+
+		const precisionLabel = precision === "exact" ? "Exact" : "Estimated"
+
+		return (
+			<div className="space-y-1 text-xs text-left">
+				<div className="font-semibold">
+					{isPrompt
+						? t("chat:costs.promptCostTooltip", {
+								defaultValue: "Current prompt cost: ${{cost}}",
+								cost: cost < 0.01 && cost > 0 ? cost.toFixed(4) : cost.toFixed(2),
+							})
+						: t("chat:costs.total", {
+								cost: cost < 0.01 && cost > 0 ? cost.toFixed(4) : cost.toFixed(2),
+							})}
+				</div>
+				<div className="flex items-center gap-1.5 opacity-90">
+					<span className="font-medium">Status:</span>
+					<span className={precision === "exact" ? "text-green-400 font-medium" : "text-amber-400"}>
+						{precisionLabel}
+					</span>
+				</div>
+				<div className="opacity-80">
+					<span className="font-medium">Source:</span> {sourceLabel}
+				</div>
+				{apiConfiguration?.apiProvider === "xkiro" && (
+					<div className="opacity-80 border-t border-border/50 pt-1 text-[11px]">
+						{(apiConfiguration as any)?.xkiroDiscountMultiplier !== undefined
+							? `xKiro discount: ${Math.round((1 - (apiConfiguration as any).xkiroDiscountMultiplier) * 100)}% promo applied`
+							: "xKiro active account promo may apply on provider dashboard"}
+					</div>
+				)}
+			</div>
+		)
+	}
 
 	return (
 		<div className="w-full max-w-[1240px] mx-auto group pt-1 pb-0 px-3 sm:px-4">
@@ -227,13 +281,21 @@ const TaskHeader = ({
 								<>
 									<span>·</span>
 									<StandardTooltip
-										content={
-											<div>{t("chat:costs.promptCostTooltip", { defaultValue: "Current prompt cost: ${{cost}}", cost: displayPromptCost.toFixed(2) })}</div>
-										}
+										content={getCostTooltip(displayPromptCost, true)}
 										side="top"
 										sideOffset={8}>
-										<span data-testid="compact-prompt-cost">
-											${displayPromptCost.toFixed(2)}
+										<span data-testid="compact-prompt-cost" className="inline-flex items-center gap-1">
+											{precision === "estimated" && (
+												<span className="opacity-60 text-[10px]" title="Estimated">
+													~
+												</span>
+											)}
+											{formatCost(displayPromptCost)}
+											{costSource === "provider-reported" && (
+												<span className="text-[10px] text-green-500 font-medium">
+													(billed)
+												</span>
+											)}
 										</span>
 									</StandardTooltip>
 								</>
@@ -328,14 +390,21 @@ const TaskHeader = ({
 											</th>
 											<td className="font-light align-top">
 												<StandardTooltip
-													content={t("chat:costs.promptCostTooltip", {
-														defaultValue: "Current prompt cost: ${{cost}}",
-														cost: displayPromptCost.toFixed(2),
-													})}
+													content={getCostTooltip(displayPromptCost, true)}
 													side="top"
 													sideOffset={8}>
-													<span data-testid="expanded-prompt-cost">
-														${displayPromptCost.toFixed(2)}
+													<span data-testid="expanded-prompt-cost" className="inline-flex items-center gap-1">
+														{precision === "estimated" && (
+															<span className="opacity-60 text-[10px]" title="Estimated">
+																~
+															</span>
+														)}
+														{formatCost(displayPromptCost)}
+														{costSource === "provider-reported" && (
+															<span className="text-[10px] text-green-500 font-medium">
+																(billed)
+															</span>
+														)}
 													</span>
 												</StandardTooltip>
 											</td>
@@ -362,15 +431,18 @@ const TaskHeader = ({
 																)}
 															</div>
 														) : (
-															<div>
-																{t("chat:costs.total", { cost: totalCost.toFixed(2) })}
-															</div>
+															getCostTooltip(totalCost, false)
 														)
 													}
 													side="top"
 													sideOffset={8}>
-													<span data-testid="expanded-total-cost">
-														${(aggregatedCost ?? totalCost).toFixed(2)}
+													<span data-testid="expanded-total-cost" className="inline-flex items-center gap-1">
+														{precision === "estimated" && (
+															<span className="opacity-60 text-[10px]" title="Estimated">
+																~
+															</span>
+														)}
+														{formatCost(aggregatedCost ?? totalCost)}
 														{hasSubtasks && (
 															<span
 																className="text-xs ml-1"

@@ -1,10 +1,33 @@
-import type { ModelInfo } from "@roo-code/types"
-import type { ServiceTier } from "@roo-code/types"
+import type { CostPrecision, CostSource, ModelInfo, ServiceTier } from "@roo-code/types"
 
 export interface ApiCostResult {
 	totalInputTokens: number
 	totalOutputTokens: number
 	totalCost: number
+	costSource?: CostSource
+	precision?: CostPrecision
+}
+
+export interface CostCalculationOptions {
+	serviceTier?: ServiceTier
+	discountMultiplier?: number
+	costSource?: CostSource
+	precision?: CostPrecision
+}
+
+function applyDiscountMultiplier(modelInfo: ModelInfo, discountMultiplier?: number): ModelInfo {
+	if (discountMultiplier === undefined || discountMultiplier === 1) {
+		return modelInfo
+	}
+	return {
+		...modelInfo,
+		inputPrice: modelInfo.inputPrice !== undefined ? modelInfo.inputPrice * discountMultiplier : undefined,
+		outputPrice: modelInfo.outputPrice !== undefined ? modelInfo.outputPrice * discountMultiplier : undefined,
+		cacheWritesPrice:
+			modelInfo.cacheWritesPrice !== undefined ? modelInfo.cacheWritesPrice * discountMultiplier : undefined,
+		cacheReadsPrice:
+			modelInfo.cacheReadsPrice !== undefined ? modelInfo.cacheReadsPrice * discountMultiplier : undefined,
+	}
 }
 
 function applyLongContextPricing(modelInfo: ModelInfo, totalInputTokens: number, serviceTier?: ServiceTier): ModelInfo {
@@ -47,6 +70,8 @@ function calculateApiCostInternal(
 	cacheReadInputTokens: number,
 	totalInputTokens: number,
 	totalOutputTokens: number,
+	costSource?: CostSource,
+	precision?: CostPrecision,
 ): ApiCostResult {
 	const cacheWritesCost = ((modelInfo.cacheWritesPrice || 0) / 1_000_000) * cacheCreationInputTokens
 	const cacheReadsCost = ((modelInfo.cacheReadsPrice || 0) / 1_000_000) * cacheReadInputTokens
@@ -58,6 +83,8 @@ function calculateApiCostInternal(
 		totalInputTokens,
 		totalOutputTokens,
 		totalCost,
+		costSource,
+		precision,
 	}
 }
 
@@ -69,6 +96,7 @@ export function calculateApiCostAnthropic(
 	outputTokens: number,
 	cacheCreationInputTokens?: number,
 	cacheReadInputTokens?: number,
+	options?: CostCalculationOptions,
 ): ApiCostResult {
 	const cacheCreation = cacheCreationInputTokens || 0
 	const cacheRead = cacheReadInputTokens || 0
@@ -77,14 +105,21 @@ export function calculateApiCostAnthropic(
 	// Total input = base input + cache creation + cache reads
 	const totalInputTokens = inputTokens + cacheCreation + cacheRead
 
+	let effectiveModelInfo = modelInfo
+	if (options?.discountMultiplier !== undefined && options.discountMultiplier !== 1) {
+		effectiveModelInfo = applyDiscountMultiplier(effectiveModelInfo, options.discountMultiplier)
+	}
+
 	return calculateApiCostInternal(
-		modelInfo,
+		effectiveModelInfo,
 		inputTokens,
 		outputTokens,
 		cacheCreation,
 		cacheRead,
 		totalInputTokens,
 		outputTokens,
+		options?.costSource,
+		options?.precision,
 	)
 }
 
@@ -95,12 +130,29 @@ export function calculateApiCostOpenAI(
 	outputTokens: number,
 	cacheCreationInputTokens?: number,
 	cacheReadInputTokens?: number,
-	serviceTier?: ServiceTier,
+	serviceTierOrOptions?: ServiceTier | CostCalculationOptions,
 ): ApiCostResult {
+	let serviceTier: ServiceTier | undefined
+	let discountMultiplier: number | undefined
+	let costSource: CostSource | undefined
+	let precision: CostPrecision | undefined
+
+	if (typeof serviceTierOrOptions === "object" && serviceTierOrOptions !== null) {
+		serviceTier = serviceTierOrOptions.serviceTier
+		discountMultiplier = serviceTierOrOptions.discountMultiplier
+		costSource = serviceTierOrOptions.costSource
+		precision = serviceTierOrOptions.precision
+	} else if (typeof serviceTierOrOptions === "string") {
+		serviceTier = serviceTierOrOptions
+	}
+
 	const cacheCreationInputTokensNum = cacheCreationInputTokens || 0
 	const cacheReadInputTokensNum = cacheReadInputTokens || 0
 	const nonCachedInputTokens = Math.max(0, inputTokens - cacheCreationInputTokensNum - cacheReadInputTokensNum)
-	const effectiveModelInfo = applyLongContextPricing(modelInfo, inputTokens, serviceTier)
+	let effectiveModelInfo = applyLongContextPricing(modelInfo, inputTokens, serviceTier)
+	if (discountMultiplier !== undefined && discountMultiplier !== 1) {
+		effectiveModelInfo = applyDiscountMultiplier(effectiveModelInfo, discountMultiplier)
+	}
 
 	// For OpenAI: inputTokens ALREADY includes all tokens (cached + non-cached)
 	// So we pass the original inputTokens as the total
@@ -112,6 +164,8 @@ export function calculateApiCostOpenAI(
 		cacheReadInputTokensNum,
 		inputTokens,
 		outputTokens,
+		costSource,
+		precision,
 	)
 }
 

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { costPrecisionSchema, costSourceSchema } from "./model.js"
 
 /**
  * ClineAsk
@@ -287,6 +288,8 @@ export const tokenUsageSchema = z.object({
 	totalCacheReads: z.number().optional(),
 	totalCost: z.number(),
 	contextTokens: z.number(),
+	costSource: costSourceSchema.optional(),
+	precision: costPrecisionSchema.optional(),
 })
 
 export type TokenUsage = z.infer<typeof tokenUsageSchema>

@@ -35,6 +35,8 @@ import {
 	type ModelInfo,
 	type ClineApiReqCancelReason,
 	type ClineApiReqInfo,
+	type CostPrecision,
+	type CostSource,
 	RooCodeEventName,
 	TaskStatus,
 	TodoItem,
@@ -136,6 +138,7 @@ import {
 	logTokenAudit,
 	recordProviderUsage,
 	recordRequestTiming,
+	recordCostAudit,
 	type TokenAuditRecord,
 } from "../telemetry/TokenAudit"
 import { MessageQueueService } from "../message-queue/MessageQueueService"
@@ -3171,16 +3174,68 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 									cacheReadTokens,
 								)
 
+					let costSource: CostSource
+					let precision: CostPrecision
+					let finalCost: number
+
+					if (totalCost !== undefined) {
+						costSource = "provider-reported"
+						precision = "exact"
+						finalCost = totalCost
+					} else {
+						finalCost = costResult.totalCost
+						if (
+							(this.apiConfiguration as any).xkiroCustomModelInfo ||
+							this.apiConfiguration.openAiCustomModelInfo ||
+							(this.apiConfiguration as any).xkiroDiscountMultiplier !== undefined
+						) {
+							costSource = "configured-pricing"
+							precision = "exact"
+						} else if (costResult.costSource) {
+							costSource = costResult.costSource
+							precision = costResult.precision ?? "estimated"
+						} else if (
+							this.apiConfiguration.apiProvider === "openrouter" ||
+							this.apiConfiguration.apiProvider === "xkiro"
+						) {
+							costSource = "live-provider-pricing"
+							precision =
+								this.apiConfiguration.apiProvider === "xkiro"
+									? "estimated"
+									: "exact"
+						} else {
+							costSource = "local-estimate"
+							precision = "estimated"
+						}
+					}
+
 					this.clineMessages[lastApiReqIndex].text = JSON.stringify({
 						...existingData,
 						tokensIn: costResult.totalInputTokens,
 						tokensOut: costResult.totalOutputTokens,
 						cacheWrites: cacheWriteTokens,
 						cacheReads: cacheReadTokens,
-						cost: totalCost ?? costResult.totalCost,
+						cost: finalCost,
+						costSource,
+						precision,
 						cancelReason,
 						streamingFailedMessage,
 					} satisfies ClineApiReqInfo)
+
+					if (isTokenAuditEnabled()) {
+						recordCostAudit(this.taskId, {
+							requestId: this.currentAuditRecord?.requestId,
+							model: modelId ?? "unknown",
+							provider: apiProvider,
+							inputTokens: costResult.totalInputTokens,
+							outputTokens: costResult.totalOutputTokens,
+							cacheReadTokens,
+							cacheWriteTokens,
+							cost: finalCost,
+							costSource,
+							precision,
+						})
+					}
 				}
 
 				const abortStream = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {

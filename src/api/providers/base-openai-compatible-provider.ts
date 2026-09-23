@@ -204,10 +204,23 @@ export abstract class BaseOpenAiCompatibleProvider<ModelName extends string>
 		const outputTokens = usage?.completion_tokens || 0
 		const cacheWriteTokens = usage?.prompt_tokens_details?.cache_write_tokens || 0
 		const cacheReadTokens = usage?.prompt_tokens_details?.cached_tokens || 0
+		const reasoningTokens =
+			usage?.reasoning_tokens ??
+			usage?.completion_tokens_details?.reasoning_tokens ??
+			undefined
 
-		const { totalCost } = modelInfo
-			? calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
-			: { totalCost: 0 }
+		const providerCost =
+			usage?.cost ??
+			usage?.total_cost ??
+			usage?.billed_cost ??
+			usage?.usage_cost ??
+			usage?.cost_details?.upstream_inference_cost
+
+		const calculatedCost = modelInfo
+			? calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens).totalCost
+			: 0
+
+		const totalCost = typeof providerCost === "number" ? providerCost : calculatedCost
 
 		return {
 			type: "usage",
@@ -215,6 +228,7 @@ export abstract class BaseOpenAiCompatibleProvider<ModelName extends string>
 			outputTokens,
 			cacheWriteTokens: cacheWriteTokens || undefined,
 			cacheReadTokens: cacheReadTokens || undefined,
+			reasoningTokens,
 			totalCost,
 		}
 	}

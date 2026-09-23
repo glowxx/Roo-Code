@@ -84,6 +84,18 @@ export const XKiro = ({ apiConfiguration, setApiConfigurationField }: XKiroProps
 		[setApiConfigurationField],
 	)
 
+	const handleDiscountMultiplierChange = useCallback(
+		(event: any) => {
+			const val = inputEventTransform(event)
+			const parsed = parseFloat(val)
+			setApiConfigurationField(
+				"xkiroDiscountMultiplier",
+				isNaN(parsed) || parsed <= 0 ? undefined : parsed,
+			)
+		},
+		[setApiConfigurationField],
+	)
+
 	const handleTestConnection = useCallback(() => {
 		const apiKey = apiConfiguration?.xkiroApiKey || apiConfiguration?.apiKey || ""
 		const baseUrl = (apiConfiguration?.xkiroBaseUrl || "https://api.xkiro.com/v1").trim().replace(/\/+$/, "")
@@ -151,6 +163,17 @@ export const XKiro = ({ apiConfiguration, setApiConfigurationField }: XKiroProps
 			</VSCodeTextField>
 			<div className="text-sm text-vscode-descriptionForeground -mt-1">
 				Override the context window size (in tokens) for custom or newly released models.
+			</div>
+
+			<VSCodeTextField
+				value={apiConfiguration?.xkiroDiscountMultiplier?.toString() || ""}
+				onInput={handleDiscountMultiplierChange}
+				placeholder="e.g. 0.5 for 50% discount"
+				className="w-full">
+				<label className="block font-medium mb-1">Promo / Discount Multiplier (Optional)</label>
+			</VSCodeTextField>
+			<div className="text-sm text-vscode-descriptionForeground -mt-1">
+				Multiplier applied to token prices (e.g. <code>0.5</code> for a 50% promo discount, or leave empty for standard catalog prices).
 			</div>
 
 			<div className="flex flex-wrap items-center gap-3 pt-1">

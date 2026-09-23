@@ -1,4 +1,4 @@
-import type { TokenUsage, ToolUsage, ToolName, ClineMessage } from "@roo-code/types"
+import type { TokenUsage, ToolUsage, ToolName, ClineMessage, CostSource, CostPrecision } from "@roo-code/types"
 
 export type ParsedApiReqStartedTextType = {
 	tokensIn: number
@@ -6,6 +6,8 @@ export type ParsedApiReqStartedTextType = {
 	cacheWrites: number
 	cacheReads: number
 	cost?: number // Only present if consolidateApiRequests has been called
+	costSource?: CostSource
+	precision?: CostPrecision
 	apiProtocol?: "anthropic" | "openai"
 }
 
@@ -34,14 +36,21 @@ export function consolidateTokenUsage(messages: ClineMessage[]): TokenUsage {
 		totalCacheReads: undefined,
 		totalCost: 0,
 		contextTokens: 0,
+		costSource: undefined,
+		precision: undefined,
 	}
+
+	let hasEstimated = false
+	let hasExact = false
+	let latestCostSource: CostSource | undefined
+	let latestPrecision: CostPrecision | undefined
 
 	// Calculate running totals.
 	messages.forEach((message) => {
 		if (message.type === "say" && message.say === "api_req_started" && message.text) {
 			try {
 				const parsedText: ParsedApiReqStartedTextType = JSON.parse(message.text)
-				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost } = parsedText
+				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost, costSource, precision } = parsedText
 
 				if (typeof tokensIn === "number") {
 					result.totalTokensIn += tokensIn
@@ -62,6 +71,18 @@ export function consolidateTokenUsage(messages: ClineMessage[]): TokenUsage {
 				if (typeof cost === "number") {
 					result.totalCost += cost
 				}
+
+				if (costSource) {
+					latestCostSource = costSource
+				}
+				if (precision) {
+					latestPrecision = precision
+					if (precision === "estimated") {
+						hasEstimated = true
+					} else if (precision === "exact") {
+						hasExact = true
+					}
+				}
 			} catch (error) {
 				console.error("Error parsing JSON:", error)
 			}
@@ -69,6 +90,17 @@ export function consolidateTokenUsage(messages: ClineMessage[]): TokenUsage {
 			result.totalCost += message.contextCondense?.cost ?? 0
 		}
 	})
+
+	if (latestCostSource) {
+		result.costSource = latestCostSource
+	}
+	if (hasEstimated) {
+		result.precision = "estimated"
+	} else if (hasExact) {
+		result.precision = "exact"
+	} else if (latestPrecision) {
+		result.precision = latestPrecision
+	}
 
 	// Calculate context tokens, from the last API request started or condense
 	// context message.
@@ -120,6 +152,8 @@ export function hasTokenUsageChanged(current: TokenUsage, snapshot?: TokenUsage)
 		"totalCacheReads",
 		"totalCost",
 		"contextTokens",
+		"costSource",
+		"precision",
 	]
 
 	return keysToCompare.some((key) => current[key] !== snapshot[key])
