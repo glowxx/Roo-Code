@@ -16,6 +16,7 @@ import { useRooPortal } from "@/components/ui/hooks/useRooPortal"
 import { Popover, PopoverContent, PopoverTrigger, StandardTooltip, Button } from "@/components/ui"
 import { cn } from "@/lib/utils"
 import { vscode } from "@/utils/vscode"
+import { openSettings } from "@/utils/settingsNavigation"
 import { useSelectedModel } from "@/components/ui/hooks/useSelectedModel"
 import { MODELS_BY_PROVIDER } from "@/components/settings/constants"
 import { IconButton } from "./IconButton"
@@ -984,8 +985,7 @@ export const ModelSelector = ({
 	)
 
 	const handleOpenSettings = useCallback(() => {
-		window.postMessage({ type: "action", action: "settingsButtonClicked", values: { section: "providers" } }, "*")
-		vscode.postMessage({ type: "switchTab", tab: "settings" })
+		openSettings({ section: "providers", source: "model_selector" })
 		setOpen(false)
 	}, [])
 

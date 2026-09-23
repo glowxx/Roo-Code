@@ -21,6 +21,7 @@ import { safeJsonParse } from "@roo/core"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { findMatchingResourceOrTemplate } from "@src/utils/mcp"
 import { vscode } from "@src/utils/vscode"
+import { openSettings } from "@src/utils/settingsNavigation"
 import { formatPathTooltip } from "@src/utils/formatPathTooltip"
 
 import { ToolUseBlock, ToolUseBlockHeader } from "../common/ToolUseBlock"
@@ -1613,12 +1614,7 @@ export const ChatRowContent = ({
 								threshold: warningData.threshold,
 							})}
 							actionText={t("chat:tooManyTools.openMcpSettings")}
-							onAction={() =>
-								window.postMessage(
-									{ type: "action", action: "settingsButtonClicked", values: { section: "mcp" } },
-									"*",
-								)
-							}
+							onAction={() => openSettings({ section: "mcp", source: "chat_row_mcp" })}
 						/>
 					)
 				}
@@ -1636,10 +1632,7 @@ export const ChatRowContent = ({
 							message={evaluation.reason}
 							actionText="Configure Safety Guardrail"
 							onAction={() =>
-								window.postMessage(
-									{ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } },
-									"*",
-								)
+								openSettings({ section: "commandSafety", source: "command_safety_warning" })
 							}
 						/>
 					)

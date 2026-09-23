@@ -343,10 +343,12 @@ describe("ApiConfigSelector", () => {
 		expect(settingsButton).toBeInTheDocument()
 		fireEvent.click(settingsButton)
 
-		expect(vi.mocked(vscode.postMessage)).toHaveBeenCalledWith({
-			type: "switchTab",
-			tab: "settings",
-		})
+		expect(vi.mocked(vscode.postMessage)).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "switchTab",
+				tab: "settings",
+			}),
+		)
 	})
 
 	test("renders bottom bar with title and info icon when more than 6 configs", () => {

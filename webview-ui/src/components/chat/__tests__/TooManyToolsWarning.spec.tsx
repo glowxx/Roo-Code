@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from "@/utils/test-utils"
 import { MAX_MCP_TOOLS_THRESHOLD } from "@roo-code/types"
+import { vscode } from "@/utils/vscode"
 
 import { TooManyToolsWarning } from "../TooManyToolsWarning"
 
@@ -286,11 +287,10 @@ describe("TooManyToolsWarning", () => {
 		// Click the link and verify it posts the message
 		fireEvent.click(settingsLink)
 
-		expect(mockWindowPostMessage).toHaveBeenCalledWith(
-			{ type: "action", action: "settingsButtonClicked", values: { section: "mcp" } },
-			"*",
-		)
-
-		mockWindowPostMessage.mockRestore()
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "switchTab",
+			tab: "settings",
+			values: expect.objectContaining({ section: "mcp" }),
+		})
 	})
 })

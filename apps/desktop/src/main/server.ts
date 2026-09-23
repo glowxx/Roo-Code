@@ -1232,6 +1232,7 @@ body.vscode-light textarea {
 }
 </style>
 <script>
+window.__ROO_DESKTOP__ = true;
 window.acquireVsCodeApi = function() {
 	return {
 		postMessage: function(message) {

@@ -4,6 +4,7 @@ import { ListChecks, LayoutList, Settings, CheckCheck, X, Lock, Zap, Sliders, Sh
 import { isSafetyModelConfigured } from "@roo-code/types"
 
 import { vscode } from "@/utils/vscode"
+import { openSettings } from "@/utils/settingsNavigation"
 
 import { cn } from "@/lib/utils"
 
@@ -126,11 +127,7 @@ export const AutoApproveDropdown = ({ disabled = false, triggerClassName = "" }:
 	}, [onAutoApproveToggle])
 
 	const handleOpenSettings = React.useCallback(
-		() =>
-			window.postMessage(
-				{ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } },
-				"*",
-			),
+		() => openSettings({ section: "autoApprove", source: "auto_approve_dropdown" }),
 		[],
 	)
 

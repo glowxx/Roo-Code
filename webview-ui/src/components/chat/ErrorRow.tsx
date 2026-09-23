@@ -5,6 +5,7 @@ import { BookOpenText, MessageCircleWarning, Copy, Check, Microscope, Info } fro
 
 import { useCopyToClipboard } from "@src/utils/clipboard"
 import { vscode } from "@src/utils/vscode"
+import { openSettings } from "@src/utils/settingsNavigation"
 import CodeBlock from "../common/CodeBlock"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@src/components/ui/dialog"
 import { Button } from "../ui"
@@ -246,11 +247,7 @@ export const ErrorRow = memo(
 											e.preventDefault()
 											// Handle internal navigation to settings
 											if (docsURL.startsWith("roocode://settings")) {
-												vscode.postMessage({
-													type: "switchTab",
-													tab: "settings",
-													values: { section: "providers" },
-												})
+												openSettings({ section: "providers", source: "error_row_docs" })
 											} else {
 												vscode.postMessage({ type: "openExternal", url: docsURL })
 											}

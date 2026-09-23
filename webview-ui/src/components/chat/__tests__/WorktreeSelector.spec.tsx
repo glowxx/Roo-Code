@@ -214,7 +214,7 @@ describe("WorktreeSelector", () => {
 		expect(mockPostMessage).toHaveBeenCalledWith({
 			type: "switchTab",
 			tab: "settings",
-			values: { section: "worktrees" },
+			values: expect.objectContaining({ section: "worktrees" }),
 		})
 	})
 

@@ -1,6 +1,7 @@
 import React, { useCallback } from "react"
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { useTooManyTools } from "@src/hooks/useTooManyTools"
+import { openSettings } from "@src/utils/settingsNavigation"
 import WarningRow from "./WarningRow"
 
 /**
@@ -18,7 +19,7 @@ export const TooManyToolsWarning: React.FC = () => {
 	const { isOverThreshold, title, message } = useTooManyTools()
 
 	const handleOpenMcpSettings = useCallback(() => {
-		window.postMessage({ type: "action", action: "settingsButtonClicked", values: { section: "mcp" } }, "*")
+		openSettings({ section: "mcp", source: "too_many_tools_warning" })
 	}, [])
 
 	// Don't show warning if under threshold

@@ -24,6 +24,7 @@ import { getLatestTodo } from "@roo/todo"
 import { getLatestUserPrompt, getLatestPromptModifiedMessages } from "./utils/userPrompt"
 
 import { vscode } from "@src/utils/vscode"
+import { openSettings } from "@src/utils/settingsNavigation"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { useSelectedModel } from "@src/components/ui/hooks/useSelectedModel"
@@ -1838,7 +1839,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 									: "chat:retiredProvider.message",
 							)}
 							actionText={t("chat:retiredProvider.openSettings")}
-							onAction={() => vscode.postMessage({ type: "switchTab", tab: "settings" })}
+							onAction={() => openSettings({ section: "providers", source: "retired_provider_warning" })}
 						/>
 					</div>
 				)}

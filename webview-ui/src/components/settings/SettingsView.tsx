@@ -125,26 +125,102 @@ export type CategoryId = (typeof categoryIds)[number]
 
 export const SECTION_TO_CATEGORY: Record<string, CategoryId> = {
 	providers: "providers",
+	provider: "providers",
+	model: "providers",
+	models: "providers",
+	api: "providers",
 	modes: "modes_prompts",
+	mode: "modes_prompts",
 	prompts: "modes_prompts",
+	prompt: "modes_prompts",
 	slashCommands: "modes_prompts",
+	slash_commands: "modes_prompts",
 	skills: "modes_prompts",
+	skill: "modes_prompts",
 	modes_prompts: "modes_prompts",
 	contextManagement: "context",
+	context_management: "context",
 	checkpoints: "context",
+	checkpoint: "context",
 	context: "context",
 	autoApprove: "permissions",
+	auto_approve: "permissions",
+	commandSafety: "permissions",
+	command_safety: "permissions",
+	safety: "permissions",
 	permissions: "permissions",
 	terminal: "tools",
 	mcp: "tools",
 	worktrees: "tools",
+	worktree: "tools",
 	tools: "tools",
 	ui: "appearance",
 	notifications: "appearance",
+	notification: "appearance",
 	language: "appearance",
 	experimental: "appearance",
 	about: "appearance",
 	appearance: "appearance",
+}
+
+export const resolveSectionDomId = (sectionOrAlias?: string): string => {
+	if (!sectionOrAlias) return "section-providers"
+	const normalized = sectionOrAlias.trim()
+	switch (normalized) {
+		case "safety":
+		case "command_safety":
+		case "commandSafety":
+			return "section-commandSafety"
+		case "autoApprove":
+		case "auto_approve":
+			return "section-autoApprove"
+		case "providers":
+		case "provider":
+		case "api":
+			return "section-providers"
+		case "model":
+		case "models":
+			return "section-model"
+		case "modes":
+		case "mode":
+			return "section-modes"
+		case "prompts":
+		case "prompt":
+			return "section-prompts"
+		case "slashCommands":
+		case "slash_commands":
+			return "section-slashCommands"
+		case "skills":
+		case "skill":
+			return "section-skills"
+		case "contextManagement":
+		case "context_management":
+		case "context":
+			return "section-contextManagement"
+		case "checkpoints":
+		case "checkpoint":
+			return "section-checkpoints"
+		case "terminal":
+			return "section-terminal"
+		case "mcp":
+			return "section-mcp"
+		case "worktrees":
+		case "worktree":
+			return "section-worktrees"
+		case "ui":
+			return "section-ui"
+		case "notifications":
+		case "notification":
+			return "section-notifications"
+		case "language":
+			return "section-language"
+		case "experimental":
+			return "section-experimental"
+		case "about":
+			return "section-about"
+		default:
+			return `section-${normalized}`
+	}
 }
 
 export const resolveCategory = (sectionOrCategory?: string): CategoryId => {
@@ -636,7 +712,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			const animId = requestAnimationFrame(() => {
 				timeoutId = setTimeout(() => {
 					if (typeof document !== "undefined") {
-						const element = document.getElementById(`section-${targetSection}`)
+						const targetDomId = resolveSectionDomId(targetSection)
+						const element = document.getElementById(targetDomId)
 						if (element) {
 							element.scrollIntoView({ behavior: "smooth", block: "start" })
 						}
@@ -912,7 +989,9 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 									{/* Category 1: Providers & Models */}
 									{renderCategory === "providers" && (
 										<div className="space-y-6">
-											<div className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+											<div
+												id="section-providers"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
 												<ApiConfigManager
 													currentApiConfigName={currentApiConfigName}
 													listApiConfigMeta={listApiConfigMeta}
@@ -947,7 +1026,9 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 													}
 												/>
 											</div>
-											<div className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+											<div
+												id="section-model"
+												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
 												<ApiOptions
 													uriScheme={uriScheme}
 													apiConfiguration={apiConfiguration}

@@ -2,13 +2,14 @@ import { useCallback } from "react"
 import { useTranslation, Trans } from "react-i18next"
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { buildDocLink } from "../../utils/docLinks"
+import { openSettings } from "../../utils/settingsNavigation"
 
 export const CommandExecutionError = () => {
 	const { t } = useTranslation()
 
 	const onClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
 		e.preventDefault()
-		window.postMessage({ type: "action", action: "settingsButtonClicked", values: { section: "terminal" } }, "*")
+		openSettings({ section: "terminal", source: "command_execution_error" })
 	}, [])
 
 	return (

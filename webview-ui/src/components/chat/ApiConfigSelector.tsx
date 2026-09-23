@@ -6,6 +6,7 @@ import { useRooPortal } from "@/components/ui/hooks/useRooPortal"
 import { Popover, PopoverContent, PopoverTrigger, StandardTooltip } from "@/components/ui"
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { vscode } from "@/utils/vscode"
+import { openSettings } from "@/utils/settingsNavigation"
 import { Button } from "@/components/ui"
 
 import { IconButton } from "./IconButton"
@@ -85,7 +86,7 @@ export const ApiConfigSelector = ({
 	)
 
 	const handleEditClick = useCallback(() => {
-		vscode.postMessage({ type: "switchTab", tab: "settings" })
+		openSettings({ section: "providers", source: "api_config_selector" })
 		setOpen(false)
 	}, [])
 

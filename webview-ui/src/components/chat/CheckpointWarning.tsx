@@ -1,5 +1,6 @@
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { Trans } from "react-i18next"
+import { openSettings } from "../../utils/settingsNavigation"
 
 interface CheckpointWarningProps {
 	warning: {
@@ -14,14 +15,7 @@ export const CheckpointWarning = ({ warning }: CheckpointWarningProps) => {
 			href="#"
 			onClick={(e) => {
 				e.preventDefault()
-				window.postMessage(
-					{
-						type: "action",
-						action: "settingsButtonClicked",
-						values: { section: "checkpoints" },
-					},
-					"*",
-				)
+				openSettings({ section: "checkpoints", source: "checkpoint_warning" })
 			}}
 			className="inline"
 		/>

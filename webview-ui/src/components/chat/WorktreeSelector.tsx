@@ -8,6 +8,7 @@ import { useRooPortal } from "@/components/ui/hooks/useRooPortal"
 import { Popover, PopoverContent, PopoverTrigger, StandardTooltip, Button } from "@/components/ui"
 import { useAppTranslation } from "@/i18n/TranslationContext"
 import { vscode } from "@/utils/vscode"
+import { openSettings } from "@/utils/settingsNavigation"
 
 import { CreateWorktreeModal } from "../worktrees/CreateWorktreeModal"
 import { IconButton } from "./IconButton"
@@ -68,10 +69,9 @@ export const WorktreeSelector = ({ disabled = false }: WorktreeSelectorProps) =>
 	}, [])
 
 	const handleSettingsClick = useCallback(() => {
-		vscode.postMessage({
-			type: "switchTab",
-			tab: "settings",
-			values: { section: "worktrees" },
+		openSettings({
+			section: "worktrees",
+			source: "worktree_selector",
 		})
 		setOpen(false)
 	}, [])

@@ -91,7 +91,7 @@ describe("AutoApproveDropdown", () => {
 	})
 
 	test("tooltip contains the warning requirement and settings button when safety model is not configured", () => {
-		const postMessageSpy = vi.spyOn(window, "postMessage")
+		mockPostMessage.mockClear()
 		render(<AutoApproveDropdown />)
 		fireEvent.click(screen.getByTestId("auto-approve-dropdown-trigger"))
 
@@ -102,11 +102,11 @@ describe("AutoApproveDropdown", () => {
 		expect(openSettingsBtn).toBeInTheDocument()
 
 		fireEvent.click(openSettingsBtn)
-		expect(postMessageSpy).toHaveBeenCalledWith(
-			{ type: "action", action: "settingsButtonClicked", values: { section: "autoApprove" } },
-			"*",
-		)
-		postMessageSpy.mockRestore()
+		expect(mockPostMessage).toHaveBeenCalledWith({
+			type: "switchTab",
+			tab: "settings",
+			values: expect.objectContaining({ section: "autoApprove" }),
+		})
 	})
 
 	test("Select All does not enable alwaysAllowExecute when safety model is not configured", () => {

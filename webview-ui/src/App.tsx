@@ -11,6 +11,7 @@ import { ExtensionStateContextProvider, useExtensionState } from "./context/Exte
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
+import { openSettings } from "./utils/settingsNavigation"
 import WelcomeView from "./components/welcome/WelcomeViewProvider"
 import { CheckpointRestoreDialog } from "./components/chat/CheckpointRestoreDialog"
 import { DeleteMessageDialog, EditMessageDialog } from "./components/chat/MessageModificationConfirmationDialog"
@@ -43,6 +44,24 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 	chatButtonClicked: "chat",
 	settingsButtonClicked: "settings",
 	historyButtonClicked: "history",
+}
+
+export const checkIsSettingsModalFrame = (): boolean => {
+	if (typeof window === "undefined") return false
+	return (
+		window.name === "roo-settings-frame" ||
+		(typeof window.location !== "undefined" && Boolean(window.location.search?.includes("view=settings")))
+	)
+}
+
+export const checkIsDesktopHost = (): boolean => {
+	if (typeof window === "undefined") return false
+	return Boolean(
+		(window as any).__ROO_DESKTOP__ ||
+		(window.parent && (window.parent as any).__desktopAPI) ||
+		(window as any).__desktopAPI ||
+		(window.parent && window.parent !== window)
+	)
 }
 
 const App = () => {
@@ -128,9 +147,23 @@ const App = () => {
 				return
 			}
 
+			if ((message as any)?.type === "openSettings") {
+				const targetSection = (message as any).section || (message as any).values?.section
+				if (checkIsDesktopHost() && !checkIsSettingsModalFrame()) {
+					openSettings({ section: targetSection, source: "desktop_chat_event" })
+					return
+				}
+				switchTab("settings", "sync", targetSection)
+				return
+			}
+
 			if ((message as any)?.type === "switchTab" && (message as any).tab) {
 				const targetTab = (message as any).tab as Tab
 				const targetSection = (message as any).values?.section as string | undefined
+				if (targetTab === "settings" && checkIsDesktopHost() && !checkIsSettingsModalFrame()) {
+					openSettings({ section: targetSection, source: "desktop_chat_event" })
+					return
+				}
 				switchTab(targetTab, "sync", targetSection)
 				return
 			}
@@ -140,11 +173,20 @@ const App = () => {
 				if (message.action === "switchTab" && message.tab) {
 					const targetTab = message.tab as Tab
 					const targetSection = message.values?.section as string | undefined
+					if (targetTab === "settings" && checkIsDesktopHost() && !checkIsSettingsModalFrame()) {
+						openSettings({ section: targetSection, source: "desktop_chat_event" })
+						return
+					}
 					switchTab(targetTab, "sync", targetSection)
 				} else {
 					// Handle other actions using the mapping
 					const newTab = tabsByMessageAction[message.action]
 					const section = message.values?.section as string | undefined
+
+					if (newTab === "settings" && checkIsDesktopHost() && !checkIsSettingsModalFrame()) {
+						openSettings({ section, source: "desktop_chat_event" })
+						return
+					}
 
 					if (newTab) {
 						switchTab(newTab, "sync", section)

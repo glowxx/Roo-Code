@@ -1101,7 +1101,7 @@
 						type: "switchTab",
 						tab: "settings",
 						origin: "sync",
-						values: { section: "providers" },
+						values: { section: currentSettingsSection || "providers" },
 					}, "*")
 				}
 				if (data.type === "languageChange" && data.language) {
@@ -1126,13 +1126,19 @@
 				if (data.type === "themeChange" && data.theme) {
 					applyDesktopTheme(data.theme)
 				}
+				if (data.type === "openSettings") {
+					const targetSection = data.section || data.values?.section || "providers"
+					openSettingsModal(targetSection)
+					return
+				}
 				if (data.type === "switchTab" && data.tab) {
 					if (isFromSettingsWebview && data.tab === "chat") {
 						closeSettingsModal()
 						return
 					}
 					if (data.tab === "settings") {
-						openSettingsModal()
+						const targetSection = data.values?.section || data.section || "providers"
+						openSettingsModal(targetSection)
 						return
 					}
 					switchDesktopTab(data.tab, "sync")
@@ -1148,7 +1154,8 @@
 						return
 					}
 					if (data.action === "settingsButtonClicked" || (data.action === "switchTab" && data.tab === "settings")) {
-						openSettingsModal()
+						const targetSection = data.values?.section || data.section || "providers"
+						openSettingsModal(targetSection)
 						return
 					}
 				}
@@ -2885,7 +2892,12 @@
 		}
 	}
 
-	function openSettingsModal() {
+	let currentSettingsSection = "providers"
+
+	function openSettingsModal(section = "providers") {
+		if (section) {
+			currentSettingsSection = section
+		}
 		if (!settingsModalBackdrop) return
 		settingsModalBackdrop.classList.remove("hidden")
 
@@ -2902,7 +2914,7 @@
 						type: "switchTab",
 						tab: "settings",
 						origin: "sync",
-						values: { section: "providers" },
+						values: { section: currentSettingsSection || "providers" },
 					}, "*")
 				} catch (err) {
 					console.warn("[SettingsModal] Failed to post init message to settings frame:", err)
@@ -2913,7 +2925,7 @@
 				settingsWebviewFrame.addEventListener("load", () => {
 					setTimeout(sendInitSettings, 50)
 				}, { once: true })
-				settingsWebviewFrame.src = "/webview/index.html"
+				settingsWebviewFrame.src = "/webview/index.html?view=settings"
 			} else {
 				sendInitSettings()
 			}
@@ -3092,8 +3104,8 @@
 	}
 
 	// Attach Settings & API Listeners
-	openSettingsBtn?.addEventListener("click", openSettingsModal)
-	settingsOpenBtn?.addEventListener("click", openSettingsModal)
+	openSettingsBtn?.addEventListener("click", () => openSettingsModal("providers"))
+	settingsOpenBtn?.addEventListener("click", () => openSettingsModal("providers"))
 	closeSettingsModalBtn?.addEventListener("click", closeSettingsModal)
 	settingsModalBackdrop?.addEventListener("click", (e) => {
 		if (e.target === settingsModalBackdrop) {
@@ -3102,7 +3114,7 @@
 	})
 	openFullSettingsFromModalBtn?.addEventListener("click", () => {
 		closeApiModal()
-		openSettingsModal()
+		openSettingsModal("providers")
 	})
 
 	quickApiBtn?.addEventListener("click", openApiModal)

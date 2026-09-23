@@ -14,6 +14,7 @@ import {
 } from "@src/utils/context-mentions"
 import { removeLeadingNonAlphanumeric } from "@src/utils/removeLeadingNonAlphanumeric"
 import { vscode } from "@src/utils/vscode"
+import { openSettings } from "@src/utils/settingsNavigation"
 
 import { buildDocLink } from "@/utils/docLinks"
 
@@ -258,10 +259,9 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
 		// Prevent any default behavior
 		e.preventDefault()
 		// Switch to settings tab and navigate to slash commands section
-		vscode.postMessage({
-			type: "switchTab",
-			tab: "settings",
-			values: { section: "slashCommands" },
+		openSettings({
+			section: "slashCommands",
+			source: "context_menu",
 		})
 	}
 

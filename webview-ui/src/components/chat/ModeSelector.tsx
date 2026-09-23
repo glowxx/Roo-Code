@@ -7,6 +7,7 @@ import { type ModeConfig, type CustomModePrompts } from "@roo-code/types"
 import { type Mode, getAllModes, defaultModeSlug } from "@roo/modes"
 
 import { vscode } from "@/utils/vscode"
+import { openSettings } from "@/utils/settingsNavigation"
 import { cn } from "@/lib/utils"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useAppTranslation } from "@/i18n/TranslationContext"
@@ -320,10 +321,9 @@ export const ModeSelector = ({
 								iconClass="codicon-settings-gear"
 								title={t("chat:modeSelector.settings")}
 								onClick={() => {
-									vscode.postMessage({
-										type: "switchTab",
-										tab: "settings",
-										values: { section: "modes" },
+									openSettings({
+										section: "modes",
+										source: "mode_selector",
 									})
 									setOpen(false)
 								}}
