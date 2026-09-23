@@ -12,6 +12,8 @@ import {
 	STATE_HANDOFF_TEMPLATE,
 	truncateHeavyOutputs,
 	TERMINAL_OUTPUT_MAX_BYTES,
+	extractCleanInitialBlocks,
+	findLatestUserInstruction,
 } from "../ContextCompactor"
 
 class MockApiHandler extends BaseProvider {
@@ -634,6 +636,125 @@ describe("ContextCompactor", () => {
 			for (let i = 1; i < result.newHistory.length; i++) {
 				expect(result.newHistory[i].role).not.toBe(result.newHistory[i - 1].role)
 			}
+		})
+
+		it("extractCleanInitialBlocks strips prior summary blocks and keeps original user prompt intact", () => {
+			const dirtyContent = [
+				{ type: "text" as const, text: "Original user prompt from beginning of task" },
+				{ type: "text" as const, text: "[Context Compacted Summary]\n\n### CONTEXT COMPACTION HANDOFF\n- **Primary Objective**: old" },
+				{ type: "text" as const, text: "[Context Compacted Summary]\n\n### CONTEXT COMPACTION HANDOFF\n- **Primary Objective**: older" },
+			]
+			const clean = extractCleanInitialBlocks(dirtyContent)
+			expect(clean).toHaveLength(1)
+			expect((clean[0] as any).text).toBe("Original user prompt from beginning of task")
+		})
+
+		it("findLatestUserInstruction finds the most recent user prompt ignoring summaries", () => {
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial prompt", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Turn 1" }], ts: 2 },
+				{ role: "user", content: "[Context Compacted Summary]\n\n### CONTEXT COMPACTION HANDOFF", isSummary: true, ts: 3 },
+				{ role: "user", content: "Latest user instruction: organize the working tree into commits", ts: 4 },
+				{ role: "assistant", content: [{ type: "text", text: "Working on it" }], ts: 5 },
+			]
+			const latest = findLatestUserInstruction(messages)
+			expect(latest).toBe("Latest user instruction: organize the working tree into commits")
+		})
+
+		it("prevents multi-block summary accumulation across multiple successive compactions", async () => {
+			// Start with an initial history
+			let messages: ApiMessage[] = [
+				{ role: "user", content: "Original Task Objective: fix bug #123", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Investigating" }], ts: 2 },
+				{ role: "user", content: "Look in src/index.ts", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Found bug" }], ts: 4 },
+				{ role: "user", content: "Recent user turn", ts: 5 },
+				{ role: "assistant", content: [{ type: "text", text: "Recent reply" }], ts: 6 },
+			]
+
+			// First compaction
+			const res1 = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 1,
+			})
+
+			// Add new turns
+			messages = [
+				...res1.newHistory,
+				{ role: "user", content: "New user prompt after compaction 1", ts: 7 },
+				{ role: "assistant", content: [{ type: "text", text: "Assistant response 1" }], ts: 8 },
+				{ role: "user", content: "Another prompt", ts: 9 },
+				{ role: "assistant", content: [{ type: "text", text: "Assistant response 2" }], ts: 10 },
+			]
+
+			// Second compaction
+			const res2 = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 1,
+			})
+
+			// Add more turns
+			messages = [
+				...res2.newHistory,
+				{ role: "user", content: "New user prompt after compaction 2", ts: 11 },
+				{ role: "assistant", content: [{ type: "text", text: "Assistant response 3" }], ts: 12 },
+				{ role: "user", content: "Final prompt", ts: 13 },
+				{ role: "assistant", content: [{ type: "text", text: "Assistant response 4" }], ts: 14 },
+			]
+
+			// Third compaction
+			const res3 = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 1,
+			})
+
+			// Check first message in newHistory:
+			// Must have exactly 1 original prompt block + 1 summary block (no 3 stacked summary blocks!)
+			const firstMessage = res3.newHistory[0]
+			const blocks = firstMessage.content as Anthropic.Messages.ContentBlockParam[]
+			const summaryBlocks = blocks.filter(
+				(b) => typeof (b as any).text === "string" && (b as any).text.includes("[Context Compacted Summary]"),
+			)
+			expect(summaryBlocks).toHaveLength(1)
+			expect((blocks[0] as any).text).toBe("Original Task Objective: fix bug #123")
+		})
+
+		it("injects latest user instruction and required report structure into the summarization prompt", async () => {
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial prompt from days ago", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Old response" }], ts: 2 },
+				{
+					role: "user",
+					content: "Organize working tree into 5 logical commits. Include 9-point final verification report.",
+					ts: 3,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "Executing commit 1" }], ts: 4 },
+				{ role: "user", content: "Continue staging", ts: 5 },
+				{ role: "assistant", content: [{ type: "text", text: "Staged commit 1" }], ts: 6 },
+			]
+
+			await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 1,
+			})
+
+			const serialized = JSON.stringify(mockApiHandler.lastMessages)
+			expect(serialized).toContain("CRITICAL: LATEST ACTIVE USER INSTRUCTION")
+			expect(serialized).toContain("Organize working tree into 5 logical commits. Include 9-point final verification report.")
+			expect(mockApiHandler.lastSystemPrompt).toContain("- **Active Goal & Latest User Instruction**:")
+			expect(mockApiHandler.lastSystemPrompt).toContain("- **Completion Criteria & Required Report Structure**:")
 		})
 	})
 })

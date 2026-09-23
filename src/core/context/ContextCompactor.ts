@@ -9,6 +9,8 @@ export const STATE_HANDOFF_HEADER = "### CONTEXT COMPACTION HANDOFF"
 
 export const STATE_HANDOFF_TEMPLATE = `### CONTEXT COMPACTION HANDOFF
 - **Primary Objective**: {primaryObjective}
+- **Active Goal & Latest User Instruction**: {activeGoal}
+- **Completion Criteria & Required Report Structure**: {completionCriteria}
 - **Work Completed**: {workCompleted}
 - **Current State & Obstacles**: {currentStateAndObstacles}
 - **Next Immediate Actions**: {nextImmediateActions}
@@ -21,11 +23,13 @@ CRITICAL: This is a summarization-only operation. DO NOT call any tools or outpu
 Provide a comprehensive, highly technical, and structured Markdown summary following this exact format:
 
 ### CONTEXT COMPACTION HANDOFF
-- **Primary Objective**: [State the core task goal, user intent, initial requirements, and constraints]
+- **Primary Objective**: [State the overall task goal and original scope]
+- **Active Goal & Latest User Instruction**: [State the most recent user prompt/instructions and the current active objective that must be fulfilled now]
+- **Completion Criteria & Required Report Structure**: [Explicit checklist of requirements, flags, deliverables, and final report format required by user]
 - **Work Completed**: [Detail all modified/created files with exact paths, functions/components updated, key bugs resolved, and tests run]
 - **Current State & Obstacles**: [What the agent was working on immediately before compaction, current error logs or test results]
 - **Next Immediate Actions**: [Next 2-3 concrete steps to execute upon resumption]
-- **Critical Constraints**: [Environment paths, architecture, preserved variables, dependencies]
+- **Critical Constraints**: [Environment paths, architecture, preserved variables, dependencies, explicit STOP conditions]
 
 CRITICAL INSTRUCTIONS:
 - You must output ONLY valid Markdown adhering strictly to the format above starting with "### CONTEXT COMPACTION HANDOFF".
@@ -221,6 +225,61 @@ export function toContentBlocks(
 }
 
 /**
+ * Extracts the original user content blocks from initialMessage, stripping away any
+ * previously accumulated [Context Compacted Summary] blocks from prior compaction cycles.
+ */
+export function extractCleanInitialBlocks(
+	content: string | Anthropic.Messages.ContentBlockParam[] | undefined,
+): Anthropic.Messages.ContentBlockParam[] {
+	const blocks = toContentBlocks(content)
+	const clean = blocks.filter((block) => {
+		if (block.type === "text" && typeof block.text === "string") {
+			if (
+				block.text.includes("[Context Compacted Summary]") ||
+				block.text.includes(STATE_HANDOFF_HEADER)
+			) {
+				return false
+			}
+		}
+		return true
+	})
+
+	if (clean.length === 0 && blocks.length > 0) {
+		return [blocks[0]]
+	}
+	return clean
+}
+
+/**
+ * Finds the latest user instruction from intermediate and preserved messages.
+ * Ignores synthetic summary messages.
+ */
+export function findLatestUserInstruction(messages: ApiMessage[]): string | undefined {
+	for (let i = messages.length - 1; i >= 1; i--) {
+		const msg = messages[i]
+		if (msg.role === "user" && !msg.isSummary) {
+			const text =
+				typeof msg.content === "string"
+					? msg.content
+					: Array.isArray(msg.content)
+						? msg.content
+								.filter((b) => b.type === "text" && typeof (b as any).text === "string")
+								.map((b) => (b as any).text)
+								.join("\n")
+						: ""
+			if (
+				text &&
+				!text.includes("[Context Compacted Summary]") &&
+				!text.includes(STATE_HANDOFF_HEADER)
+			) {
+				return text.trim()
+			}
+		}
+	}
+	return undefined
+}
+
+/**
  * Sanitizes an ApiMessage history array to ensure strictly alternating roles,
  * merging adjacent messages of the same role (specifically consecutive user messages)
  * into a single multi-block message (`ContentBlockParam[]`).
@@ -367,15 +426,22 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		content: convertToolBlocksToText(msg.content as any) as any,
 	}))
 
+	// Clean initialMessage to strip any past accumulated summary blocks from prior compactions
+	const cleanInitialBlocks = extractCleanInitialBlocks(initialMessage.content as any)
+	const cleanedInitialMessage: ApiMessage = {
+		...initialMessage,
+		content: cleanInitialBlocks,
+	}
+
+	// Extract the latest active user instruction across intermediate and preserved messages
+	const latestUserInstruction = findLatestUserInstruction(messages)
+
 	// Construct request messages for summarization
 	const rawRequestMessages: Anthropic.Messages.MessageParam[] = []
 
 	// If intermediate messages start with an assistant message, prepend initial task objective as user message
 	if (transformedIntermediate[0]?.role === "assistant") {
-		const initialText =
-			typeof initialMessage.content === "string"
-				? initialMessage.content
-				: convertToolBlocksToText(initialMessage.content as any)
+		const initialText = convertToolBlocksToText(cleanedInitialMessage.content as any)
 		rawRequestMessages.push({
 			role: "user",
 			content: Array.isArray(initialText)
@@ -389,6 +455,11 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 	// Build the final user summarization prompt
 	let finalRequestPrompt =
 		"Please synthesize and summarize the conversation history above following the required structured Markdown format starting with ### CONTEXT COMPACTION HANDOFF."
+
+	if (latestUserInstruction) {
+		finalRequestPrompt += `\n\n### CRITICAL: LATEST ACTIVE USER INSTRUCTION\nThe user gave this latest instruction which is currently active and MUST be explicitly captured in '- **Active Goal & Latest User Instruction**' and '- **Completion Criteria & Required Report Structure**':\n"""\n${latestUserInstruction}\n"""`
+	}
+
 	if (customInstructions && customInstructions.trim()) {
 		finalRequestPrompt += `\n\nAdditional Instructions:\n${customInstructions.trim()}`
 	}
@@ -542,9 +613,9 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		isSummary: true,
 	}
 
-	// Construct newHistory with sanitized role alternation: [messages[0], summaryMessage, ...preservedRecentMessages]
+	// Construct newHistory with sanitized role alternation: [cleanedInitialMessage, summaryMessage, ...preservedRecentMessages]
 	const newHistory: ApiMessage[] = sanitizeRoleAlternation([
-		initialMessage,
+		cleanedInitialMessage,
 		summaryMessage,
 		...preservedRecentMessages,
 	])
