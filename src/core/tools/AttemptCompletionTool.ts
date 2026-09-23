@@ -130,7 +130,7 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 			}
 
 			task.setLastCompletionResultText?.(result)
-			const { response, text, images } = await task.ask("completion_result", result, false)
+			const { response, text, images } = await task.ask("completion_result", "", false)
 
 			if (response === "yesButtonClicked") {
 				task.markTaskCompleted?.()

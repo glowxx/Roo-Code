@@ -33,6 +33,20 @@ export class MissingToolResultError extends Error {
 }
 
 /**
+ * Options for tool result ID validation.
+ */
+export interface ValidateToolResultIdsOptions {
+	/**
+	 * Indicates whether the task was confirmed to have completed successfully.
+	 * When true, a missing tool_result for `attempt_completion` falls back to
+	 * "Task completed successfully."
+	 * When false or omitted (interrupted, aborted, or unconfirmed), it falls back to
+	 * "Tool execution was interrupted before completion."
+	 */
+	isTaskCompleted?: boolean
+}
+
+/**
  * Validates and fixes tool_result IDs in a user message against the previous assistant message.
  *
  * This is a centralized validation that catches all tool_use/tool_result issues
@@ -44,11 +58,13 @@ export class MissingToolResultError extends Error {
  *
  * @param userMessage - The user message being added to history
  * @param apiConversationHistory - The conversation history to find the previous assistant message from
+ * @param options - Optional configuration including task completion status
  * @returns The validated user message with corrected tool_use_ids and any missing tool_results added
  */
 export function validateAndFixToolResultIds(
 	userMessage: Anthropic.MessageParam,
 	apiConversationHistory: Anthropic.MessageParam[],
+	options?: ValidateToolResultIdsOptions | boolean,
 ): Anthropic.MessageParam {
 	// Only process user messages with array content
 	if (userMessage.role !== "user" || !Array.isArray(userMessage.content)) {
@@ -180,13 +196,14 @@ export function validateAndFixToolResultIds(
 	)
 
 	const stillMissingToolUseIds = toolUseBlocks.filter((toolUse) => !coveredToolUseIds.has(toolUse.id))
+	const isCompleted = typeof options === "boolean" ? options : options?.isTaskCompleted === true
 
 	// Build final content: add missing tool_results at the beginning if any
 	const missingToolResults: Anthropic.ToolResultBlockParam[] = stillMissingToolUseIds.map((toolUse) => ({
 		type: "tool_result" as const,
 		tool_use_id: toolUse.id,
 		content:
-			toolUse.name === "attempt_completion"
+			toolUse.name === "attempt_completion" && isCompleted
 				? "Task completed successfully."
 				: "Tool execution was interrupted before completion.",
 	}))

@@ -1741,7 +1741,7 @@ export const ChatRowContent = ({
 									<div style={{ flexGrow: 1 }} />
 									<OpenMarkdownPreviewButton markdown={message.text} />
 								</div>
-								<div style={{ color: "var(--vscode-charts-green)", paddingTop: 10 }}>
+								<div className="border-l-2 border-emerald-500/40 ml-2 pl-3 pb-1">
 									<Markdown markdown={message.text} partial={message.partial} />
 								</div>
 							</div>

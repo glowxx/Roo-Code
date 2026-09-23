@@ -374,9 +374,37 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	userMessageContentReady = false
 	isTaskCompleted = false
 
+	public auditLifecycleState(event: string): void {
+		const provider = this.providerRef.deref()
+		const isProviderActive = provider?.getCurrentTask()?.taskId === this.taskId
+		const finalMsg = this.clineMessages.at(-1)
+		const finalMessagePartial = finalMsg?.partial ?? false
+		console.log(
+			`[TaskLifecycleAudit] taskId=${this.taskId} event=${event} isTaskCompleted=${this.isTaskCompleted} isStreaming=${this.isStreaming} pendingAsk=${this.askResponse !== undefined ? false : Boolean(this.lastMessageTs)} pendingApproval=${Boolean(this.autoApprovalTimeoutRef)} pendingTools=${this.userMessageContent.length} finalMessagePartial=${finalMessagePartial} providerActiveTask=${isProviderActive} inputBlocked=${this.isStreaming || this.isTaskCompleted}`,
+		)
+	}
+
 	public markTaskCompleted(): void {
 		this.isTaskCompleted = true
+		this.isStreaming = false
+		this.isWaitingForFirstChunk = false
+
+		// Clean up any trailing unclosed api_req_started messages from previous sessions
+		const lastApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
+		if (lastApiReqIndex !== -1) {
+			const lastApiReq = this.clineMessages[lastApiReqIndex]
+			if (lastApiReq.text) {
+				try {
+					const data = JSON.parse(lastApiReq.text)
+					if (data.cost === undefined) {
+						this.clineMessages.splice(lastApiReqIndex, 1)
+					}
+				} catch {}
+			}
+		}
+
 		console.log(`[StreamAudit] Task ${this.taskId}.${this.instanceId} marked as completed. Breaking task loop.`)
+		this.auditLifecycleState("attempt_completion_accepted")
 	}
 	private isCompacting = false
 	private compactionAbortController?: AbortController
@@ -539,6 +567,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.taskNumber = taskNumber
 		this.initialStatus = initialStatus
 		this.historyItem = historyItem
+
+		if (this.initialStatus === "completed" || this.historyItem?.status === "completed") {
+			this.isTaskCompleted = true
+		}
 
 		this.assistantMessageParser = undefined
 
@@ -1049,7 +1081,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 			}
 
-			const validatedMessage = validateAndFixToolResultIds(messageToAdd, historyForValidation)
+			const isTaskActuallyCompleted =
+				this.isTaskCompleted ||
+				this.historyItem?.status === "completed" ||
+				this.initialStatus === "completed"
+			const validatedMessage = validateAndFixToolResultIds(messageToAdd, historyForValidation, {
+				isTaskCompleted: isTaskActuallyCompleted,
+			})
 			const messageWithTs = { ...validatedMessage, ts: Date.now() }
 			this.apiConversationHistory.push(messageWithTs)
 		}
@@ -1127,7 +1165,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const effectiveHistoryForValidation = getEffectiveApiHistory(this.apiConversationHistory)
 		const lastEffective = effectiveHistoryForValidation[effectiveHistoryForValidation.length - 1]
 		const historyForValidation = lastEffective?.role === "assistant" ? effectiveHistoryForValidation : []
-		const validatedMessage = validateAndFixToolResultIds(userMessage, historyForValidation)
+		const isTaskActuallyCompleted =
+			this.isTaskCompleted ||
+			this.historyItem?.status === "completed" ||
+			this.initialStatus === "completed"
+		const validatedMessage = validateAndFixToolResultIds(userMessage, historyForValidation, {
+			isTaskCompleted: isTaskActuallyCompleted,
+		})
 		const userMessageWithTs = { ...validatedMessage, ts: Date.now() }
 		this.apiConversationHistory.push(userMessageWithTs as ApiMessage)
 
@@ -1903,6 +1947,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Wait for askResponse to be set
 		await pWaitFor(
 			() => {
+				if (this.abort) {
+					throw new Error(`[RooCode#ask] task ${this.taskId}.${this.instanceId} aborted`)
+				}
 				if (this.askResponse !== undefined || this.lastMessageTs !== askTs) {
 					return true
 				}
@@ -2788,20 +2835,50 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(images)
 
 			// Task starting
-			await this.initiateTaskLoop([
+			let nextUserContent: Anthropic.Messages.ContentBlockParam[] = [
 				{
 					type: "text",
 					text: `<user_message>\n${task}\n</user_message>`,
 				},
 				...imageBlocks,
-			]).catch((error) => {
-				// Swallow loop rejection when the task was intentionally abandoned/aborted
-				// during delegation or user cancellation to prevent unhandled rejections.
-				if (this.abandoned === true || this.abortReason === "user_cancelled") {
-					return
+			]
+
+			while (!this.abort && !this.abandoned) {
+				await this.initiateTaskLoop(nextUserContent).catch((error) => {
+					// Swallow loop rejection when the task was intentionally abandoned/aborted
+					// during delegation or user cancellation to prevent unhandled rejections.
+					if (this.abandoned === true || this.abortReason === "user_cancelled") {
+						return
+					}
+					throw error
+				})
+
+				if (this.abort || this.abandoned) {
+					break
 				}
-				throw error
-			})
+
+				this.auditLifecycleState("task_idle")
+
+				// The task loop for this turn has ended (e.g. task completed or idle).
+				// Transition to idle awaiting user continuation.
+				const { response, text: nextText, images: nextImages } = await this.ask("resume_completed_task")
+
+				if (response === "messageResponse" && (nextText || (nextImages && nextImages.length > 0))) {
+					this.auditLifecycleState("next_user_message_accepted")
+					this.isTaskCompleted = false
+					await this.say("user_feedback", nextText, nextImages)
+					const nextImageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(nextImages)
+					nextUserContent = [
+						{
+							type: "text",
+							text: `<user_message>\n${nextText || ""}\n</user_message>`,
+						},
+						...nextImageBlocks,
+					]
+				} else {
+					break
+				}
+			}
 		} catch (error) {
 			// In tests and some UX flows, tasks can be aborted while `startTask` is still
 			// initializing. Treat abort/abandon as expected and avoid unhandled rejections.
@@ -2907,6 +2984,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			let responseImages: string[] | undefined
 
 			if (response === "messageResponse") {
+				this.isTaskCompleted = false
 				await this.say("user_feedback", text, images)
 				responseText = text
 				responseImages = images
@@ -2949,10 +3027,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						const toolUseBlocks = content.filter(
 							(block) => block.type === "tool_use",
 						) as Anthropic.Messages.ToolUseBlock[]
+						const isTaskActuallyCompleted =
+							this.isTaskCompleted ||
+							this.historyItem?.status === "completed" ||
+							this.initialStatus === "completed"
 						const toolResponses: Anthropic.ToolResultBlockParam[] = toolUseBlocks.map((block) => ({
 							type: "tool_result",
 							tool_use_id: block.id,
-							content: "Task was interrupted before this tool call could be completed.",
+							content:
+								block.name === "attempt_completion" && isTaskActuallyCompleted
+									? "Task completed successfully."
+									: "Task was interrupted before this tool call could be completed.",
 						}))
 						modifiedApiConversationHistory = [...existingApiConversationHistory] // no changes
 						modifiedOldUserContent = [...toolResponses]
@@ -2983,6 +3068,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								(block) => block.type === "tool_result",
 							) as Anthropic.ToolResultBlockParam[]
 
+							const isTaskActuallyCompleted =
+								this.isTaskCompleted ||
+								this.historyItem?.status === "completed" ||
+								this.initialStatus === "completed"
 							const missingToolResponses: Anthropic.ToolResultBlockParam[] = toolUseBlocks
 								.filter(
 									(toolUse) =>
@@ -2991,7 +3080,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								.map((toolUse) => ({
 									type: "tool_result",
 									tool_use_id: toolUse.id,
-									content: "Task was interrupted before this tool call could be completed.",
+									content:
+										toolUse.name === "attempt_completion" && isTaskActuallyCompleted
+											? "Task completed successfully."
+											: "Task was interrupted before this tool call could be completed.",
 								}))
 
 							modifiedApiConversationHistory = existingApiConversationHistory.slice(0, -1) // removes the last user message
@@ -3056,7 +3148,35 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			await this.overwriteApiConversationHistory(modifiedApiConversationHistory)
 
 			// Task resuming from history item.
-			await this.initiateTaskLoop(newUserContent)
+			let currentLoopUserContent = newUserContent
+			while (!this.abort && !this.abandoned) {
+				await this.initiateTaskLoop(currentLoopUserContent)
+
+				if (this.abort || this.abandoned) {
+					break
+				}
+
+				this.auditLifecycleState("task_idle")
+
+				// Transition to completed/idle state, actively awaiting user continuation
+				const { response: contResponse, text: nextText, images: nextImages } = await this.ask("resume_completed_task")
+
+				if (contResponse === "messageResponse" && (nextText || (nextImages && nextImages.length > 0))) {
+					this.auditLifecycleState("next_user_message_accepted")
+					this.isTaskCompleted = false
+					await this.say("user_feedback", nextText, nextImages)
+					const nextImageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(nextImages)
+					currentLoopUserContent = [
+						{
+							type: "text",
+							text: `<user_message>\n${nextText || ""}\n</user_message>`,
+						},
+						...nextImageBlocks,
+					]
+				} else {
+					break
+				}
+			}
 		} catch (error) {
 			// Resume and cancellation can race when users issue repeated cancels.
 			// Treat intentional abort/abandon flows as expected and avoid process-level crashes.

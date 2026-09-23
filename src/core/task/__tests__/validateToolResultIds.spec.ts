@@ -761,7 +761,7 @@ describe("validateAndFixToolResultIds", () => {
 			expect(resultContent[0].content).toBe("Tool execution was interrupted before completion.")
 		})
 
-		it("should populate missing tool_result with 'Task completed successfully.' when tool is attempt_completion", () => {
+		it("should populate missing tool_result with 'Task completed successfully.' when tool is attempt_completion and task is confirmed completed", () => {
 			const assistantMessage: Anthropic.MessageParam = {
 				role: "assistant",
 				content: [
@@ -779,7 +779,7 @@ describe("validateAndFixToolResultIds", () => {
 				content: [],
 			}
 
-			const result = validateAndFixToolResultIds(userMessage, [assistantMessage])
+			const result = validateAndFixToolResultIds(userMessage, [assistantMessage], { isTaskCompleted: true })
 
 			expect(Array.isArray(result.content)).toBe(true)
 			const resultContent = result.content as Anthropic.ToolResultBlockParam[]
@@ -787,6 +787,35 @@ describe("validateAndFixToolResultIds", () => {
 			expect(resultContent[0].type).toBe("tool_result")
 			expect(resultContent[0].tool_use_id).toBe("tool-completion-1")
 			expect(resultContent[0].content).toBe("Task completed successfully.")
+		})
+
+		it("should populate missing tool_result with 'Tool execution was interrupted before completion.' when tool is attempt_completion and task was NOT completed", () => {
+			const assistantMessage: Anthropic.MessageParam = {
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool-completion-1",
+						name: "attempt_completion",
+						input: { result: "All done!" },
+					},
+				],
+			}
+
+			const userMessage: Anthropic.MessageParam = {
+				role: "user",
+				content: [],
+			}
+
+			// When isTaskCompleted is false or omitted, must NOT synthesize false success
+			const result = validateAndFixToolResultIds(userMessage, [assistantMessage])
+
+			expect(Array.isArray(result.content)).toBe(true)
+			const resultContent = result.content as Anthropic.ToolResultBlockParam[]
+			expect(resultContent.length).toBe(1)
+			expect(resultContent[0].type).toBe("tool_result")
+			expect(resultContent[0].tool_use_id).toBe("tool-completion-1")
+			expect(resultContent[0].content).toBe("Tool execution was interrupted before completion.")
 		})
 	})
 

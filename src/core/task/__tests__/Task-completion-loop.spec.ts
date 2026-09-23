@@ -294,4 +294,120 @@ describe("Task completion loop and termination", () => {
 
 		expect(result).toBe(true)
 	})
+
+	it("markTaskCompleted clears streaming flags and cleans up unfinalized api_req_started", () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "test task",
+			startTask: false,
+		})
+
+		task.isStreaming = true
+		task.isWaitingForFirstChunk = true
+		task.clineMessages = [
+			{
+				ts: 100,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ cost: undefined }),
+			},
+		]
+
+		task.markTaskCompleted()
+
+		expect(task.isTaskCompleted).toBe(true)
+		expect(task.isStreaming).toBe(false)
+		expect(task.isWaitingForFirstChunk).toBe(false)
+		expect(task.clineMessages.length).toBe(0)
+	})
+
+	it("after task completion, user can immediately send next prompt without restart", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "initial prompt",
+			startTask: false,
+		})
+
+		const requestsReceived: any[] = []
+		let askCallCount = 0
+
+		// Mock initiateTaskLoop: on first call, simulates completion of first turn;
+		// on second call, captures the new user content and aborts the task.
+		vi.spyOn(task as any, "initiateTaskLoop").mockImplementation(async (content: any) => {
+			requestsReceived.push(content)
+			if (requestsReceived.length === 1) {
+				task.markTaskCompleted()
+			} else {
+				task.abort = true
+			}
+		})
+
+		// Mock ask: when resume_completed_task is asked, simulate user immediately sending "continue"
+		vi.spyOn(task, "ask").mockImplementation(async (askType: any) => {
+			askCallCount++
+			if (askType === "resume_completed_task") {
+				// Assert completion invariants while waiting for continuation
+				expect(task.isTaskCompleted).toBe(true)
+				expect(task.isStreaming).toBe(false)
+				expect(task.isWaitingForFirstChunk).toBe(false)
+
+				return { response: "messageResponse", text: "continue", images: undefined }
+			}
+			return { response: "yesButtonClicked" }
+		})
+
+		const saySpy = vi.spyOn(task, "say").mockResolvedValue(undefined as any)
+
+		// Start task lifecycle
+		await (task as any).startTask("initial prompt")
+
+		// 1. Initial turn + continuation turn occurred
+		expect(requestsReceived.length).toBe(2)
+
+		// 2. The continuation content contains the user's prompt "continue"
+		expect(requestsReceived[1][0].text).toContain("continue")
+
+		// 3. User feedback message was appended to UI
+		expect(saySpy).toHaveBeenCalledWith("user_feedback", "continue", undefined)
+
+		// 4. Exactly one resume_completed_task ask was invoked
+		expect(askCallCount).toBe(1)
+	})
+
+	it("continuation prompt produces exactly one worker execution and resets isTaskCompleted", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "test task",
+			startTask: false,
+		})
+
+		let loopExecutions = 0
+		vi.spyOn(task as any, "initiateTaskLoop").mockImplementation(async () => {
+			loopExecutions++
+			if (loopExecutions === 1) {
+				// Turn 1: Worker finishes task
+				task.markTaskCompleted()
+			} else {
+				// Turn 2: Continuation turn - isTaskCompleted must be reset to false
+				expect(task.isTaskCompleted).toBe(false)
+				task.abort = true
+			}
+		})
+
+		vi.spyOn(task, "ask").mockResolvedValue({
+			response: "messageResponse",
+			text: "do next step",
+		})
+		vi.spyOn(task, "say").mockResolvedValue(undefined as any)
+
+		// Trigger startTask
+		await (task as any).startTask("test task")
+
+		// Turn 1 + exactly 1 continuation turn were executed
+		expect(loopExecutions).toBe(2)
+		expect(task.isTaskCompleted).toBe(false)
+	})
 })

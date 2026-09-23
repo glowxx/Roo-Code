@@ -530,6 +530,10 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			return false
 		}
 
+		if (clineAsk === "resume_completed_task" || clineAsk === "resume_task") {
+			return false
+		}
+
 		const isLastMessagePartial = modifiedMessages.at(-1)?.partial === true
 
 		if (isLastMessagePartial) {
