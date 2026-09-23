@@ -15,6 +15,7 @@ import {
 	type McpServer,
 	type ThemeType,
 	type CommandSafetyConfig,
+	type ApprovalMode,
 	RouterModels,
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -63,6 +64,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setAlwaysAllowWrite: (value: boolean) => void
 	setAlwaysAllowWriteOutsideWorkspace: (value: boolean) => void
 	setAlwaysAllowExecute: (value: boolean) => void
+	approvalMode?: ApprovalMode
+	setApprovalMode: (value: ApprovalMode) => void
 	commandSafetyConfig?: CommandSafetyConfig
 	setCommandSafetyConfig: (value: CommandSafetyConfig) => void
 	setAlwaysAllowMcp: (value: boolean) => void
@@ -218,6 +221,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 			provider: "openai",
 			modelId: "",
 		},
+		approvalMode: "manual",
 		hasOpenedModeSelector: false, // Default to false (not opened yet)
 		autoApprovalEnabled: false,
 		customModes: [],
@@ -583,6 +587,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		setAlwaysAllowWriteOutsideWorkspace: (value) =>
 			setState((prevState) => ({ ...prevState, alwaysAllowWriteOutsideWorkspace: value })),
 		setAlwaysAllowExecute: (value) => setState((prevState) => ({ ...prevState, alwaysAllowExecute: value })),
+		approvalMode: state.approvalMode ?? "manual",
+		setApprovalMode: (value: ApprovalMode) => setState((prevState) => ({ ...prevState, approvalMode: value })),
 		commandSafetyConfig: state.commandSafetyConfig,
 		setCommandSafetyConfig: (value) => setState((prevState) => ({ ...prevState, commandSafetyConfig: value })),
 		setAlwaysAllowMcp: (value) => setState((prevState) => ({ ...prevState, alwaysAllowMcp: value })),

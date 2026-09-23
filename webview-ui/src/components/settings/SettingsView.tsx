@@ -265,6 +265,7 @@ export const extractComparableSettings = (state?: any) => {
 		maxGitStatusFiles: state.maxGitStatusFiles,
 		debug: state.debug,
 		commandSafetyConfig: state.commandSafetyConfig,
+		approvalMode: state.approvalMode,
 	}
 }
 

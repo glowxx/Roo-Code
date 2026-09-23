@@ -28,6 +28,7 @@ import {
 	type ExtensionMessage,
 	type ExtensionState,
 	type ModelInfo,
+	type ApprovalMode,
 	RooCodeEventName,
 	requestyDefaultModelId,
 	openRouterDefaultModelId,
@@ -62,6 +63,7 @@ import WorkspaceTracker from "../../integrations/workspace/WorkspaceTracker"
 import { McpHub } from "../../services/mcp/McpHub"
 import { McpServerManager } from "../../services/mcp/McpServerManager"
 import { ShadowCheckpointService } from "../../services/checkpoints/ShadowCheckpointService"
+import { DecisionLogStore } from "../security/DecisionLogStore"
 import { CodeIndexManager } from "../../services/code-index/manager"
 import type { IndexProgressUpdate } from "../../services/code-index/interfaces/manager"
 import { SkillsManager } from "../../services/skills/SkillsManager"
@@ -196,6 +198,8 @@ export class ClineProvider
 		this.initializeTaskHistoryStore().catch((error) => {
 			this.log(`Failed to initialize TaskHistoryStore: ${error}`)
 		})
+
+		DecisionLogStore.getInstance().setGlobalStoragePath(this.contextProxy.globalStorageUri.fsPath)
 
 		this._workspaceTracker = new WorkspaceTracker(this)
 
@@ -2025,6 +2029,7 @@ export class ClineProvider
 			alwaysAllowWriteProtected,
 			alwaysAllowExecute,
 			commandSafetyConfig,
+			approvalMode,
 			allowedCommands,
 			deniedCommands,
 			alwaysAllowMcp,
@@ -2118,6 +2123,7 @@ export class ClineProvider
 			alwaysAllowWriteProtected: alwaysAllowWriteProtected ?? false,
 			alwaysAllowExecute: alwaysAllowExecute ?? false,
 			commandSafetyConfig,
+			approvalMode: approvalMode ?? "manual",
 			alwaysAllowMcp: alwaysAllowMcp ?? false,
 			alwaysAllowModeSwitch: alwaysAllowModeSwitch ?? false,
 			alwaysAllowSubtasks: alwaysAllowSubtasks ?? false,
@@ -2273,6 +2279,7 @@ export class ClineProvider
 			alwaysAllowWriteProtected: stateValues.alwaysAllowWriteProtected ?? false,
 			alwaysAllowExecute: stateValues.alwaysAllowExecute ?? false,
 			commandSafetyConfig,
+			approvalMode: (stateValues.approvalMode as ApprovalMode) ?? "manual",
 			alwaysAllowMcp: stateValues.alwaysAllowMcp ?? false,
 			alwaysAllowModeSwitch: stateValues.alwaysAllowModeSwitch ?? false,
 			alwaysAllowSubtasks: stateValues.alwaysAllowSubtasks ?? false,

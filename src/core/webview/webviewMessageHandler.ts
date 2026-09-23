@@ -27,6 +27,7 @@ import { type ApiMessage } from "../task-persistence/apiMessages"
 import { saveTaskMessages } from "../task-persistence"
 
 import { ClineProvider } from "./ClineProvider"
+import { DecisionLogStore } from "../security/DecisionLogStore"
 import { handleCheckpointRestoreOperation } from "./checkpointRestoreHandler"
 import { generateErrorDiagnostics } from "./diagnosticsHandler"
 import {
@@ -785,6 +786,24 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 				await provider.postStateToWebview()
 			}
 
+			break
+
+		case "approvalMode":
+			if (message.approvalMode) {
+				await provider.contextProxy.setValue("approvalMode", message.approvalMode)
+				await provider.postStateToWebview()
+			}
+			break
+
+		case "getDecisionLog":
+			{
+				const taskId = message.taskId || provider.getCurrentTask()?.taskId
+				const entries = DecisionLogStore.getInstance().getEntries(taskId)
+				await provider.postMessageToWebview({
+					type: "decisionLog",
+					decisionLog: entries,
+				})
+			}
 			break
 
 		case "terminalOperation":
