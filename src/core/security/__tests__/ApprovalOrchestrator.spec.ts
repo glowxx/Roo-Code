@@ -306,17 +306,13 @@ describe("ApprovalOrchestrator", () => {
 
 			const result = await orchestrator.evaluate(request, { ...mockState, approvalMode: "auto" })
 
-			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.decision).toBe("MANUAL_APPROVAL")
 			expect(result.infrastructureFailure).toBe(true)
+			expect(result.verifierUnavailable).toBe(true)
 			expect(result.approvalAttemptCount).toBe(2)
-			expect(result.replanGuidance).toContain("Approval authority was temporarily unavailable")
+			expect(result.reason).toContain("Verification model unavailable")
 			expect(result.auditLog).toContain("infrastructureFailure=true")
-			expect(result.auditLog).toContain("finalDecision=DENY_AND_REPLAN")
-
-			const entries = DecisionLogStore.getInstance().getEntries("task-timeout-auto")
-			expect(entries.length).toBe(1)
-			expect(entries[0].infrastructureFailure).toBe(true)
-			expect(entries[0].approvalAttempts).toBe(2)
+			expect(result.auditLog).toContain("finalDecision=MANUAL_APPROVAL")
 		})
 
 		it("fails-closed to MANUAL_APPROVAL in MANUAL mode on persistent timeout", async () => {
@@ -346,6 +342,175 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.infrastructureFailure).toBe(true)
 			expect(result.approvalAttemptCount).toBe(2)
 			expect(result.auditLog).toContain("finalDecision=MANUAL_APPROVAL")
+		})
+
+		it("does not retry on quota exhaustion (402) and falls back immediately to secondary verifier", async () => {
+			const callProviderMock = vi.fn()
+				// Primary verifier fails with 402 quota exhausted
+				.mockRejectedValueOnce(new Error("402 Payment Required: insufficient_quota"))
+				// Secondary verifier succeeds
+				.mockResolvedValueOnce(
+					JSON.stringify({
+						decision: "ALLOW_AUTO",
+						risk: "safe",
+						reason: "Secondary verifier approved command",
+						taskAligned: true,
+					})
+				)
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const stateWithSecondary: Partial<ExtensionState> = {
+				...mockState,
+				approvalMode: "auto",
+				commandSafetyConfig: {
+					enabled: true,
+					provider: "openai",
+					modelId: "gpt-4o-mini",
+					apiKey: "sk-mock-primary",
+					secondaryProvider: "anthropic",
+					secondaryModelId: "claude-3-5-haiku",
+					secondaryApiKey: "sk-mock-secondary",
+				},
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-quota-1",
+				taskId: "task-quota-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run test",
+					activeGoal: "Run test",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, stateWithSecondary)
+
+			// Exactly 2 calls: 1 for primary (no retry storm on 402!), 1 for secondary
+			expect(callProviderMock).toHaveBeenCalledTimes(2)
+			expect(callProviderMock.mock.calls[0][0].provider).toBe("openai")
+			expect(callProviderMock.mock.calls[1][0].provider).toBe("anthropic")
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.reason).toBe("Secondary verifier approved command")
+			expect(result.auditLog).toContain("tier=secondary")
+		})
+
+		it("falls back to worker model when policy allows, with isolated auditor prompt", async () => {
+			const callProviderMock = vi.fn()
+				// Primary verifier fails with 402
+				.mockRejectedValueOnce(new Error("402 Payment Required: quota exceeded"))
+				// Worker fallback succeeds
+				.mockResolvedValueOnce(
+					JSON.stringify({
+						decision: "ALLOW_AUTO",
+						risk: "low",
+						reason: "Worker approved in isolated auditor context",
+						taskAligned: true,
+					})
+				)
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const stateWithWorkerFallback: Partial<ExtensionState> = {
+				...mockState,
+				approvalMode: "auto",
+				apiConfiguration: {
+					apiProvider: "openrouter",
+					apiModelId: "anthropic/claude-3.7-sonnet",
+					apiKey: "sk-worker-key",
+				} as any,
+				commandSafetyConfig: {
+					enabled: true,
+					provider: "openai",
+					modelId: "gpt-4o-mini",
+					apiKey: "sk-primary-key",
+					allowWorkerFallback: true,
+				},
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-worker-fallback",
+				taskId: "task-worker-fallback",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run test",
+					activeGoal: "Run test",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, stateWithWorkerFallback)
+
+			expect(callProviderMock).toHaveBeenCalledTimes(2)
+			// First call to primary
+			expect(callProviderMock.mock.calls[0][0].provider).toBe("openai")
+			// Second call to worker model
+			expect(callProviderMock.mock.calls[1][0].provider).toBe("openrouter")
+			expect(callProviderMock.mock.calls[1][0].modelId).toBe("anthropic/claude-3.7-sonnet")
+			// Verify isolated auditor prompt was injected
+			expect(callProviderMock.mock.calls[1][0].systemPrompt).toContain("independent external security auditor")
+
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.auditLog).toContain("tier=worker_fallback")
+		})
+
+		it("prohibits worker fallback when allowWorkerFallback is false and escalates to manual approval", async () => {
+			const callProviderMock = vi.fn()
+				.mockRejectedValueOnce(new Error("402 Payment Required: quota exceeded"))
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const stateWithoutWorkerFallback: Partial<ExtensionState> = {
+				...mockState,
+				approvalMode: "auto",
+				apiConfiguration: {
+					apiProvider: "openrouter",
+					apiModelId: "anthropic/claude-3.7-sonnet",
+					apiKey: "sk-worker-key",
+				} as any,
+				commandSafetyConfig: {
+					enabled: true,
+					provider: "openai",
+					modelId: "gpt-4o-mini",
+					apiKey: "sk-primary-key",
+					allowWorkerFallback: false,
+				},
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-no-worker-fallback",
+				taskId: "task-no-worker-fallback",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'wsl.exe -d GuildScout-Test -- /bin/bash -c "fixture=$(mktemp); cp lib.so ${fixture}; node test.js; rm -f ${fixture}"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run test",
+					activeGoal: "Run test",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, stateWithoutWorkerFallback)
+
+			// Exactly 1 call (no fallback allowed)
+			expect(callProviderMock).toHaveBeenCalledTimes(1)
+			expect(result.decision).toBe("MANUAL_APPROVAL")
+			expect(result.verifierUnavailable).toBe(true)
+			expect(result.verifierFailureCategory).toBe("FREE_QUOTA_EXHAUSTED")
 		})
 	})
 })

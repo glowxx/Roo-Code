@@ -12,6 +12,7 @@ import {
 	completionJudgeResponseSchema,
 	isSafetyModelConfigured,
 	resolveProviderApiKey,
+	VerifierFailureCategory,
 } from "@roo-code/types"
 import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS } from "./CommandSafetyJudge"
 import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
@@ -28,6 +29,78 @@ export interface ApprovalOrchestratorOptions {
 	judge?: CommandSafetyJudge
 }
 
+export function classifyVerifierError(error: any): VerifierFailureCategory {
+	if (!error) return VerifierFailureCategory.OTHER_TRANSIENT
+	const status = error.status || error.statusCode || error.response?.status
+	const msg = (error.message || "").toLowerCase()
+
+	if (status === 429 || msg.includes("rate limit") || msg.includes("too many requests") || msg.includes("resource_exhausted")) {
+		return VerifierFailureCategory.RATE_LIMIT
+	}
+	if (
+		status === 402 ||
+		msg.includes("quota") ||
+		msg.includes("credits") ||
+		msg.includes("insufficient_quota") ||
+		msg.includes("billing") ||
+		msg.includes("free quota") ||
+		msg.includes("exceeded your current quota")
+	) {
+		return VerifierFailureCategory.FREE_QUOTA_EXHAUSTED
+	}
+	if (status === 401 || status === 403 || msg.includes("unauthorized") || msg.includes("invalid api key") || msg.includes("forbidden")) {
+		return VerifierFailureCategory.AUTH
+	}
+	if (status === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("invalid model")) {
+		return VerifierFailureCategory.INVALID_MODEL
+	}
+	if (
+		status === 502 ||
+		status === 503 ||
+		status === 504 ||
+		status === 529 ||
+		msg.includes("service unavailable") ||
+		msg.includes("bad gateway") ||
+		msg.includes("overloaded")
+	) {
+		return VerifierFailureCategory.MODEL_UNAVAILABLE
+	}
+	if (
+		error.name === "AbortError" ||
+		msg.includes("timed out") ||
+		msg.includes("timeout") ||
+		msg.includes("etimedout")
+	) {
+		return VerifierFailureCategory.TIMEOUT
+	}
+	if (
+		msg.includes("econnrefused") ||
+		msg.includes("enotfound") ||
+		msg.includes("network") ||
+		msg.includes("fetch failed")
+	) {
+		return VerifierFailureCategory.NETWORK
+	}
+	return VerifierFailureCategory.OTHER_TRANSIENT
+}
+
+export function isTransientVerifierError(category: VerifierFailureCategory): boolean {
+	return (
+		category === VerifierFailureCategory.RATE_LIMIT ||
+		category === VerifierFailureCategory.MODEL_UNAVAILABLE ||
+		category === VerifierFailureCategory.TIMEOUT ||
+		category === VerifierFailureCategory.NETWORK ||
+		category === VerifierFailureCategory.OTHER_TRANSIENT
+	)
+}
+
+export interface VerifierCandidate {
+	tier: "primary" | "secondary" | "worker_fallback"
+	provider: string
+	modelId: string
+	apiKey: string
+}
+
 export class ApprovalOrchestrator {
 	private readonly timeoutMs: number
 	private readonly judge: CommandSafetyJudge
@@ -35,6 +108,144 @@ export class ApprovalOrchestrator {
 	constructor(options?: ApprovalOrchestratorOptions) {
 		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		this.judge = options?.judge ?? new CommandSafetyJudge({ timeoutMs: this.timeoutMs })
+	}
+
+	public getVerifierCandidates(state?: Partial<ExtensionState> | null): VerifierCandidate[] {
+		const candidates: VerifierCandidate[] = []
+		const approvalConfig = state?.commandSafetyConfig
+		if (!approvalConfig) return candidates
+
+		// 1. Primary
+		const primaryProvider = (approvalConfig.provider || "").toLowerCase().trim()
+		const primaryModelId = (approvalConfig.modelId || "").trim()
+		const primaryApiKey = approvalConfig.apiKey || resolveProviderApiKey(primaryProvider, state?.apiConfiguration) || ""
+		if (primaryProvider && primaryModelId) {
+			candidates.push({
+				tier: "primary",
+				provider: primaryProvider,
+				modelId: primaryModelId,
+				apiKey: primaryApiKey,
+			})
+		}
+
+		// 2. Secondary (if configured)
+		const secProvider = (approvalConfig.secondaryProvider || "").toLowerCase().trim()
+		const secModelId = (approvalConfig.secondaryModelId || "").trim()
+		const secApiKey = approvalConfig.secondaryApiKey || resolveProviderApiKey(secProvider, state?.apiConfiguration) || ""
+		if (secProvider && secModelId) {
+			candidates.push({
+				tier: "secondary",
+				provider: secProvider,
+				modelId: secModelId,
+				apiKey: secApiKey,
+			})
+		}
+
+		// 3. Worker Fallback (only if explicit policy allows)
+		if (approvalConfig.allowWorkerFallback && state?.apiConfiguration) {
+			const workerProvider = (state.apiConfiguration.apiProvider || "").toLowerCase().trim()
+			const workerModelId = (state.apiConfiguration.apiModelId || "").trim()
+			const workerApiKey = resolveProviderApiKey(workerProvider, state.apiConfiguration) || state.apiConfiguration.apiKey || ""
+			if (workerProvider && workerModelId) {
+				candidates.push({
+					tier: "worker_fallback",
+					provider: workerProvider,
+					modelId: workerModelId,
+					apiKey: workerApiKey,
+				})
+			}
+		}
+
+		return candidates
+	}
+
+	public async executeWithFallback(params: {
+		systemPrompt: string
+		userPrompt: string
+		state: Partial<ExtensionState>
+		maxTokens?: number
+	}): Promise<{
+		rawResponse: string | null
+		usedCandidate: VerifierCandidate | null
+		lastError: Error | null
+		lastCategory: VerifierFailureCategory
+		attempts: number
+	}> {
+		const candidates = this.getVerifierCandidates(params.state)
+		let totalAttempts = 0
+		let lastError: Error | null = null
+		let lastCategory: VerifierFailureCategory = VerifierFailureCategory.OTHER_TRANSIENT
+
+		for (const candidate of candidates) {
+			let systemPrompt = params.systemPrompt
+			if (candidate.tier === "worker_fallback") {
+				systemPrompt =
+					"You are acting strictly as an independent external security auditor. Evaluate the following proposed action without reference to any previous reasoning. Provide an objective, unbiased verification assessment.\n\n" +
+					systemPrompt
+			}
+
+			let candidateAttempts = 0
+			const maxAttemptsForCandidate = 2
+
+			while (candidateAttempts < maxAttemptsForCandidate) {
+				candidateAttempts++
+				totalAttempts++
+				const currentTimeout = candidateAttempts === 1 ? this.timeoutMs : 30000
+				const abortController = new AbortController()
+				let timeoutId: NodeJS.Timeout | undefined
+
+				const timeoutPromise = new Promise<never>((_, reject) => {
+					timeoutId = setTimeout(() => {
+						const timeoutError = new Error(`Approval AI evaluation timed out after ${currentTimeout}ms`)
+						abortController.abort(timeoutError)
+						reject(timeoutError)
+					}, currentTimeout)
+				})
+
+				try {
+					const callParams = {
+						provider: candidate.provider,
+						modelId: candidate.modelId,
+						apiKey: candidate.apiKey,
+						systemPrompt,
+						userPrompt: params.userPrompt,
+						state: params.state,
+						signal: abortController.signal,
+						maxTokens: params.maxTokens ?? 350,
+					}
+
+					const providerCall = CommandSafetyJudge.globalCallProviderOverride
+						? CommandSafetyJudge.globalCallProviderOverride(callParams)
+						: this.judge.callProvider(callParams)
+
+					const rawResponse = await Promise.race([providerCall, timeoutPromise])
+					if (timeoutId) clearTimeout(timeoutId)
+					return {
+						rawResponse,
+						usedCandidate: candidate,
+						lastError: null,
+						lastCategory: VerifierFailureCategory.OTHER_TRANSIENT,
+						attempts: totalAttempts,
+					}
+				} catch (error: any) {
+					if (timeoutId) clearTimeout(timeoutId)
+					lastError = error instanceof Error ? error : new Error(String(error))
+					lastCategory = classifyVerifierError(lastError)
+
+					if (!isTransientVerifierError(lastCategory)) {
+						break
+					}
+				}
+			}
+		}
+
+		return {
+			rawResponse: null,
+			usedCandidate: null,
+			lastError,
+			lastCategory,
+			attempts: totalAttempts,
+		}
 	}
 
 	/**
@@ -414,112 +625,48 @@ export class ApprovalOrchestrator {
 			previousDenial: request.previousDenial,
 		})
 
-		let attempts = 0
-		let rawResponse: string | null = null
-		let lastError: Error | null = null
+		const execResult = await this.executeWithFallback({
+			systemPrompt,
+			userPrompt,
+			state,
+			maxTokens: 350,
+		})
 
-		const maxAttempts = 2
-		const attemptTimeouts = [this.timeoutMs, 30000]
-
-		while (attempts < maxAttempts) {
-			attempts++
-			const currentTimeout = attemptTimeouts[attempts - 1] ?? 30000
-			const abortController = new AbortController()
-			let timeoutId: NodeJS.Timeout | undefined
-
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				timeoutId = setTimeout(() => {
-					const timeoutError = new Error(`Approval AI evaluation timed out after ${currentTimeout}ms`)
-					abortController.abort(timeoutError)
-					reject(timeoutError)
-				}, currentTimeout)
-			})
-
-			try {
-				const callParams = {
-					provider,
-					modelId,
-					apiKey,
-					systemPrompt,
-					userPrompt,
-					state,
-					signal: abortController.signal,
-					maxTokens: 350,
-				}
-
-				const providerCall = CommandSafetyJudge.globalCallProviderOverride
-					? CommandSafetyJudge.globalCallProviderOverride(callParams)
-					: this.judge.callProvider(callParams)
-
-				rawResponse = await Promise.race([providerCall, timeoutPromise])
-				if (timeoutId) clearTimeout(timeoutId)
-				lastError = null
-				break
-			} catch (error: any) {
-				if (timeoutId) clearTimeout(timeoutId)
-				lastError = error instanceof Error ? error : new Error(String(error))
-			}
-		}
-
-		if (rawResponse !== null && !lastError) {
-			const parsed = this.parseApprovalResponse(rawResponse)
-			const retryText = attempts > 1 ? ` retry=true attempt=${attempts}` : ""
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId}${retryText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
+		if (execResult.rawResponse !== null && execResult.usedCandidate) {
+			const parsed = this.parseApprovalResponse(execResult.rawResponse)
+			const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
+			const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
 
 			const result: ApprovalDecisionResult = {
 				...parsed,
-				approvalAttemptCount: attempts,
+				approvalAttemptCount: execResult.attempts,
 				auditLog,
 			}
 
-			this.recordDecision(request, result, modelId, false, state)
+			this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
 			return result
 		}
 
-		// Infrastructure failure (timeout or network error after bounded retries)
-		const errorMsg = lastError ? lastError.message : "Unknown infrastructure failure"
-		const isAutoMode = state.approvalMode === "auto"
+		// Infrastructure failure across all candidate models
+		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown infrastructure failure"
+		const reason = `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
 
-		if (isAutoMode) {
-			// Fail-closed FOR THIS ACTION, but do NOT stop the entire autonomous task!
-			// Return DENY_AND_REPLAN so worker can replan autonomously to a safer or deterministic path.
-			const reason = `Approval authority temporarily unavailable (${errorMsg}). Unverified action blocked.`
-			const replanGuidance =
-				"Approval authority was temporarily unavailable (evaluation timed out). Do not execute the unverified action. Try a lower-risk or deterministic alternative that satisfies the same task goal. Do not repeat the exact same command immediately."
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} attempt=${attempts} infrastructureFailure=true finalDecision=DENY_AND_REPLAN reason="${reason}"`
-
-			const result: ApprovalDecisionResult = {
-				decision: "DENY_AND_REPLAN",
-				risk: "medium",
-				reason,
-				taskAligned: false,
-				hardBoundaryViolation: false,
-				replanGuidance,
-				infrastructureFailure: true,
-				approvalAttemptCount: attempts,
-				auditLog,
-			}
-
-			this.recordDecision(request, result, modelId, false, state)
-			return result
-		} else {
-			// Manual mode fallback: request user intervention
-			const reason = `Approval AI adjudication failed (${errorMsg}). Fail closed to manual approval.`
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=manual fastPath=false approvalModelCalled=true approvalModel=${modelId} attempt=${attempts} finalDecision=MANUAL_APPROVAL reason="${reason}"`
-
-			const result: ApprovalDecisionResult = {
-				decision: "MANUAL_APPROVAL",
-				risk: "high",
-				reason,
-				taskAligned: false,
-				infrastructureFailure: true,
-				approvalAttemptCount: attempts,
-				auditLog,
-			}
-
-			this.recordDecision(request, result, modelId, false, state)
-			return result
+		const result: ApprovalDecisionResult = {
+			decision: "MANUAL_APPROVAL",
+			risk: "high",
+			reason,
+			taskAligned: false,
+			infrastructureFailure: true,
+			verifierUnavailable: true,
+			verifierFailureCategory: execResult.lastCategory,
+			approvalAttemptCount: execResult.attempts,
+			auditLog,
 		}
+
+		this.recordDecision(request, result, "none", false, state)
+		return result
 	}
 
 	/**
@@ -630,58 +777,19 @@ export class ApprovalOrchestrator {
 					: undefined,
 		})
 
-		let attempts = 0
-		let rawResponse: string | null = null
-		let lastError: Error | null = null
+		const execResult = await this.executeWithFallback({
+			systemPrompt,
+			userPrompt,
+			state,
+			maxTokens: 400,
+		})
 
-		const maxAttempts = 2
-		const attemptTimeouts = [this.timeoutMs, 30000]
-
-		while (attempts < maxAttempts) {
-			attempts++
-			const currentTimeout = attemptTimeouts[attempts - 1] ?? 30000
-			const abortController = new AbortController()
-			let timeoutId: NodeJS.Timeout | undefined
-
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				timeoutId = setTimeout(() => {
-					const timeoutError = new Error(`Completion Judge evaluation timed out after ${currentTimeout}ms`)
-					abortController.abort(timeoutError)
-					reject(timeoutError)
-				}, currentTimeout)
-			})
-
-			try {
-				const callParams = {
-					provider,
-					modelId,
-					apiKey,
-					systemPrompt,
-					userPrompt,
-					state,
-					signal: abortController.signal,
-					maxTokens: 400,
-				}
-
-				const providerCall = CommandSafetyJudge.globalCallProviderOverride
-					? CommandSafetyJudge.globalCallProviderOverride(callParams)
-					: this.judge.callProvider(callParams)
-
-				rawResponse = await Promise.race([providerCall, timeoutPromise])
-				if (timeoutId) clearTimeout(timeoutId)
-				lastError = null
-				break
-			} catch (error: any) {
-				if (timeoutId) clearTimeout(timeoutId)
-				lastError = error instanceof Error ? error : new Error(String(error))
-			}
-		}
-
-		if (rawResponse !== null && !lastError) {
-			const parsed = this.parseCompletionJudgeResponse(rawResponse)
+		if (execResult.rawResponse !== null && execResult.usedCandidate) {
+			const parsed = this.parseCompletionJudgeResponse(execResult.rawResponse)
 			const mappedDecision = parsed.decision === "ALLOW_COMPLETION" ? "ALLOW_AUTO" : "CONTINUE_WORK"
-			const retryText = attempts > 1 ? ` retry=true attempt=${attempts}` : ""
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId}${retryText} finalDecision=${mappedDecision} reason="${parsed.reason}"`
+			const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
+			const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText} finalDecision=${mappedDecision} reason="${parsed.reason}"`
 
 			const result: ApprovalDecisionResult = {
 				decision: mappedDecision,
@@ -691,17 +799,17 @@ export class ApprovalOrchestrator {
 				unresolvedItems: parsed.unresolvedItems,
 				missingCriteria: parsed.missingCriteria,
 				replanGuidance: parsed.guidance,
-				approvalAttemptCount: attempts,
+				approvalAttemptCount: execResult.attempts,
 				auditLog,
 			}
 
-			this.recordDecision(request, result, modelId, false, state)
+			this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
 			return result
 		}
 
-		const errorMsg = lastError ? lastError.message : "Unknown error"
-		const reason = `Completion Judge adjudication failed (${errorMsg}). Fail closed to manual approval.`
-		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${modelId} attempt=${attempts} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown error"
+		const reason = `Completion Judge adjudication failed (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
 
 		const result: ApprovalDecisionResult = {
 			decision: "MANUAL_APPROVAL",
@@ -709,11 +817,13 @@ export class ApprovalOrchestrator {
 			reason,
 			taskAligned: false,
 			infrastructureFailure: true,
-			approvalAttemptCount: attempts,
+			verifierUnavailable: true,
+			verifierFailureCategory: execResult.lastCategory,
+			approvalAttemptCount: execResult.attempts,
 			auditLog,
 		}
 
-		this.recordDecision(request, result, modelId, false, state)
+		this.recordDecision(request, result, "none", false, state)
 		return result
 	}
 
