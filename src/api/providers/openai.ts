@@ -35,7 +35,33 @@ import { handleOpenAIError } from "./utils/openai-error-handler"
 export class OpenAiHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
 	protected client: OpenAI
-	private readonly providerName = "OpenAI"
+	protected get providerName(): string {
+		const provider = this.options.apiProvider
+		if (provider === "xkiro" || this._isXKiro(this.options.openAiBaseUrl)) {
+			return "xKiro"
+		}
+		if (provider === "deepseek" || this._isDeepSeek(this.options.openAiBaseUrl)) {
+			return "DeepSeek"
+		}
+		if (provider === "openai-native") {
+			return "OpenAI Native"
+		}
+		if (provider === "openai") {
+			return "OpenAI"
+		}
+		if (typeof provider === "string" && provider.length > 0) {
+			return provider
+		}
+		return "OpenAI"
+	}
+
+	private _isXKiro(baseUrl?: string): boolean {
+		return !!baseUrl && baseUrl.toLowerCase().includes("xkiro.com")
+	}
+
+	private _isDeepSeek(baseUrl?: string): boolean {
+		return !!baseUrl && baseUrl.toLowerCase().includes("deepseek.com")
+	}
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -182,7 +208,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					isAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
 				)
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
 			}
 
 			const matcher = new TagMatcher(
@@ -230,7 +256,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					yield this.processUsageMetrics(lastUsage, modelInfo)
 				}
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
 			}
 		} else {
 			const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
@@ -254,7 +280,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					this._isAzureAiInference(modelUrl) ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
 				)
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
 			}
 
 			const message = response.choices?.[0]?.message
@@ -353,9 +379,9 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	async completePrompt(prompt: string): Promise<string> {
+		const model = this.getModel()
 		try {
 			const isAzureAiInference = this._isAzureAiInference(this.options.openAiBaseUrl)
-			const model = this.getModel()
 			const modelInfo = model.info
 
 			const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
@@ -373,13 +399,16 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					isAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
 				)
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId: model.id, protocol: "openai-compatible" })
 			}
 
 			return response.choices?.[0]?.message.content || ""
 		} catch (error) {
 			if (error instanceof Error) {
-				throw new Error(`${this.providerName} completion error: ${error.message}`)
+				if (error.message.includes("completion error:")) {
+					throw error
+				}
+				throw handleOpenAIError(error, this.providerName, { modelId: model.id, protocol: "openai-compatible" })
 			}
 
 			throw error
@@ -429,7 +458,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					methodIsAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
 				)
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
 			}
 
 			yield* this.handleStreamResponse(stream)
@@ -463,7 +492,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					methodIsAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
 				)
 			} catch (error) {
-				throw handleOpenAIError(error, this.providerName)
+				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
 			}
 
 			const message = response.choices?.[0]?.message

@@ -167,20 +167,24 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 	}
 
 	// 2. Authentication & Authorization errors (Deterministic - fail fast)
+	// 2. Authentication, Authorization & Billing errors (Deterministic - fail fast)
 	if (
 		status === 401 ||
+		status === 402 ||
 		status === 403 ||
-		/unauthorized|invalid.?api.?key|forbidden|access denied|permission denied|authentication failed/i.test(
+		/unauthorized|invalid.?api.?key|forbidden|access denied|permission denied|authentication failed|insufficient balance|payment required|insufficient credits|credits depleted/i.test(
 			message,
 		) ||
 		code === "invalid_api_key" ||
-		code === "authentication_error"
+		code === "authentication_error" ||
+		code === "insufficient_quota" ||
+		code === "insufficient_balance"
 	) {
 		return {
 			category: "auth_error",
 			retryable: false,
 			maxRetries: 0,
-			status: status ?? 401,
+			status: status ?? (code === "insufficient_quota" || /insufficient|balance|credit/i.test(message) ? 402 : 401),
 			userMessage: message,
 			isDeterministic: true,
 		}
@@ -245,6 +249,7 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		status === 502 ||
 		status === 503 ||
 		status === 504 ||
+		code === "service_unavailable" ||
 		/bad gateway|service unavailable|gateway timeout|upstream connect error/i.test(message)
 	) {
 		return {

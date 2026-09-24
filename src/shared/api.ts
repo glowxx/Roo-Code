@@ -12,6 +12,11 @@ import {
 // Extend ProviderSettings (minus apiProvider) with handler-specific toggles.
 export type ApiHandlerOptions = Omit<ProviderSettings, "apiProvider"> & {
 	/**
+	 * Actual provider identity (e.g. "xkiro", "openai", "deepseek")
+	 * Preserved for user-facing error reporting and telemetry across compatible protocol adapters.
+	 */
+	apiProvider?: ProviderSettings["apiProvider"]
+	/**
 	 * When true and using OpenAI Responses API models that support reasoning summaries,
 	 * include reasoning.summary: "auto" so the API returns summaries (we already parse
 	 * and surface them). Defaults to true; set to false to disable summaries.

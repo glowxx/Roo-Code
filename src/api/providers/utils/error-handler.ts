@@ -10,7 +10,7 @@
  */
 
 import i18n from "../../../i18n/setup"
-import { extractHttpStatusCode, extractRetryAfterSeconds } from "./error-classifier"
+import { extractHttpStatusCode, extractRetryAfterSeconds, classifyApiError } from "./error-classifier"
 
 /**
  * Handles API provider errors and transforms them into user-friendly messages
@@ -43,9 +43,20 @@ export function handleProviderError(
 		messagePrefix?: string
 		/** Custom message transformer */
 		messageTransformer?: (msg: string) => string
+		/** Internal protocol adapter name (default: "openai-compatible") */
+		protocol?: string
+		/** Target model ID */
+		modelId?: string
 	},
 ): Error {
 	const messagePrefix = options?.messagePrefix || "completion"
+	const normalizedProvider =
+		providerName.toLowerCase() === "xkiro"
+			? "xKiro"
+			: providerName.toLowerCase() === "openai"
+				? "OpenAI"
+				: providerName
+	const protocol = options?.protocol || "openai-compatible"
 
 	if (error instanceof Error) {
 		const anyErr = error as any
@@ -92,11 +103,52 @@ export function handleProviderError(
 		}
 		if (anyErr.code !== undefined) {
 			;(wrapped as any).code = anyErr.code
+		} else if (anyErr.error?.code !== undefined) {
+			;(wrapped as any).code = anyErr.error.code
+		}
+		if (anyErr.type !== undefined) {
+			;(wrapped as any).type = anyErr.type
+		} else if (anyErr.error?.type !== undefined) {
+			;(wrapped as any).type = anyErr.error.type
 		}
 		// Preserve AWS-specific metadata if present (for Bedrock)
 		if (anyErr.$metadata !== undefined) {
 			;(wrapped as any).$metadata = anyErr.$metadata
 		}
+
+		// Attach provider-aware identity, protocol, and classification
+		;(wrapped as any).provider = normalizedProvider
+		;(wrapped as any).protocol = protocol
+		if (options?.modelId) {
+			;(wrapped as any).model = options.modelId
+		}
+
+		const classification = classifyApiError(wrapped)
+		;(wrapped as any).retryable = classification.retryable
+		;(wrapped as any).category = classification.category
+		;(wrapped as any).maxRetries = classification.maxRetries
+
+		const requestId =
+			anyErr.request_id ||
+			anyErr.requestId ||
+			anyErr.headers?.["x-request-id"] ||
+			anyErr.headers?.["request-id"] ||
+			anyErr.headers?.["cf-ray"]
+		if (requestId) {
+			;(wrapped as any).requestId = requestId
+		}
+
+		const providerMeta = {
+			provider: normalizedProvider,
+			protocol,
+			model: options?.modelId,
+			retryable: classification.retryable,
+			category: classification.category,
+			type: (wrapped as any).type,
+			code: (wrapped as any).code,
+			requestId,
+		}
+		;(wrapped as any).providerMeta = providerMeta
 
 		return wrapped
 	}
@@ -118,6 +170,44 @@ export function handleProviderError(
 	if (anyErr?.headers !== undefined) {
 		;(wrapped as any).headers = anyErr.headers
 	}
+	if (anyErr?.code !== undefined) {
+		;(wrapped as any).code = anyErr.code
+	} else if (anyErr?.error?.code !== undefined) {
+		;(wrapped as any).code = anyErr.error.code
+	}
+
+	;(wrapped as any).provider = normalizedProvider
+	;(wrapped as any).protocol = protocol
+	if (options?.modelId) {
+		;(wrapped as any).model = options.modelId
+	}
+
+	const classification = classifyApiError(wrapped)
+	;(wrapped as any).retryable = classification.retryable
+	;(wrapped as any).category = classification.category
+	;(wrapped as any).maxRetries = classification.maxRetries
+
+	const requestId =
+		anyErr?.request_id ||
+		anyErr?.requestId ||
+		anyErr?.headers?.["x-request-id"] ||
+		anyErr?.headers?.["request-id"] ||
+		anyErr?.headers?.["cf-ray"]
+	if (requestId) {
+		;(wrapped as any).requestId = requestId
+	}
+
+	const providerMeta = {
+		provider: normalizedProvider,
+		protocol,
+		model: options?.modelId,
+		retryable: classification.retryable,
+		category: classification.category,
+		type: (wrapped as any).type,
+		code: (wrapped as any).code,
+		requestId,
+	}
+	;(wrapped as any).providerMeta = providerMeta
 
 	return wrapped
 }
@@ -126,6 +216,17 @@ export function handleProviderError(
  * Specialized handler for OpenAI-compatible providers
  * Re-exports with OpenAI-specific defaults for backward compatibility
  */
-export function handleOpenAIError(error: unknown, providerName: string): Error {
-	return handleProviderError(error, providerName, { messagePrefix: "completion" })
+export function handleOpenAIError(
+	error: unknown,
+	providerName: string,
+	options?: {
+		modelId?: string
+		protocol?: string
+	},
+): Error {
+	return handleProviderError(error, providerName, {
+		messagePrefix: "completion",
+		protocol: options?.protocol ?? "openai-compatible",
+		modelId: options?.modelId,
+	})
 }

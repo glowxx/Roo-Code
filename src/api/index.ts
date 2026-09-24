@@ -133,7 +133,7 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				? new AnthropicVertexHandler(options)
 				: new VertexHandler(options)
 		case "openai":
-			return new OpenAiHandler(options)
+			return new OpenAiHandler({ ...options, apiProvider: "openai" })
 		case "xkiro": {
 			const xkiroModelId =
 				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
@@ -218,6 +218,7 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 
 			return new OpenAiHandler({
 				...options,
+				apiProvider: "xkiro",
 				openAiBaseUrl: (options as any).xkiroBaseUrl || options.openAiBaseUrl || "https://api.xkiro.com/v1",
 				openAiApiKey: (options as any).xkiroApiKey || options.apiKey || options.openAiApiKey,
 				openAiModelId: xkiroModelId,

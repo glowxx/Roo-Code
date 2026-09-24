@@ -14,6 +14,17 @@ import { handleProviderError } from "./error-handler"
  * @param providerName - The name of the provider for context in error messages
  * @returns The original error or a transformed user-friendly error
  */
-export function handleOpenAIError(error: unknown, providerName: string): Error {
-	return handleProviderError(error, providerName, { messagePrefix: "completion" })
+export function handleOpenAIError(
+	error: unknown,
+	providerName: string,
+	options?: {
+		modelId?: string
+		protocol?: string
+	},
+): Error {
+	return handleProviderError(error, providerName, {
+		messagePrefix: "completion",
+		protocol: options?.protocol ?? "openai-compatible",
+		modelId: options?.modelId,
+	})
 }
