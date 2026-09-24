@@ -592,12 +592,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		this.assistantMessageParser = undefined
 
-		this.messageQueueService = new MessageQueueService()
+		this.messageQueueService = new MessageQueueService(this.historyItem?.promptQueue ?? [])
 
 		this.messageQueueStateChangedHandler = () => {
 			this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
 			this.emit(RooCodeEventName.QueuedMessagesUpdated, this.taskId, this.messageQueueService.messages)
 			this.providerRef.deref()?.postStateToWebviewWithoutTaskHistory()
+			this.saveClineMessages().catch((err) =>
+				console.error(`[Task] Failed to persist promptQueue update for ${this.taskId}:`, err),
+			)
 		}
 
 		this.messageQueueService.on("stateChanged", this.messageQueueStateChangedHandler)
@@ -1319,6 +1322,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// - Final state is emitted when updates stop (trailing: true)
 			this.debouncedEmitTokenUsage(tokenUsage, this.toolUsage)
 
+			if (this.messageQueueService && !this.messageQueueService.isEmpty()) {
+				historyItem.promptQueue = structuredClone(this.messageQueueService.messages)
+			}
+
 			await this.providerRef.deref()?.updateTaskHistory(historyItem)
 			return true
 		} catch (error) {
@@ -1916,9 +1923,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// block (via the `pWaitFor`).
 		const isBlocking = !(this.askResponse !== undefined || this.lastMessageTs !== askTs)
 		const isMessageQueued = !this.messageQueueService.isEmpty()
-		// Keep queued user messages intact during command_output asks. Those asks
-		// are terminal flow-control, not conversational turns.
-		const shouldDrainQueuedMessageForAsk = type !== "command_output"
+		// Only drain queued prompts when the task has reached completion / awaiting next turn!
+		// Queued messages must NEVER be consumed as approvals for tools/commands or followups.
+		const shouldDrainQueuedMessageForAsk = type === "resume_completed_task"
 		const isStatusMutable = !partial && isBlocking && !isMessageQueued && approval.decision === "ask"
 
 		if (isStatusMutable) {
@@ -1963,16 +1970,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const message = this.messageQueueService.dequeueMessage()
 
 			if (message) {
-				// Check if this is a tool approval ask that needs to be handled.
-				if (type === "tool" || type === "command" || type === "use_mcp_server") {
-					// For tool approvals, we need to approve first, then send
-					// the message if there's text/images.
-					this.handleWebviewAskResponse("yesButtonClicked", message.text, message.images)
-				} else {
-					// For other ask types (like followup or command_output), fulfill the ask
-					// directly.
-					this.handleWebviewAskResponse("messageResponse", message.text, message.images)
-				}
+				this.handleWebviewAskResponse("messageResponse", message.text, message.images)
 			}
 		}
 
@@ -1986,19 +1984,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					return true
 				}
 
-				// If a queued message arrives while we're blocked on an ask (e.g. a follow-up
-				// suggestion click that was incorrectly queued due to UI state), consume it
-				// immediately so the task doesn't hang.
+				// If a queued message arrives while we're blocked on resume_completed_task,
+				// consume it immediately to start the next conversational turn.
 				if (shouldDrainQueuedMessageForAsk && !this.messageQueueService.isEmpty()) {
 					const message = this.messageQueueService.dequeueMessage()
 					if (message) {
-						// If this is a tool approval ask, we need to approve first (yesButtonClicked)
-						// and include any queued text/images.
-						if (type === "tool" || type === "command" || type === "use_mcp_server") {
-							this.handleWebviewAskResponse("yesButtonClicked", message.text, message.images)
-						} else {
-							this.handleWebviewAskResponse("messageResponse", message.text, message.images)
-						}
+						this.handleWebviewAskResponse("messageResponse", message.text, message.images)
 					}
 				}
 
@@ -2291,8 +2282,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				contextCondense,
 			)
 
-			// Process any queued messages after condensing completes
-			this.processQueuedMessages()
 			this.recordCompactionCompletion()
 		} finally {
 			this.compactionAbortController = undefined
@@ -2526,7 +2515,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 
 			await this.saveClineMessages()
-			this.processQueuedMessages()
 			this.recordCompactionCompletion()
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
@@ -2651,7 +2639,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				text: this.taskId,
 			})
 
-			this.processQueuedMessages()
 			this.recordCompactionCompletion()
 
 			return { previousTokens, newTokens, savedTokensPercentage }

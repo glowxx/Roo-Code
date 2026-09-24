@@ -88,10 +88,13 @@ export class TaskHistoryStore {
 			// 2. Reconcile cache against actual task directories on disk
 			await this.reconcile()
 
-			// 3. Start fs.watch for cross-instance reactivity
+			// 3. Crash recovery: transition unclosed active tasks to interrupted so they are not faked as completed
+			await this.recoverInterruptedTasks()
+
+			// 4. Start fs.watch for cross-instance reactivity
 			this.startWatcher()
 
-			// 4. Start periodic reconciliation as a defensive fallback
+			// 5. Start periodic reconciliation as a defensive fallback
 			this.startPeriodicReconciliation()
 		} finally {
 			// Mark initialization as complete so callers awaiting `initialized` can proceed
@@ -279,6 +282,33 @@ export class TaskHistoryStore {
 			for (const taskId of cacheIds) {
 				if (!onDiskIds.has(taskId)) {
 					this.cache.delete(taskId)
+					changed = true
+				}
+			}
+
+			if (changed) {
+				this.scheduleIndexWrite()
+			}
+		})
+	}
+
+	/**
+	 * Transition any unclosed "active" tasks in the cache to "interrupted" upon startup/restart.
+	 * This guarantees that interrupted tasks are never treated as completed and queued prompts do not auto-run.
+	 */
+	async recoverInterruptedTasks(): Promise<void> {
+		return this.withLock(async () => {
+			let changed = false
+			for (const [taskId, item] of this.cache.entries()) {
+				if (item.status === "active") {
+					const updatedItem: HistoryItem = {
+						...item,
+						status: "interrupted",
+					}
+					this.cache.set(taskId, updatedItem)
+					await this.writeTaskFile(updatedItem).catch((err) => {
+						console.error(`[TaskHistoryStore] Failed to write recovered task file for ${taskId}:`, err)
+					})
 					changed = true
 				}
 			}

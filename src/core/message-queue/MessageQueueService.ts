@@ -17,10 +17,15 @@ export interface QueueEvents {
 export class MessageQueueService extends EventEmitter<QueueEvents> {
 	private _messages: QueuedMessage[]
 
-	constructor() {
+	constructor(initialMessages: QueuedMessage[] = []) {
 		super()
 
-		this._messages = []
+		this._messages = [...initialMessages]
+	}
+
+	public loadMessages(messages: QueuedMessage[]): void {
+		this._messages = [...messages]
+		this.emit("stateChanged", this._messages)
 	}
 
 	private findMessage(id: string) {
