@@ -469,8 +469,8 @@ export function optimizeEffectiveApiHistory(
 			return msg
 		}
 
-		// Summary messages and truncation markers must never be treated as tool results or stripped
-		if (msg.isSummary || msg.isTruncationMarker) {
+		// Truncation markers are synthetic structural indicators that must never be modified
+		if (msg.isTruncationMarker) {
 			return msg
 		}
 
@@ -482,6 +482,15 @@ export function optimizeEffectiveApiHistory(
 
 		// Plain text user messages: strip historical environment details and ephemeralize cold skill expansions
 		if (typeof msg.content === "string") {
+			// Pure summary messages without environment details are preserved untouched
+			if (
+				msg.isSummary &&
+				(msg.content.includes("[Context Compacted Summary]") || msg.content.includes("### CONTEXT COMPACTION HANDOFF")) &&
+				!msg.content.includes("<environment_details>")
+			) {
+				return msg
+			}
+
 			let text = msg.content
 			let modified = false
 
@@ -493,7 +502,13 @@ export function optimizeEffectiveApiHistory(
 				modified = true
 			}
 
+			const isSummary =
+				msg.isSummary ||
+				text.includes("[Context Compacted Summary]") ||
+				text.includes("### CONTEXT COMPACTION HANDOFF")
+
 			if (
+				!isSummary &&
 				isZone2 &&
 				text.length > 4000 &&
 				(text.includes("# /graphify") || text.includes("name: graphify") || text.includes("--- Skill Instructions ---"))
@@ -549,6 +564,15 @@ export function optimizeEffectiveApiHistory(
 						}
 					}
 				} else if (block.type === "text" && typeof block.text === "string") {
+					// Summary blocks must NEVER be truncated or treated as tool results/ephemeral skills
+					const isSummaryBlock =
+						block.text.includes("[Context Compacted Summary]") ||
+						block.text.includes("### CONTEXT COMPACTION HANDOFF")
+
+					if (isSummaryBlock) {
+						return block
+					}
+
 					let newText = block.text
 					let textModified = false
 

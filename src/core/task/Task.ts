@@ -414,6 +414,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private currentAuditRecord?: TokenAuditRecord
 	private requestsSinceLastCompaction = 0
 	private tokensInAtLastCompaction = 0
+	private retryRetransmissionTokens = 0
 
 	public abortCompaction(): void {
 		this.compactionAbortController?.abort()
@@ -551,7 +552,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.rooProtectedController = new RooProtectedController(this.cwd)
 		this.fileContextTracker = new FileContextTracker(provider, this.taskId)
 
-		this.rooIgnoreController.initialize().catch((error) => {
+		this.rooIgnoreController.initialize()?.catch((error) => {
 			console.error("Failed to initialize RooIgnoreController:", error)
 		})
 
@@ -2272,6 +2273,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	private recordCompactionCompletion(): void {
 		this.requestsSinceLastCompaction = 0
+		this.retryRetransmissionTokens = 0
 		const { totalTokensIn } = this.getTokenUsage()
 		this.tokensInAtLastCompaction = totalTokensIn ?? 0
 	}
@@ -2315,16 +2317,47 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Triggers compaction when cumulative retransmission drag or long plateaus accumulate,
 		// preventing millions of redundant tokens on models with 128k, 200k, or 1M+ context windows.
 		// Constraints to protect 1M+ models and large single-turn ingests:
-		// 1. Minimum context floor: at least 40,000 tokens
+		// 1. Minimum economic floor: 30k for free models, 40k for paid models
 		// 2. High-capacity grace period: at least 10 turns since task start / last compaction
 		// 3. Novelty ratio gate: if recent turn added > 35% new tokens, defer compaction
-		const MIN_ECONOMIC_FLOOR = 40_000
+
+		const modelId = this.api.getModel().id
+		const isFreeModel = Boolean(
+			modelInfo.isFree ||
+			(typeof modelInfo.inputPrice === "number" && modelInfo.inputPrice === 0 && modelInfo.outputPrice === 0) ||
+			modelId?.toLowerCase().endsWith(":free")
+		)
+
+		const MIN_ECONOMIC_FLOOR = isFreeModel ? 30_000 : 40_000
 		const GRACE_PERIOD_REQUESTS = 10
-		const RETRANSMISSION_DRAG_THRESHOLD = process.env.ROO_ACAC_RETRANS_THRESHOLD
-			? parseInt(process.env.ROO_ACAC_RETRANS_THRESHOLD, 10)
-			: 1_200_000
-		const PLATEAU_REQUEST_THRESHOLD = 20
-		const PLATEAU_CONTEXT_FLOOR = 60_000
+
+		// Retransmission drag threshold:
+		// Free models on aggregators like xKiro burn daily quotas (e.g. 16M) on cache reads,
+		// so they require tighter drag thresholds (default 400k tokens).
+		// Paid models with fast, cheap prompt prefix caching benefit from preserving prefix cache,
+		// so they allow up to 1.2M+ tokens of cumulative drag before compacting.
+		const defaultDragThreshold = isFreeModel ? 400_000 : 1_200_000
+		const RETRANSMISSION_DRAG_THRESHOLD = isFreeModel
+			? (process.env.ROO_ACAC_FREE_RETRANS_THRESHOLD
+				? parseInt(process.env.ROO_ACAC_FREE_RETRANS_THRESHOLD, 10)
+				: (process.env.ROO_ACAC_RETRANS_THRESHOLD
+					? parseInt(process.env.ROO_ACAC_RETRANS_THRESHOLD, 10)
+					: defaultDragThreshold))
+			: (process.env.ROO_ACAC_RETRANS_THRESHOLD
+				? parseInt(process.env.ROO_ACAC_RETRANS_THRESHOLD, 10)
+				: defaultDragThreshold)
+
+		const PLATEAU_REQUEST_THRESHOLD = isFreeModel ? 15 : 20
+		const PLATEAU_CONTEXT_FLOOR = isFreeModel ? 40_000 : 60_000
+
+		// Agile working set soft cap for free models (default 65,000) applied only after grace period
+		const freeWorkingCap = process.env.ROO_FREE_WORKING_CONTEXT_TOKENS
+			? parseInt(process.env.ROO_FREE_WORKING_CONTEXT_TOKENS, 10)
+			: 65_000
+
+		if (isFreeModel && this.requestsSinceLastCompaction >= GRACE_PERIOD_REQUESTS && contextTokens >= freeWorkingCap) {
+			return true
+		}
 
 		if (contextTokens < MIN_ECONOMIC_FLOOR) {
 			return false
@@ -2347,7 +2380,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 		}
 
-		const tokensSinceLastCompaction = Math.max(0, (totalTokensIn ?? 0) - this.tokensInAtLastCompaction)
+		const tokensSinceLastCompaction = Math.max(
+			0,
+			(totalTokensIn ?? 0) + this.retryRetransmissionTokens - this.tokensInAtLastCompaction,
+		)
 		const isCumulativeDragTriggered = tokensSinceLastCompaction >= RETRANSMISSION_DRAG_THRESHOLD
 		const isPlateauTriggered =
 			this.requestsSinceLastCompaction >= PLATEAU_REQUEST_THRESHOLD && contextTokens >= PLATEAU_CONTEXT_FLOOR
@@ -5077,6 +5113,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		const systemPrompt = await this.getSystemPrompt()
 		const { contextTokens } = this.getTokenUsage()
+
+		if (retryAttempt > 0) {
+			const estimatedRetryTokens =
+				contextTokens ||
+				Math.ceil(
+					this.apiConversationHistory.reduce(
+						(acc, m) => acc + (typeof m.content === "string" ? m.content.length : 100),
+						0,
+					) / 4,
+				)
+			this.retryRetransmissionTokens += estimatedRetryTokens
+		}
 
 		let autoCompacted = false
 		if (this.checkContextCompactionThreshold()) {

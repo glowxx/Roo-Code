@@ -226,7 +226,9 @@ export function toContentBlocks(
 
 /**
  * Extracts the original user content blocks from initialMessage, stripping away any
- * previously accumulated [Context Compacted Summary] blocks from prior compaction cycles.
+ * previously accumulated [Context Compacted Summary] blocks from prior compaction cycles,
+ * cleaning stale environment_details from historical initialization, and ephemeralizing
+ * cold skill instructions to avoid carrying multi-kilobyte payloads across turns.
  */
 export function extractCleanInitialBlocks(
 	content: string | Anthropic.Messages.ContentBlockParam[] | undefined,
@@ -240,14 +242,46 @@ export function extractCleanInitialBlocks(
 			) {
 				return false
 			}
+			// Stale environment details block from initial task setup
+			if (
+				block.text.trim().startsWith("<environment_details>") &&
+				block.text.trim().endsWith("</environment_details>")
+			) {
+				return false
+			}
 		}
 		return true
 	})
 
-	if (clean.length === 0 && blocks.length > 0) {
+	const sanitized = clean.map((block) => {
+		if (block.type === "text" && typeof block.text === "string") {
+			let text = block.text
+			if (text.includes("<environment_details>")) {
+				text = text.replace(
+					/<environment_details>[\s\S]*?<\/environment_details>/g,
+					"[Environment details omitted for historical task initialization]",
+				)
+			}
+			if (
+				text.length > 4000 &&
+				(text.includes("# /graphify") ||
+					text.includes("name: graphify") ||
+					text.includes("--- Skill Instructions ---"))
+			) {
+				text =
+					`[Skill instructions loaded in earlier turn (${text.length} bytes). Instructions active in session]\n\n` +
+					text.slice(0, 500) +
+					"\n... [Remaining skill documentation omitted in historical turn] ..."
+			}
+			return { ...block, text }
+		}
+		return block
+	})
+
+	if (sanitized.length === 0 && blocks.length > 0) {
 		return [blocks[0]]
 	}
-	return clean
+	return sanitized
 }
 
 /**
