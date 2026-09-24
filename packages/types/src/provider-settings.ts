@@ -489,11 +489,18 @@ export const modelIdKeys = [
 	"unboundModelId",
 	"litellmModelId",
 	"vercelAiGatewayModelId",
+	"xkiroModelId",
 ] as const satisfies readonly (keyof ProviderSettings)[]
 
 export type ModelIdKey = (typeof modelIdKeys)[number]
 
 export const getModelId = (settings: ProviderSettings): string | undefined => {
+	if (settings.apiProvider && isTypicalProvider(settings.apiProvider)) {
+		const key = modelIdKeysByProvider[settings.apiProvider]
+		if (key && settings[key]) {
+			return settings[key]
+		}
+	}
 	const modelIdKey = modelIdKeys.find((key) => settings[key])
 	return modelIdKey ? settings[modelIdKey] : undefined
 }
@@ -533,7 +540,7 @@ export const modelIdKeysByProvider: Record<TypicalProvider, ModelIdKey> = {
 	zai: "apiModelId",
 	fireworks: "apiModelId",
 	"vercel-ai-gateway": "vercelAiGatewayModelId",
-	xkiro: "apiModelId",
+	xkiro: "xkiroModelId",
 }
 
 /**

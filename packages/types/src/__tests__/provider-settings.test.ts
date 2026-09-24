@@ -1,4 +1,4 @@
-import { getApiProtocol } from "../provider-settings.js"
+import { getApiProtocol, getModelId } from "../provider-settings.js"
 
 describe("getApiProtocol", () => {
 	describe("Anthropic-style providers", () => {
@@ -79,3 +79,34 @@ describe("getApiProtocol", () => {
 		})
 	})
 })
+
+describe("getModelId", () => {
+	it("resolves xkiroModelId when apiProvider is xkiro", () => {
+		expect(
+			getModelId({
+				apiProvider: "xkiro",
+				xkiroModelId: "qwen/qwen3.8-max",
+			}),
+		).toBe("qwen/qwen3.8-max")
+	})
+
+	it("resolves xkiroModelId even if apiModelId is also present but provider is xkiro", () => {
+		expect(
+			getModelId({
+				apiProvider: "xkiro",
+				xkiroModelId: "qwen/qwen3.8-max",
+				apiModelId: "old-stale-model",
+			}),
+		).toBe("qwen/qwen3.8-max")
+	})
+
+	it("falls back to apiModelId if xkiroModelId is not specified for xkiro", () => {
+		expect(
+			getModelId({
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+			}),
+		).toBe("deepseek/deepseek-chat")
+	})
+})
+

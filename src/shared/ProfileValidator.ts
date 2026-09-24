@@ -79,6 +79,8 @@ export class ProfileValidator {
 				return profile.requestyModelId
 			case "unbound":
 				return profile.unboundModelId
+			case "xkiro":
+				return profile.xkiroModelId || profile.apiModelId || profile.openAiModelId
 			case "fake-ai":
 			default:
 				return undefined
