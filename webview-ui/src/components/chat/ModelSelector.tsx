@@ -8,6 +8,8 @@ import {
 	modelSupportsReasoning,
 	getModelContextWindow,
 	openAiModelInfoSaneDefaults,
+	cleanModelDisplayName,
+	formatModelDisplayName,
 } from "@roo-code/types"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -256,92 +258,9 @@ export const isReasoningModel = (id: string, info?: ModelInfo): boolean => {
 	)
 }
 
-export const cleanModelDisplayName = (modelId: string, modelInfo?: ModelInfo): string => {
-	if (!modelId) return "Select Model"
+// Re-export centralized display name formatters
+export { cleanModelDisplayName, formatModelDisplayName }
 
-	const lower = modelId.toLowerCase()
-
-	// Special-cased friendly names for popular / flagship models
-	// DeepSeek
-	if (lower.includes("deepseek-reasoner") || lower.includes("deepseek-r1")) return "DeepSeek R1"
-	if (lower.includes("deepseek/deepseek-chat") || lower.includes("deepseek-chat") || lower.includes("deepseek-v3"))
-		return "DeepSeek V3"
-	if (lower.includes("deepseek-r2")) return "DeepSeek R2"
-	if (lower.includes("deepseek-v4")) return "DeepSeek V4"
-
-	// Claude (Anthropic)
-	if (
-		lower.includes("claude-4-5-sonnet") ||
-		lower.includes("claude-4.5-sonnet") ||
-		lower.includes("claude-sonnet-4-5") ||
-		lower.includes("claude-sonnet-4.5")
-	)
-		return "Claude 4.5 Sonnet"
-	if (lower.includes("claude-4-5-opus") || lower.includes("claude-4.5-opus")) return "Claude 4.5 Opus"
-	if (lower.includes("claude-4-sonnet") || lower.includes("claude-4.0-sonnet")) return "Claude 4 Sonnet"
-	if (lower.includes("claude-4-opus")) return "Claude 4 Opus"
-	if (lower.includes("claude-5-sonnet") || lower.includes("claude-5.0-sonnet")) return "Claude 5 Sonnet"
-	if (lower.includes("claude-5")) return "Claude 5"
-	if (lower.includes("claude-3-7-sonnet") || lower.includes("claude-3.7-sonnet")) return "Claude 3.7 Sonnet"
-	if (lower.includes("claude-3-5-sonnet") || lower.includes("claude-3.5-sonnet")) return "Claude 3.5 Sonnet"
-	if (lower.includes("claude-3-5-haiku") || lower.includes("claude-3.5-haiku")) return "Claude 3.5 Haiku"
-	if (lower.includes("claude-3-opus")) return "Claude 3 Opus"
-
-	// OpenAI
-	if (lower.includes("gpt-6-astra") || lower.includes("gpt-6")) return "GPT-6 Astra"
-
-	// Handle specific GPT versions and named variants (e.g. gpt-5.6-terra -> GPT-5.6 Terra, gpt-5.6-sol -> GPT-5.6 Sol)
-	const gptNamedMatch = lower.match(/(?:^|[\/_\-])gpt-([0-9]+(?:\.[0-9]+)?)-([a-z0-9]+)(?:[\/_\-:]|$)/i)
-	if (gptNamedMatch) {
-		const version = gptNamedMatch[1]
-		const rawVariant = gptNamedMatch[2]
-		const capitalized = rawVariant.charAt(0).toUpperCase() + rawVariant.slice(1)
-		return `GPT-${version} ${capitalized}`
-	}
-
-	if (lower.includes("gpt-5-turbo")) return "GPT-5 Turbo"
-	if (lower.includes("gpt-5-mini") || lower.includes("gpt-5.4-mini") || lower.includes("gpt-5.1-mini")) return "GPT-5 Mini"
-	if (lower.includes("gpt-5-nano") || lower.includes("gpt-5.4-nano")) return "GPT-5 Nano"
-	if (lower.includes("gpt-5.1-codex-max")) return "GPT-5.1 Codex Max"
-	if (lower.includes("gpt-5.6")) return "GPT-5.6"
-	if (lower.includes("gpt-5.4")) return "GPT-5.4"
-	if (lower.includes("gpt-5.2")) return "GPT-5.2"
-	if (/(?:^|[\/_\-])gpt-5(?:[\/_\-:]|$)/i.test(lower)) return "GPT-5"
-	if (lower.includes("gpt-4-5-preview") || lower.includes("gpt-4.5-preview") || lower.includes("gpt-4.5")) return "GPT-4.5 Preview"
-	if (lower.includes("gpt-4o-mini")) return "GPT-4o Mini"
-	if (lower.includes("gpt-4o")) return "GPT-4o"
-	if (lower.includes("o4-mini")) return "o4-mini"
-	if (lower.includes("o4")) return "o4"
-	if (lower.includes("o3-mini")) return "o3-mini"
-	if (lower.includes("o3")) return "o3"
-	if (lower.includes("o1-preview")) return "o1-preview"
-	if (lower.includes("o1-mini")) return "o1-mini"
-	if (lower.includes("o1")) return "o1"
-
-	// Gemini (Google)
-	if (lower.includes("gemini-3-pro")) return "Gemini 3 Pro"
-	if (lower.includes("gemini-3-flash")) return "Gemini 3 Flash"
-	if (lower.includes("gemini-2.5-pro")) return "Gemini 2.5 Pro"
-	if (lower.includes("gemini-2.5-flash")) return "Gemini 2.5 Flash"
-	if (lower.includes("gemini-2.0-flash")) return "Gemini 2.0 Flash"
-	if (lower.includes("gemini-1.5-pro")) return "Gemini 1.5 Pro"
-
-	// Qwen
-	if (lower.includes("qwen-3-coder")) return "Qwen 3 Coder"
-	if (lower.includes("qwen-2.5-coder") || lower.includes("qwen/qwen-2.5-coder")) return "Qwen 2.5 Coder"
-	if (lower.includes("llama-3.1") || lower.includes("llama3.1")) return "Llama 3.1"
-	if (lower.includes("llama-3.3") || lower.includes("llama3.3")) return "Llama 3.3"
-
-	// Fallback to description if short or stripped ID
-	if (modelInfo?.description && modelInfo.description.length < 25) {
-		return modelInfo.description
-	}
-
-	const parts = modelId.split("/")
-	const lastPart = parts[parts.length - 1]
-	const cleaned = lastPart.split(":")[0]?.trim()
-	return cleaned || modelId.trim() || "Select Model"
-}
 
 export const sanitizeCustomModelId = (rawModelId: string): string => {
 	if (!rawModelId) return ""
@@ -597,7 +516,7 @@ export const ModelSelector = ({
 
 						result.push({
 							id,
-							name: cleanModelDisplayName(id),
+							name: cleanModelDisplayName(id, openAiModelInfos?.[id]),
 							contextWindow: getModelContextWindow(id, dynamicContext),
 							isReasoning,
 							isFast,

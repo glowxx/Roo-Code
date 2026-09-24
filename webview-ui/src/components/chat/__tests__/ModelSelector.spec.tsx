@@ -82,11 +82,34 @@ describe("ModelSelector", () => {
 		expect(cleanModelDisplayName("openai/gpt-5.6-sol")).toBe("GPT-5.6 Sol")
 		expect(cleanModelDisplayName("openai/gpt-5.6-luna")).toBe("GPT-5.6 Luna")
 		expect(cleanModelDisplayName("openai/gpt-6-astra")).toBe("GPT-6 Astra")
+		expect(cleanModelDisplayName("openai/gpt-6-luna")).toBe("GPT-6 Luna")
+		expect(cleanModelDisplayName("openai/gpt-6-sol")).toBe("GPT-6 Sol")
+		expect(cleanModelDisplayName("unknown-provider/gpt-6.1-nebula")).toBe("GPT-6.1 Nebula")
+		expect(cleanModelDisplayName("unknown-provider/gpt-7-orion")).toBe("GPT-7 Orion")
+		expect(cleanModelDisplayName("unknown-provider/model-x-coder-preview")).toBe("Model X Coder Preview")
 		expect(cleanModelDisplayName("openai/gpt-4.5-preview")).toBe("GPT-4.5 Preview")
 		expect(cleanModelDisplayName("openai/gpt-4o")).toBe("GPT-4o")
 		expect(cleanModelDisplayName("google/gemini-2.5-pro")).toBe("Gemini 2.5 Pro")
 		expect(cleanModelDisplayName("google/gemini-3-pro")).toBe("Gemini 3 Pro")
 		expect(cleanModelDisplayName("qwen/qwen-3-coder")).toBe("Qwen 3 Coder")
+	})
+
+	test("cleanModelDisplayName preserves variant suffixes and never collapses distinct variants to the same name", () => {
+		const gpt6Variants = [
+			cleanModelDisplayName("openai/gpt-6-astra"),
+			cleanModelDisplayName("openai/gpt-6-luna"),
+			cleanModelDisplayName("openai/gpt-6-sol"),
+		]
+		expect(gpt6Variants).toEqual(["GPT-6 Astra", "GPT-6 Luna", "GPT-6 Sol"])
+		expect(new Set(gpt6Variants).size).toBe(3)
+
+		const gpt56Variants = [
+			cleanModelDisplayName("openai/gpt-5.6-terra"),
+			cleanModelDisplayName("openai/gpt-5.6-sol"),
+			cleanModelDisplayName("openai/gpt-5.6-luna"),
+		]
+		expect(gpt56Variants).toEqual(["GPT-5.6 Terra", "GPT-5.6 Sol", "GPT-5.6 Luna"])
+		expect(new Set(gpt56Variants).size).toBe(3)
 	})
 
 	test("cleanModelDisplayName safely falls back for unusual identifiers", () => {
@@ -184,7 +207,7 @@ describe("ModelSelector", () => {
 		expect(screen.getByText(/All Available Models/)).toBeInTheDocument()
 
 		// Dynamic model rendered
-		expect(screen.getByText("custom-test-model")).toBeInTheDocument()
+		expect(screen.getByText("Custom Test Model")).toBeInTheDocument()
 		expect(screen.getByText("custom-provider/custom-test-model")).toBeInTheDocument()
 	})
 
@@ -381,7 +404,7 @@ describe("ModelSelector", () => {
 		const trigger = screen.getByTestId("model-selector-trigger")
 		fireEvent.click(trigger)
 
-		const targetItem = screen.getByText("restricted-model-medium")
+		const targetItem = screen.getByText("Restricted Model Medium")
 		fireEvent.click(targetItem)
 
 		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
@@ -413,7 +436,7 @@ describe("ModelSelector", () => {
 		const trigger = screen.getByTestId("model-selector-trigger")
 		fireEvent.click(trigger)
 
-		const targetItem = screen.getByText("restricted-model-low-high")
+		const targetItem = screen.getByText("Restricted Model Low High")
 		fireEvent.click(targetItem)
 
 		expect(mockSetApiConfiguration).toHaveBeenCalledWith(
@@ -445,7 +468,7 @@ describe("ModelSelector", () => {
 		const trigger = screen.getByTestId("model-selector-trigger")
 		fireEvent.click(trigger)
 
-		const targetItem = screen.getByText("minimal-low-model")
+		const targetItem = screen.getByText("Minimal Low Model")
 		fireEvent.click(targetItem)
 
 		expect(mockSetApiConfiguration).toHaveBeenCalledWith(

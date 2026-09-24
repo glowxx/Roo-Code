@@ -770,6 +770,13 @@ export function parseOpenAiModelInfo(rawItem: any): ModelInfo {
 			? true
 			: undefined
 
+	const rawDisplayName =
+		typeof rawItem?.display_name === "string" && rawItem.display_name.trim().length > 0
+			? rawItem.display_name.trim()
+			: typeof rawItem?.name === "string" && rawItem.name.trim().length > 0 && rawItem.name.trim() !== id
+				? rawItem.name.trim()
+				: undefined
+
 	return {
 		maxTokens: maxOutputTokens ?? 8192,
 		contextWindow: resolvedContextWindow,
@@ -779,6 +786,7 @@ export function parseOpenAiModelInfo(rawItem: any): ModelInfo {
 		outputPrice,
 		cacheReadsPrice,
 		cacheWritesPrice,
+		displayName: rawDisplayName,
 		description: rawItem?.display_name ? `${rawItem.display_name} (${id})` : undefined,
 		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
 	}
