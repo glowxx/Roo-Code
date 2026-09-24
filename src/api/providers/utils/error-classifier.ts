@@ -16,6 +16,7 @@ export type ApiErrorCategory =
 	| "gateway_error"
 	| "network_error"
 	| "context_length"
+	| "stream_idle"
 	| "unknown"
 
 export interface ApiErrorClassification {
@@ -275,7 +276,24 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		}
 	}
 
-	// 8. Network Connection / Socket Errors (Transient - retryable up to 3 times)
+	// 8. Stream Idle Timeout / Stalls (Transient - bounded recovery retry of 1 attempt)
+	if (
+		/stream idle timeout|no data received from provider|stream no-progress timeout|heartbeat\/keep-alive frames but no content/i.test(
+			message,
+		)
+	) {
+		return {
+			category: "stream_idle",
+			retryable: true,
+			maxRetries: 1,
+			retryAfterSeconds: 2,
+			status: undefined,
+			userMessage: message,
+			isDeterministic: false,
+		}
+	}
+
+	// 9. Network Connection / Socket Errors (Transient - retryable up to 3 times)
 	const networkCodes = [
 		"ECONNRESET",
 		"ETIMEDOUT",

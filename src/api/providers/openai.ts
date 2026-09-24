@@ -228,9 +228,12 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 					const delta = chunk.choices?.[0]?.delta ?? {}
 					const finishReason = chunk.choices?.[0]?.finish_reason
 
+					let chunkProducedActivity = false
+
 					if (delta.content) {
 						for (const chunk of matcher.update(delta.content)) {
 							yield chunk
+							chunkProducedActivity = true
 						}
 					}
 
@@ -239,12 +242,24 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 							type: "reasoning",
 							text: (delta.reasoning_content as string | undefined) || "",
 						}
+						chunkProducedActivity = true
 					}
 
-					yield* this.processToolCalls(delta, finishReason, activeToolCallIds)
+					for (const toolChunk of this.processToolCalls(delta, finishReason, activeToolCallIds)) {
+						yield toolChunk
+						chunkProducedActivity = true
+					}
 
 					if (chunk.usage) {
 						lastUsage = chunk.usage
+						chunkProducedActivity = true
+						yield { type: "heartbeat" }
+					}
+
+					// If chunk arrived from upstream (e.g. role/ping/keep-alive frame) but produced no content or tool events,
+					// signal valid SSE activity via heartbeat so that the transport watchdog registers raw connection activity
+					if (!chunkProducedActivity && (chunk.id || chunk.choices?.length)) {
+						yield { type: "heartbeat" }
 					}
 				}
 

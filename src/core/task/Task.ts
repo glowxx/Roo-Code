@@ -151,6 +151,7 @@ import { MessageManager } from "../message-manager"
 import { validateAndFixToolResultIds } from "./validateToolResultIds"
 import { mergeConsecutiveApiMessages } from "./mergeConsecutiveApiMessages"
 import { classifyApiError } from "../../api/providers/utils/error-classifier"
+import { StreamAuditTracker } from "./StreamAudit"
 
 const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
@@ -158,6 +159,10 @@ const FORCED_CONTEXT_REDUCTION_PERCENT = 75 // Keep 75% of context (remove 25%) 
 const MAX_CONTEXT_WINDOW_RETRIES = 3 // Maximum retries for context window errors
 export const MAX_API_RETRIES = 3 // Maximum retry attempts for API failures (first-chunk and mid-stream)
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000 // 45 seconds of silence between chunks during active streaming
+export const REASONING_STREAM_IDLE_TIMEOUT_MS = 75_000 // 75 seconds for reasoning streams (P95 is 34s, covers P99 gap tolerance)
+export const FIRST_CHUNK_TIMEOUT_MS = 60_000 // 60 seconds base time to first chunk
+export const REASONING_FIRST_CHUNK_TIMEOUT_MS = 90_000 // 90 seconds for large prompts / reasoning models (P99 is 87.5s)
+export const MAX_NO_PROGRESS_TIMEOUT_MS = 90_000 // 90 seconds maximum silence without meaningful progress (guards against infinite no-op spam)
 
 export interface TaskOptions extends CreateTaskOptions {
 	provider: ClineProvider
@@ -3843,6 +3848,30 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				const streamModelInfo = this.cachedStreamingModel.info
 				const cachedModelId = this.cachedStreamingModel.id
 
+				const isReasoningModel = Boolean(
+					(streamModelInfo as any)?.reasoning ||
+					(streamModelInfo as any)?.thinking ||
+					cachedModelId.toLowerCase().includes("reason") ||
+					cachedModelId.toLowerCase().includes("think") ||
+					cachedModelId.toLowerCase().includes("qwen") ||
+					cachedModelId.toLowerCase().includes("deepseek-r1") ||
+					cachedModelId.toLowerCase().includes("claude-3-7-sonnet") ||
+					cachedModelId.toLowerCase().includes("o1") ||
+					cachedModelId.toLowerCase().includes("o3"),
+				)
+				const initialFirstChunkTimeout = isReasoningModel ? REASONING_FIRST_CHUNK_TIMEOUT_MS : FIRST_CHUNK_TIMEOUT_MS
+				let currentIdleTimeout = isReasoningModel ? REASONING_STREAM_IDLE_TIMEOUT_MS : DEFAULT_STREAM_IDLE_TIMEOUT_MS
+				let lastMeaningfulEventTime = performance.now()
+
+				const currentRetry = currentItem.retryAttempt ?? 0
+				const streamAudit = new StreamAuditTracker(
+					this.taskId,
+					this.instanceId,
+					this.apiConfiguration.apiProvider,
+					cachedModelId,
+					currentRetry,
+				)
+
 				// Yields only if the first chunk is successful, otherwise will
 				// allow the user to retry the request (most likely due to rate
 				// limit error, which gets thrown on the first chunk).
@@ -3858,8 +3887,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				try {
 					const iterator = stream[Symbol.asyncIterator]()
 
-					// Helper to race iterator.next() with abort signal and stream idle watchdog
-					const nextChunkWithAbort = async (enforceIdleTimeout = false) => {
+					// Helper to race iterator.next() with abort signal and adaptive stream idle watchdog
+					const nextChunkWithAbort = async (timeoutMs?: number) => {
 						const nextPromise = iterator.next()
 
 						// If we have an abort controller, race it with the next chunk
@@ -3878,17 +3907,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						})
 
 						// Stream idle watchdog: during active streaming, detect stalled connections
-						// after DEFAULT_STREAM_IDLE_TIMEOUT_MS of complete silence.
+						// after timeoutMs of complete silence.
 						let idleTimer: NodeJS.Timeout | undefined
-						const idlePromise = enforceIdleTimeout
+						const idlePromise = timeoutMs
 							? new Promise<never>((_, reject) => {
 									idleTimer = setTimeout(() => {
 										reject(
 											new Error(
-												`Stream idle timeout: no data received from provider for ${DEFAULT_STREAM_IDLE_TIMEOUT_MS / 1000} seconds`,
+												`Stream idle timeout: no data received from provider for ${timeoutMs / 1000} seconds`,
 											),
 										)
-									}, DEFAULT_STREAM_IDLE_TIMEOUT_MS)
+									}, timeoutMs)
 							  })
 							: null
 
@@ -3906,19 +3935,35 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						}
 					}
 
-					let item = await nextChunkWithAbort(false)
+					let item = await nextChunkWithAbort(initialFirstChunkTimeout)
 					this.isStreaming = true
 					while (!item.done) {
 						const chunk = item.value
-						item = await nextChunkWithAbort(true)
+						item = await nextChunkWithAbort(currentIdleTimeout)
 						if (!chunk) {
 							// Sometimes chunk is undefined, no idea that can cause
 							// it, but this workaround seems to fix it.
 							continue
 						}
 
+						// Guard against infinite no-op/heartbeat spam without meaningful progress
+						if (performance.now() - lastMeaningfulEventTime > MAX_NO_PROGRESS_TIMEOUT_MS) {
+							throw new Error(
+								`Stream no-progress timeout: received heartbeat/keep-alive frames but no content for ${MAX_NO_PROGRESS_TIMEOUT_MS / 1000} seconds`,
+							)
+						}
+
 						switch (chunk.type) {
+							case "heartbeat": {
+								// Transport activity without assistant content (SSE comment, keepalive ping, role-only frame).
+								// Watchdog was reset by chunk arrival, but no message content is created.
+								streamAudit.recordChunk("heartbeat")
+								break
+							}
 							case "reasoning": {
+								currentIdleTimeout = REASONING_STREAM_IDLE_TIMEOUT_MS
+								lastMeaningfulEventTime = performance.now()
+								streamAudit.recordChunk("reasoning", chunk.text.length)
 								reasoningMessage += chunk.text
 								// Only apply formatting if the message contains sentence-ending punctuation followed by **
 								let formattedReasoning = reasoningMessage
@@ -3935,6 +3980,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								break
 							}
 							case "usage":
+								streamAudit.recordChunk("usage")
 								inputTokens += chunk.inputTokens
 								outputTokens += chunk.outputTokens
 								cacheWriteTokens += chunk.cacheWriteTokens ?? 0
@@ -3949,6 +3995,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								}
 								break
 							case "grounding":
+								streamAudit.recordChunk("grounding")
 								// Handle grounding sources separately from regular content
 								// to prevent state persistence issues - store them separately
 								if (chunk.sources && chunk.sources.length > 0) {
@@ -3956,6 +4003,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								}
 								break
 							case "tool_call_partial": {
+								lastMeaningfulEventTime = performance.now()
+								streamAudit.recordChunk("tool_call_partial", chunk.arguments?.length || 0)
 								// Process raw tool call chunk through NativeToolCallParser
 								// which handles tracking, buffering, and emits events
 								const events = NativeToolCallParser.processRawChunk({
@@ -4080,6 +4129,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							}
 
 							case "tool_call": {
+								lastMeaningfulEventTime = performance.now()
+								streamAudit.recordChunk("tool_call", chunk.arguments?.length || 0)
 								// Legacy: Handle complete tool calls (for backward compatibility)
 								// Convert native tool call to ToolUse format
 								const toolUse = NativeToolCallParser.parseToolCall({
@@ -4109,6 +4160,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								break
 							}
 							case "text": {
+								lastMeaningfulEventTime = performance.now()
+								streamAudit.recordChunk("text", chunk.text.length)
 								assistantMessage += chunk.text
 
 								// Native tool calling: text chunks are plain text.
@@ -4160,6 +4213,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							break
 						}
 					}
+
+					streamAudit.recordOutcome(true)
+					streamAudit.log()
 
 					if (isTokenAuditEnabled() && this.currentAuditRecord) {
 						recordRequestTiming(this.taskId, this.currentAuditRecord, {
@@ -4304,7 +4360,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					drainStreamInBackgroundToFindAllUsage(lastApiReqIndex).catch((error) => {
 						console.error("Background usage collection failed:", error)
 					})
-				} catch (error) {
+				} catch (error: any) {
 					if (isTokenAuditEnabled() && this.currentAuditRecord) {
 						recordRequestTiming(this.taskId, this.currentAuditRecord, {
 							lastChunkAgoMs: performance.now() - lastChunkTime,
@@ -4315,10 +4371,75 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// Cline instance to finish aborting (error is thrown here when
 					// any function in the for loop throws due to this.abort).
 					if (!this.abandoned) {
+						const rawErrorMessage = error?.message ?? JSON.stringify(serializeError(error), null, 2)
+						const classification = classifyApiError(error)
+						const currentRetry = currentItem.retryAttempt ?? 0
+						const isStreamIdle = classification.category === "stream_idle"
+						const isSafeToAutoRetry =
+							!this.didAlreadyUseTool &&
+							this.userMessageContent.length === 0 &&
+							!this.currentStreamingDidCheckpoint
+
+						// Safe automatic recovery: retry exactly 1 time for stream idle stalls if no side-effects executed
+						if (isStreamIdle && isSafeToAutoRetry && currentRetry < classification.maxRetries && !this.abort) {
+							console.warn(
+								`[Task#${this.taskId}.${this.instanceId}] Transient stream idle timeout detected. Attempting automatic recovery (retry ${currentRetry + 1}/${classification.maxRetries})`,
+							)
+							streamAudit.recordOutcome(false, rawErrorMessage, true)
+							streamAudit.log()
+
+							// Revert diff view changes if currently editing
+							if (this.diffViewProvider.isEditing) {
+								await this.diffViewProvider.revertChanges()
+							}
+
+							// Clean up any uncommitted partial assistant/reasoning messages from this streaming turn
+							if (lastApiReqIndex >= 0 && this.clineMessages.length > lastApiReqIndex + 1) {
+								this.clineMessages.splice(lastApiReqIndex + 1)
+							} else {
+								const lastMsg = this.clineMessages.at(-1)
+								if (lastMsg && lastMsg.partial) {
+									this.clineMessages.pop()
+								}
+							}
+
+							// Reset partial streaming state
+							this.assistantMessageContent = []
+							this.streamingToolCallIndices.clear()
+							NativeToolCallParser.clearAllStreamingToolCalls()
+							NativeToolCallParser.clearRawChunkState()
+
+							await this.saveClineMessages()
+							await this.providerRef.deref()?.postStateToWebviewWithoutTaskHistory()
+
+							// Subtle retry notification UX instead of scary red error box
+							await this.say("api_req_retry_delayed", t("chat:stalledRetrying"))
+
+							// Short backoff (2000ms + jitter)
+							const jitterMs = Math.floor(Math.random() * 500)
+							const waitMs = (classification.retryAfterSeconds ?? 2) * 1000 + jitterMs
+							await new Promise((resolve) => setTimeout(resolve, waitMs))
+
+							if (this.abort) {
+								this.abortReason = "user_cancelled"
+								await this.abortTask()
+								break
+							}
+
+							stack.push({
+								userContent: currentUserContent,
+								includeFileDetails: false,
+								retryAttempt: currentRetry + 1,
+							})
+							continue
+						}
+
+						streamAudit.recordOutcome(false, rawErrorMessage, false)
+						streamAudit.log()
+
 						// Determine cancellation reason
 						const cancelReason: ClineApiReqCancelReason = this.abort ? "user_cancelled" : "streaming_failed"
 
-						const rawErrorMessage = error.message ?? JSON.stringify(serializeError(error), null, 2)
 						const streamingFailedMessage = this.abort
 							? undefined
 							: `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}`
@@ -4334,14 +4455,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							// Stream failed - log the error and retry with the same content
 							// The existing rate limiting will prevent rapid retries
 							console.error(
-								`[Task#${this.taskId}.${this.instanceId}] Stream failed, will retry: ${streamingFailedMessage}`,
+								`[Task#${this.taskId}.${this.instanceId}] Stream failed: ${streamingFailedMessage}`,
 							)
 
-							const classification = classifyApiError(error)
-							const currentRetry = currentItem.retryAttempt ?? 0
 							const maxAllowedRetries = Math.min(MAX_API_RETRIES, classification.maxRetries)
 
-							if (!classification.retryable || currentRetry >= maxAllowedRetries) {
+							if (!classification.retryable || currentRetry >= maxAllowedRetries || isStreamIdle) {
 								console.error(
 									`[Task#${this.taskId}.${this.instanceId}] Max mid-stream retries (${maxAllowedRetries}) or deterministic failure (${classification.category}): ${streamingFailedMessage}`,
 								)

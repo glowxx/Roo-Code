@@ -11,7 +11,12 @@ export type ApiStreamChunk =
 	| ApiStreamToolCallDeltaChunk
 	| ApiStreamToolCallEndChunk
 	| ApiStreamToolCallPartialChunk
+	| ApiStreamHeartbeatChunk
 	| ApiStreamError
+
+export interface ApiStreamHeartbeatChunk {
+	type: "heartbeat"
+}
 
 export interface ApiStreamError {
 	type: "error"

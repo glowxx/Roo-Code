@@ -151,6 +151,26 @@ describe("error-classifier", () => {
 			expect(res.isDeterministic).toBe(false)
 		})
 
+		it("classifies stream idle timeout as stream_idle with bounded 1 retry", () => {
+			const res = classifyApiError(new Error("Stream idle timeout: no data received from provider for 45 seconds"))
+			expect(res.category).toBe("stream_idle")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(1)
+			expect(res.isDeterministic).toBe(false)
+		})
+
+		it("preserves 503 Service Unavailable as gateway_error distinctly separate from stream_idle", () => {
+			const res503 = classifyApiError({ status: 503, message: "Service Unavailable" })
+			expect(res503.category).toBe("gateway_error")
+			expect(res503.category).not.toBe("stream_idle")
+			expect(res503.maxRetries).toBe(2)
+
+			const resIdle = classifyApiError(new Error("no data received from provider for 75 seconds"))
+			expect(resIdle.category).toBe("stream_idle")
+			expect(resIdle.category).not.toBe("gateway_error")
+			expect(resIdle.maxRetries).toBe(1)
+		})
+
 		it("classifies context length exceeded as non-retryable context_length", () => {
 			const res = classifyApiError(new Error("prompt is too long: maximum context length exceeded"))
 			expect(res.category).toBe("context_length")
