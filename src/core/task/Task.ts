@@ -1697,6 +1697,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					timeouts.push(this.autoApprovalTimeoutRef)
 				}
 			} else {
+				const askMsg = this.clineMessages.find((m) => m.ts === askTs)
+				if (askMsg) {
+					askMsg.approvalState = "EVALUATING"
+					this.updateClineMessage(askMsg)
+				}
 				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
 				const decisionResult = await this.approvalOrchestrator.evaluate(request, state)
 
@@ -1711,6 +1716,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							// Hard loop protection: require explicit manual review if completion is repeatedly attempted
 							decisionResult.decision = "MANUAL_APPROVAL"
 							approval = { decision: "ask" }
+							if (askMsg) {
+								askMsg.approvalState = "USER_DECISION_REQUIRED"
+								this.updateClineMessage(askMsg)
+							}
 							const warningPayload: SafetyEvaluationResult = {
 								isSafe: false,
 								riskLevel: "medium",
@@ -1719,12 +1728,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							await this.say("command_safety_warning", JSON.stringify(warningPayload))
 							this.lastMessageTs = askTs
 						} else {
+							if (askMsg) {
+								askMsg.approvalState = "AUTO_APPROVED"
+								this.updateClineMessage(askMsg)
+							}
 							approval = { decision: "approve" }
 							this.approveAsk()
 							this.consecutiveReplanCount = 0
 							this.unresolvedDenialState = null
 						}
 					} else {
+						if (askMsg) {
+							askMsg.approvalState = "AUTO_APPROVED"
+							this.updateClineMessage(askMsg)
+						}
 						this.consecutiveAttemptCompletionCount = 0
 						approval = { decision: "approve" }
 						this.approveAsk()
@@ -1737,6 +1754,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					// Loop protection: 3 consecutive completion attempts without resolving work items
 					if (this.consecutiveAttemptCompletionCount >= 3) {
 						approval = { decision: "ask" }
+						if (askMsg) {
+							askMsg.approvalState = "USER_DECISION_REQUIRED"
+							this.updateClineMessage(askMsg)
+						}
 						const warningPayload: SafetyEvaluationResult = {
 							isSafe: false,
 							riskLevel: "medium",
@@ -1745,6 +1766,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						await this.say("command_safety_warning", JSON.stringify(warningPayload))
 						this.lastMessageTs = askTs
 					} else {
+						if (askMsg) {
+							askMsg.approvalState = "DENIED"
+							this.updateClineMessage(askMsg)
+						}
 						approval = { decision: "deny" }
 						const payload = formatResponse.continueWork({
 							reason: decisionResult.reason,
@@ -1777,6 +1802,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 					if (isThrashing) {
 						approval = { decision: "ask" }
+						if (askMsg) {
+							askMsg.approvalState = "USER_DECISION_REQUIRED"
+							this.updateClineMessage(askMsg)
+						}
 						const warningPayload: SafetyEvaluationResult = {
 							isSafe: false,
 							riskLevel: decisionResult.risk || "high",
@@ -1785,6 +1814,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						await this.say("command_safety_warning", JSON.stringify(warningPayload))
 						this.lastMessageTs = askTs
 					} else {
+						if (askMsg) {
+							askMsg.approvalState = "DENIED"
+							this.updateClineMessage(askMsg)
+						}
 						approval = { decision: "deny" }
 						const payload =
 							decisionResult.decision === "HARD_BLOCK"
@@ -1795,6 +1828,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				} else {
 					// MANUAL_APPROVAL (or fail-closed)
 					approval = { decision: "ask" }
+					if (askMsg) {
+						askMsg.approvalState = "USER_DECISION_REQUIRED"
+						this.updateClineMessage(askMsg)
+					}
 					const warningPayload: SafetyEvaluationResult = {
 						isSafe: false,
 						riskLevel: decisionResult.risk || "high",

@@ -84,6 +84,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		soundVolume,
 		messageQueue = [],
 		showWorktreesInHomeScreen,
+		approvalMode,
 	} = useExtensionState()
 
 	// Show a WarningRow when the user sends a message with a retired provider.
@@ -317,64 +318,77 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							setPrimaryButtonText(undefined)
 							setSecondaryButtonText(undefined)
 							break
-						case "tool":
-							setSendingDisabled(isPartial)
+						case "tool": {
+							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("tool")
-							setEnableButtons(!isPartial)
-							const tool = JSON.parse(lastMessage.text || "{}") as ClineSayTool
-							switch (tool.tool) {
-								case "editedExistingFile":
-								case "appliedDiff":
-								case "newFileCreated":
-									if (tool.batchDiffs && Array.isArray(tool.batchDiffs)) {
-										setPrimaryButtonText(t("chat:edit-batch.approve.title"))
-										setSecondaryButtonText(t("chat:edit-batch.deny.title"))
-									} else {
+							if (isEvaluating) {
+								setEnableButtons(false)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(undefined)
+							} else {
+								setEnableButtons(!isPartial)
+								const tool = JSON.parse(lastMessage.text || "{}") as ClineSayTool
+								switch (tool.tool) {
+									case "editedExistingFile":
+									case "appliedDiff":
+									case "newFileCreated":
+										if (tool.batchDiffs && Array.isArray(tool.batchDiffs)) {
+											setPrimaryButtonText(t("chat:edit-batch.approve.title"))
+											setSecondaryButtonText(t("chat:edit-batch.deny.title"))
+										} else {
+											setPrimaryButtonText(t("chat:save.title"))
+											setSecondaryButtonText(t("chat:reject.title"))
+										}
+										break
+									case "generateImage":
 										setPrimaryButtonText(t("chat:save.title"))
 										setSecondaryButtonText(t("chat:reject.title"))
-									}
-									break
-								case "generateImage":
-									setPrimaryButtonText(t("chat:save.title"))
-									setSecondaryButtonText(t("chat:reject.title"))
-									break
-								case "finishTask":
-									setPrimaryButtonText(t("chat:completeSubtaskAndReturn"))
-									setSecondaryButtonText(undefined)
-									break
-								case "readFile":
-									if (tool.batchFiles && Array.isArray(tool.batchFiles)) {
-										setPrimaryButtonText(t("chat:read-batch.approve.title"))
-										setSecondaryButtonText(t("chat:read-batch.deny.title"))
-									} else {
+										break
+									case "finishTask":
+										setPrimaryButtonText(t("chat:completeSubtaskAndReturn"))
+										setSecondaryButtonText(undefined)
+										break
+									case "readFile":
+										if (tool.batchFiles && Array.isArray(tool.batchFiles)) {
+											setPrimaryButtonText(t("chat:read-batch.approve.title"))
+											setSecondaryButtonText(t("chat:read-batch.deny.title"))
+										} else {
+											setPrimaryButtonText(t("chat:approve.title"))
+											setSecondaryButtonText(t("chat:reject.title"))
+										}
+										break
+									case "listFilesTopLevel":
+									case "listFilesRecursive":
+										if (tool.batchDirs && Array.isArray(tool.batchDirs)) {
+											setPrimaryButtonText(t("chat:list-batch.approve.title"))
+											setSecondaryButtonText(t("chat:list-batch.deny.title"))
+										} else {
+											setPrimaryButtonText(t("chat:approve.title"))
+											setSecondaryButtonText(t("chat:reject.title"))
+										}
+										break
+									default:
 										setPrimaryButtonText(t("chat:approve.title"))
 										setSecondaryButtonText(t("chat:reject.title"))
-									}
-									break
-								case "listFilesTopLevel":
-								case "listFilesRecursive":
-									if (tool.batchDirs && Array.isArray(tool.batchDirs)) {
-										setPrimaryButtonText(t("chat:list-batch.approve.title"))
-										setSecondaryButtonText(t("chat:list-batch.deny.title"))
-									} else {
-										setPrimaryButtonText(t("chat:approve.title"))
-										setSecondaryButtonText(t("chat:reject.title"))
-									}
-									break
-								default:
-									setPrimaryButtonText(t("chat:approve.title"))
-									setSecondaryButtonText(t("chat:reject.title"))
-									break
+										break
+								}
 							}
 							break
+						}
 						case "command": {
 							const isExecuting = !!lastMessage?.text?.includes(COMMAND_OUTPUT_STRING)
-							setSendingDisabled(isPartial)
+							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("command")
 							if (isExecuting) {
 								setEnableButtons(true)
 								setPrimaryButtonText(undefined)
 								setSecondaryButtonText(t("chat:cancel.title"))
+							} else if (isEvaluating) {
+								setEnableButtons(false)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(undefined)
 							} else {
 								setEnableButtons(!isPartial)
 								setPrimaryButtonText(t("chat:runCommand.title"))
@@ -389,13 +403,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							setPrimaryButtonText(t("chat:proceedWhileRunning.title"))
 							setSecondaryButtonText(t("chat:killCommand.title"))
 							break
-						case "use_mcp_server":
-							setSendingDisabled(isPartial)
+						case "use_mcp_server": {
+							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("use_mcp_server")
-							setEnableButtons(!isPartial)
-							setPrimaryButtonText(t("chat:approve.title"))
-							setSecondaryButtonText(t("chat:reject.title"))
+							if (isEvaluating) {
+								setEnableButtons(false)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(undefined)
+							} else {
+								setEnableButtons(!isPartial)
+								setPrimaryButtonText(t("chat:approve.title"))
+								setSecondaryButtonText(t("chat:reject.title"))
+							}
 							break
+						}
 						case "completion_result":
 							// Extension waiting for feedback, but we can just present a new task button.
 							// Only play celebration sound if there are no queued messages.
@@ -460,7 +482,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					break
 			}
 		}
-	}, [lastMessage, secondLastMessage])
+	}, [lastMessage, secondLastMessage, approvalMode])
 
 	useEffect(() => {
 		if (messages.length === 0) {
