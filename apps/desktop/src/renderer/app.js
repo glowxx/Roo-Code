@@ -678,6 +678,7 @@
 
 	async function switchChat(taskId, wsPath) {
 		if (!taskId) return
+		if (taskId === activeTaskId) return
 		activeTaskId = taskId
 		renderSidebar()
 
@@ -782,7 +783,7 @@
 				}
 			}
 
-			const isExpanded = projectExpansions.has(ws) || (isActive && projectExpansions.size <= 1)
+			const isExpanded = projectExpansions.has(ws)
 
 			let chatsHtml = ""
 			if (chats.length > 0) {

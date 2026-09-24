@@ -58,6 +58,9 @@ export const MAX_IMAGES_PER_MESSAGE = 20 // This is the Anthropic limit.
 
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0
 
+const VirtuosoFooter = () => <div className="h-6 w-full shrink-0" />
+const virtuosoComponents = { Footer: VirtuosoFooter }
+
 const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewProps> = (
 	{ isHidden, showAnnouncement, hideAnnouncement },
 	ref,
@@ -1738,6 +1741,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							increaseViewportBy={{ top: 800, bottom: 400 }}
 							data={groupedMessages}
 							itemContent={itemContent}
+							components={virtuosoComponents}
 							followOutput={followOutputCallback}
 							atBottomStateChange={atBottomStateChangeCallback}
 							atBottomThreshold={10}
