@@ -197,7 +197,7 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 			provider = this.sidebarProvider
 		}
 
-		await provider.removeClineFromStack()
+		await provider.clearTask()
 		await provider.postStateToWebview()
 		await provider.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
 		await provider.postMessageToWebview({ type: "invoke", invoke: "newChat", text, images })

@@ -129,6 +129,8 @@ export class ClineProvider
 	private webviewDisposables: vscode.Disposable[] = []
 	private view?: vscode.WebviewView | vscode.WebviewPanel
 	private clineStack: Task[] = []
+	public readonly runningTasks: Map<string, Task> = new Map()
+	public foregroundTaskId?: string
 	private codeIndexStatusSubscription?: vscode.Disposable
 	private codeIndexManager?: CodeIndexManager
 	private _workspaceTracker?: WorkspaceTracker // workSpaceTracker read-only for access outside this class
@@ -378,9 +380,10 @@ export class ClineProvider
 	// When the task is completed, the top instance is removed, reactivating the
 	// previous task.
 	async addClineToStack(task: Task) {
-		// Add this cline instance into the stack that represents the order of
-		// all the called tasks.
+		// Add this cline instance into the stack and running registry
 		this.clineStack.push(task)
+		this.runningTasks.set(task.taskId, task)
+		this.foregroundTaskId = task.taskId
 		task.emit(RooCodeEventName.TaskFocused)
 
 		// Perform special setup provider specific tasks.
@@ -423,6 +426,11 @@ export class ClineProvider
 		let task = this.clineStack.pop()
 
 		if (task) {
+			this.runningTasks.delete(task.taskId)
+			if (this.foregroundTaskId === task.taskId) {
+				this.foregroundTaskId = this.clineStack[this.clineStack.length - 1]?.taskId
+			}
+
 			// Capture delegation metadata before abort/dispose, since abortTask(true)
 			// is async and the task reference is cleared afterwards.
 			const childTaskId = task.taskId
@@ -872,7 +880,10 @@ export class ClineProvider
 		const isRehydratingCurrentTask = currentTask && currentTask.taskId === historyItem.id
 
 		if (!isRehydratingCurrentTask) {
-			await this.removeClineFromStack()
+			const current = this.getCurrentTask()
+			if (current) {
+				current.emit(RooCodeEventName.TaskUnfocused)
+			}
 		}
 
 		// If the history item has a saved mode, restore it and its associated API configuration.
@@ -1728,10 +1739,27 @@ export class ClineProvider
 	}
 
 	async showTaskWithId(id: string) {
+		if (this.runningTasks.has(id)) {
+			const prevTask = this.getCurrentTask()
+			if (prevTask && prevTask.taskId !== id) {
+				prevTask.emit(RooCodeEventName.TaskUnfocused)
+			}
+			this.foregroundTaskId = id
+			const activeTask = this.runningTasks.get(id)!
+			activeTask.emit(RooCodeEventName.TaskFocused)
+			await this.postStateToWebview()
+			await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
+			return
+		}
+
 		if (id !== this.getCurrentTask()?.taskId) {
-			// Non-current task.
+			const prevTask = this.getCurrentTask()
+			if (prevTask) {
+				prevTask.emit(RooCodeEventName.TaskUnfocused)
+			}
 			const { historyItem } = await this.getTaskWithId(id)
-			await this.createTaskWithHistoryItem(historyItem) // Clears existing task.
+			await this.createTaskWithHistoryItem(historyItem)
+			this.foregroundTaskId = id
 		}
 
 		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
@@ -2609,6 +2637,10 @@ export class ClineProvider
 	 */
 
 	public getCurrentTask(): Task | undefined {
+		if (this.foregroundTaskId && this.runningTasks.has(this.foregroundTaskId)) {
+			return this.runningTasks.get(this.foregroundTaskId)
+		}
+
 		if (this.clineStack.length === 0) {
 			return undefined
 		}
@@ -2717,12 +2749,11 @@ export class ClineProvider
 		const { apiConfiguration, organizationAllowList, enableCheckpoints, checkpointTimeout, experiments } =
 			await this.getState()
 
-		// Single-open-task invariant: always enforce for user-initiated top-level tasks
+		// Multi-task concurrency: top-level tasks run concurrently without killing previous tasks
 		if (!parentTask) {
-			try {
-				await this.removeClineFromStack()
-			} catch {
-				// Non-fatal
+			const prevTask = this.getCurrentTask()
+			if (prevTask) {
+				prevTask.emit(RooCodeEventName.TaskUnfocused)
 			}
 		}
 
@@ -2760,14 +2791,21 @@ export class ClineProvider
 		return task
 	}
 
-	public async cancelTask(): Promise<void> {
-		const task = this.getCurrentTask()
+	public async cancelTask(targetTaskId?: string): Promise<void> {
+		const task = targetTaskId
+			? this.runningTasks.get(targetTaskId) || this.getCurrentTask()
+			: this.getCurrentTask()
 
 		if (!task) {
 			return
 		}
 
 		console.log(`[cancelTask] cancelling task ${task.taskId}.${task.instanceId}`)
+		const wasForeground = !this.foregroundTaskId || this.foregroundTaskId === task.taskId
+		this.runningTasks.delete(task.taskId)
+		if (this.foregroundTaskId === task.taskId) {
+			this.foregroundTaskId = this.clineStack.find((t) => t.taskId !== task.taskId)?.taskId
+		}
 
 		let historyItem: HistoryItem | undefined
 		try {
@@ -2841,22 +2879,21 @@ export class ClineProvider
 			}
 		}
 
-		if (!historyItem) {
+		if (!historyItem || !wasForeground) {
 			return
 		}
 
-		// Clears task again, so we need to abortTask manually above.
 		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask })
 	}
 
-	// Clear the current task without treating it as a subtask.
-	// This is used when the user cancels a task that is not a subtask.
+	// Clear the current active task view in the UI without aborting background tasks.
 	public async clearTask(): Promise<void> {
-		if (this.clineStack.length > 0) {
-			const task = this.clineStack[this.clineStack.length - 1]
-			console.log(`[clearTask] clearing task ${task.taskId}.${task.instanceId}`)
-			await this.removeClineFromStack()
+		const current = this.getCurrentTask()
+		if (current) {
+			current.emit(RooCodeEventName.TaskUnfocused)
 		}
+		this.foregroundTaskId = undefined
+		await this.postStateToWebview()
 	}
 
 	public resumeTask(taskId: string): void {

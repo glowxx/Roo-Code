@@ -1254,9 +1254,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private async addToClineMessages(message: ClineMessage) {
 		this.clineMessages.push(message)
 		const provider = this.providerRef.deref()
-		// Avoid resending large, mostly-static fields (notably taskHistory) on every chat message update.
-		// taskHistory is maintained in-memory in the webview and updated via taskHistoryItemUpdated.
-		await provider?.postStateToWebviewWithoutTaskHistory()
+		const isForeground =
+			!provider ||
+			!("foregroundTaskId" in provider) ||
+			(provider as any).foregroundTaskId === undefined ||
+			(provider as any).foregroundTaskId === this.taskId
+		if (isForeground) {
+			// Avoid resending large, mostly-static fields (notably taskHistory) on every chat message update.
+			// taskHistory is maintained in-memory in the webview and updated via taskHistoryItemUpdated.
+			await provider?.postStateToWebviewWithoutTaskHistory()
+		}
 		this.emit(RooCodeEventName.Message, { action: "created", message })
 		await this.saveClineMessages()
 	}
@@ -1269,7 +1276,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	private async updateClineMessage(message: ClineMessage) {
 		const provider = this.providerRef.deref()
-		await provider?.postMessageToWebview({ type: "messageUpdated", clineMessage: message })
+		const isForeground =
+			!provider ||
+			!("foregroundTaskId" in provider) ||
+			(provider as any).foregroundTaskId === undefined ||
+			(provider as any).foregroundTaskId === this.taskId
+		if (isForeground) {
+			await provider?.postMessageToWebview({ type: "messageUpdated", clineMessage: message })
+		}
 		this.emit(RooCodeEventName.Message, { action: "updated", message })
 	}
 
