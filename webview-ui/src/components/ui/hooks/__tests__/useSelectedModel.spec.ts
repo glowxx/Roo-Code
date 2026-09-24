@@ -978,5 +978,98 @@ describe("useSelectedModel", () => {
 
 			expect(result.current.info?.contextWindow).toBe(500000)
 		})
+
+		it("should resolve 1,000,000 context window and 65,536 max tokens for qwen/qwen3.8-max:free via live provider metadata", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "qwen/qwen3.8-max:free",
+			}
+			const openAiModelInfos: Record<string, ModelInfo> = {
+				"qwen/qwen3.8-max:free": {
+					contextWindow: 1_000_000,
+					maxTokens: 65_536,
+					inputPrice: 0,
+					outputPrice: 0,
+					supportsImages: true,
+					supportsPromptCache: true,
+					supportsReasoningEffort: true,
+					isFree: true,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration, openAiModelInfos), { wrapper })
+
+			expect(result.current.provider).toBe("xkiro")
+			expect(result.current.id).toBe("qwen/qwen3.8-max:free")
+			expect(result.current.info?.contextWindow).toBe(1_000_000)
+			expect(result.current.info?.maxTokens).toBe(65_536)
+			expect(result.current.info?.isFree).toBe(true)
+			expect(result.current.info?.inputPrice).toBe(0)
+			expect(result.current.info?.outputPrice).toBe(0)
+		})
+
+		it("should resolve qwen/qwen3.8-max:free by falling back to base qwen/qwen3.8-max via tag stripping", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "qwen/qwen3.8-max:free",
+			}
+			const openAiModelInfos: Record<string, ModelInfo> = {
+				"qwen/qwen3.8-max": {
+					contextWindow: 1_000_000,
+					maxTokens: 65_536,
+					inputPrice: 1.2,
+					outputPrice: 3.6,
+					supportsImages: true,
+					supportsPromptCache: true,
+					supportsReasoningEffort: true,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration, openAiModelInfos), { wrapper })
+
+			expect(result.current.info?.contextWindow).toBe(1_000_000)
+			expect(result.current.info?.maxTokens).toBe(65_536)
+			expect(result.current.info?.isFree).toBe(true)
+			expect(result.current.info?.inputPrice).toBe(0)
+			expect(result.current.info?.outputPrice).toBe(0)
+		})
+
+		it("should resolve 2,000,000 context for future unknown provider models reporting 2M", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "future-vendor/future-2m-model",
+			}
+			const openAiModelInfos: Record<string, ModelInfo> = {
+				"future-vendor/future-2m-model": {
+					contextWindow: 2_000_000,
+					maxTokens: 131_072,
+					inputPrice: 2.0,
+					outputPrice: 8.0,
+					supportsImages: true,
+					supportsPromptCache: true,
+				},
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration, openAiModelInfos), { wrapper })
+
+			expect(result.current.info?.contextWindow).toBe(2_000_000)
+			expect(result.current.info?.maxTokens).toBe(131_072)
+		})
+
+		it("should dynamically resolve 1,000,000 context for Qwen 3.x models without live metadata", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "xkiro",
+				xkiroModelId: "qwen/qwen3.8-max:free",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.info?.contextWindow).toBe(1_000_000)
+			expect(result.current.info?.isFree).toBe(true)
+		})
 	})
 })

@@ -1,3 +1,4 @@
+import { useContext } from "react"
 import {
 	type ProviderName,
 	type ProviderSettings,
@@ -35,8 +36,10 @@ import {
 	getModelContextWindow,
 	modelSupportsReasoning,
 	getOpenAiModelInfo,
+	stripModelTag,
 } from "@roo-code/types"
 
+import { ExtensionStateContext } from "@src/context/ExtensionStateContext"
 import { useRouterModels } from "./useRouterModels"
 import { useOpenRouterModelProviders } from "./useOpenRouterModelProviders"
 import { useLmStudioModels } from "./useLmStudioModels"
@@ -58,6 +61,9 @@ export const useSelectedModel = (
 	apiConfiguration?: ProviderSettings,
 	openAiModelInfos?: Record<string, ModelInfo>,
 ) => {
+	const extensionState = useContext(ExtensionStateContext)
+	const effectiveOpenAiModelInfos = openAiModelInfos ?? extensionState?.openAiModelInfos
+
 	const provider = apiConfiguration?.apiProvider || "openrouter"
 	const activeProvider: ProviderName | undefined = isRetiredProvider(provider) ? undefined : provider
 	const dynamicProvider = activeProvider && isDynamicProvider(activeProvider) ? activeProvider : undefined
@@ -105,7 +111,7 @@ export const useSelectedModel = (
 					openRouterModelProviders: (openRouterModelProviders.data || {}) as Record<string, ModelInfo>,
 					lmStudioModels: (lmStudioModels.data || undefined) as ModelRecord | undefined,
 					ollamaModels: (ollamaModels.data || undefined) as ModelRecord | undefined,
-					openAiModelInfos,
+					openAiModelInfos: effectiveOpenAiModelInfos,
 				})
 			: { id: getProviderDefaultModelId(activeProvider ?? "openrouter"), info: undefined }
 
@@ -285,25 +291,42 @@ function getSelectedModel({
 		}
 		case "openai": {
 			const id = apiConfiguration.openAiModelId ?? ""
-			const liveInfo = openAiModelInfos?.[id]
-			const info = liveInfo ?? getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo)
-			const contextWindow = getModelContextWindow(id, info?.contextWindow)
+			const strippedId = stripModelTag(id)
+			const liveInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]
+			const customOverride =
+				(apiConfiguration as any).customContextWindow || (apiConfiguration as any).openAiCustomContextWindow
+			const info = liveInfo ?? getOpenAiModelInfo(id, apiConfiguration?.openAiCustomModelInfo, liveInfo)
+			const baseContext = customOverride || liveInfo?.contextWindow || info?.contextWindow
+			const contextWindow = customOverride ? customOverride : getModelContextWindow(id, baseContext)
 			return { id, info: info ? { ...info, contextWindow } : info }
 		}
 		case "xkiro": {
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
-			const predefinedInfo = (xkiroModels as Record<string, ModelInfo>)[id]
-			const liveInfo = openAiModelInfos?.[id]
-			const customOverride = (apiConfiguration as any).xkiroCustomContextWindow || (apiConfiguration as any).customContextWindow
-			const userCustomInfo = (apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo
-			const baseInfo = userCustomInfo ?? liveInfo ?? predefinedInfo ?? {
+			const strippedId = stripModelTag(id)
+			const predefinedInfo =
+				(xkiroModels as Record<string, ModelInfo>)[id] ||
+				(xkiroModels as Record<string, ModelInfo>)[strippedId]
+			const liveInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]
+			const customOverride =
+				(apiConfiguration as any).xkiroCustomContextWindow || (apiConfiguration as any).customContextWindow
+			const userCustomInfo =
+				(apiConfiguration as any).xkiroCustomModelInfo ?? apiConfiguration?.openAiCustomModelInfo
+
+			// Hierarchical source of truth:
+			// 1. Explicit user context override
+			// 2. Live provider metadata (from /models)
+			// 3. Predefined catalog info (e.g. xkiroModels with known context windows like 400k for gpt-5)
+			// 4. User custom info (for unknown/custom models)
+			// 5. Dynamic fallback
+			const baseInfo = liveInfo ?? predefinedInfo ?? userCustomInfo ?? {
 				maxTokens: 8192,
 				contextWindow: getModelContextWindow(id),
 				supportsImages: true,
 				supportsPromptCache: true,
 				description: `xKiro model: ${id}`,
 			}
-			const baseContext = customOverride || liveInfo?.contextWindow || baseInfo.contextWindow
+			const baseContext =
+				customOverride || liveInfo?.contextWindow || predefinedInfo?.contextWindow || userCustomInfo?.contextWindow
 			const contextWindow = customOverride ? customOverride : getModelContextWindow(id, baseContext)
 			const supportsReasoningEffort =
 				baseInfo.supportsReasoningEffort ??
@@ -319,21 +342,32 @@ function getSelectedModel({
 			let cacheReadsPrice = baseInfo.cacheReadsPrice
 			let cacheWritesPrice = baseInfo.cacheWritesPrice
 
-			if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
+			if (id.toLowerCase().endsWith(":free")) {
+				inputPrice = 0
+				outputPrice = 0
+				cacheReadsPrice = 0
+				cacheWritesPrice = 0
+			} else if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
 				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
 				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
 				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
 				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
 			}
 
+			const isFree = id.toLowerCase().endsWith(":free") || (inputPrice === 0 && outputPrice === 0)
+
+			const maxTokens = liveInfo?.maxTokens ?? predefinedInfo?.maxTokens ?? baseInfo.maxTokens ?? 8192
+
 			const info: ModelInfo = {
 				...baseInfo,
+				maxTokens,
 				contextWindow,
 				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
 				...(inputPrice !== undefined ? { inputPrice } : {}),
 				...(outputPrice !== undefined ? { outputPrice } : {}),
 				...(cacheReadsPrice !== undefined ? { cacheReadsPrice } : {}),
 				...(cacheWritesPrice !== undefined ? { cacheWritesPrice } : {}),
+				...(isFree ? { isFree: true } : {}),
 			}
 			return { id, info }
 		}

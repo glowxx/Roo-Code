@@ -1,7 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 
-import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, getModelContextWindow, modelSupportsReasoning } from "@roo-code/types"
+import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, getModelContextWindow, modelSupportsReasoning, stripModelTag } from "@roo-code/types"
 
 import { ApiStream } from "./transform/stream"
 
@@ -137,49 +137,85 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 		case "xkiro": {
 			const xkiroModelId =
 				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
-			const defaultInfo = (xkiroModels as Record<string, ModelInfo>)[xkiroModelId]
+			const strippedModelId = stripModelTag(xkiroModelId)
+			const defaultInfo =
+				(xkiroModels as Record<string, ModelInfo>)[xkiroModelId] ||
+				(xkiroModels as Record<string, ModelInfo>)[strippedModelId]
 			const cachedApiInfo = getCachedOpenAiModelInfo(xkiroModelId)
-			const customInfo =
-				(options as any).xkiroCustomModelInfo || options.openAiCustomModelInfo || cachedApiInfo || defaultInfo
+			const explicitCustomInfo = (options as any).xkiroCustomModelInfo || options.openAiCustomModelInfo
 			const customContextWindow =
 				(options as any).xkiroCustomContextWindow || (options as any).customContextWindow
-			const baseContext = customContextWindow || customInfo?.contextWindow
+
+			// Hierarchical source of truth:
+			// 1. Explicit user context override
+			// 2. Live provider metadata from /models cache (cachedApiInfo)
+			// 3. Predefined xkiroModels catalog (defaultInfo)
+			// 4. Custom model info (explicitCustomInfo)
+			const effectiveInfo = cachedApiInfo || defaultInfo || explicitCustomInfo
+
+			const baseContext =
+				customContextWindow ||
+				cachedApiInfo?.contextWindow ||
+				defaultInfo?.contextWindow ||
+				explicitCustomInfo?.contextWindow
+
 			const contextWindow = customContextWindow
 				? customContextWindow
 				: getModelContextWindow(xkiroModelId, baseContext)
+
 			const supportsReasoningEffort =
-				customInfo?.supportsReasoningEffort ??
-				(modelSupportsReasoning(xkiroModelId, customInfo) ? true : undefined)
+				effectiveInfo?.supportsReasoningEffort ??
+				(modelSupportsReasoning(xkiroModelId, effectiveInfo) ? true : undefined)
+
 			const discountMultiplier =
 				typeof (options as any).xkiroDiscountMultiplier === "number"
 					? (options as any).xkiroDiscountMultiplier
 					: undefined
 
-			let inputPrice = customInfo?.inputPrice
-			let outputPrice = customInfo?.outputPrice
-			let cacheReadsPrice = customInfo?.cacheReadsPrice
-			let cacheWritesPrice = customInfo?.cacheWritesPrice
+			let inputPrice = effectiveInfo?.inputPrice
+			let outputPrice = effectiveInfo?.outputPrice
+			let cacheReadsPrice = effectiveInfo?.cacheReadsPrice
+			let cacheWritesPrice = effectiveInfo?.cacheWritesPrice
 
-			if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
+			if (xkiroModelId.toLowerCase().endsWith(":free")) {
+				inputPrice = 0
+				outputPrice = 0
+				cacheReadsPrice = 0
+				cacheWritesPrice = 0
+			} else if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
 				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
 				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
 				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
 				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
 			}
 
+			const isFree = xkiroModelId.toLowerCase().endsWith(":free") || (inputPrice === 0 && outputPrice === 0)
+
+			const maxTokens =
+				cachedApiInfo?.maxTokens ??
+				defaultInfo?.maxTokens ??
+				explicitCustomInfo?.maxTokens ??
+				8192
+
 			const modelInfo: ModelInfo = {
-				...(customInfo || {
-					maxTokens: 8192,
+				...(effectiveInfo || {
 					supportsImages: true,
 					supportsPromptCache: true,
 				}),
+				maxTokens,
 				contextWindow,
 				...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
 				...(inputPrice !== undefined ? { inputPrice } : {}),
 				...(outputPrice !== undefined ? { outputPrice } : {}),
 				...(cacheReadsPrice !== undefined ? { cacheReadsPrice } : {}),
 				...(cacheWritesPrice !== undefined ? { cacheWritesPrice } : {}),
+				...(isFree ? { isFree: true } : {}),
 			}
+
+			console.log(
+				`[ModelMetadataAudit] xKiro handler built: model="${xkiroModelId}", contextWindow=${contextWindow}, maxTokens=${maxTokens}, source=${cachedApiInfo ? "cached_provider_api" : defaultInfo ? "xkiro_catalog" : "custom_override"}`,
+			)
+
 			return new OpenAiHandler({
 				...options,
 				openAiBaseUrl: (options as any).xkiroBaseUrl || options.openAiBaseUrl || "https://api.xkiro.com/v1",

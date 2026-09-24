@@ -10,6 +10,7 @@
  */
 
 import i18n from "../../../i18n/setup"
+import { extractHttpStatusCode, extractRetryAfterSeconds } from "./error-classifier"
 
 /**
  * Handles API provider errors and transforms them into user-friendly messages
@@ -75,8 +76,16 @@ export function handleProviderError(
 		// Preserve HTTP status and structured details for retry/backoff + UI
 		// These fields are used by Task.backoffAndAnnounce() and ChatRow/ErrorRow
 		// to provide status-aware error messages and handling
-		if (anyErr.status !== undefined) {
-			;(wrapped as any).status = anyErr.status
+		const extractedStatus = extractHttpStatusCode(error)
+		if (extractedStatus !== undefined) {
+			;(wrapped as any).status = extractedStatus
+		}
+		const retryAfter = extractRetryAfterSeconds(error)
+		if (retryAfter !== undefined) {
+			;(wrapped as any).retryAfter = retryAfter
+		}
+		if (anyErr.headers !== undefined) {
+			;(wrapped as any).headers = anyErr.headers
 		}
 		if (anyErr.errorDetails !== undefined) {
 			;(wrapped as any).errorDetails = anyErr.errorDetails
@@ -97,9 +106,17 @@ export function handleProviderError(
 	const wrapped = new Error(`${providerName} ${messagePrefix} error: ${String(error)}`)
 
 	// Also try to preserve status for non-Error exceptions (e.g., plain objects with status)
+	const extractedStatus = extractHttpStatusCode(error)
+	if (extractedStatus !== undefined) {
+		;(wrapped as any).status = extractedStatus
+	}
+	const retryAfter = extractRetryAfterSeconds(error)
+	if (retryAfter !== undefined) {
+		;(wrapped as any).retryAfter = retryAfter
+	}
 	const anyErr = error as any
-	if (typeof anyErr?.status === "number") {
-		;(wrapped as any).status = anyErr.status
+	if (anyErr?.headers !== undefined) {
+		;(wrapped as any).headers = anyErr.headers
 	}
 
 	return wrapped

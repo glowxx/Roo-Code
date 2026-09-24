@@ -113,7 +113,12 @@ export const OpenAICompatible = ({
 		switch (message.type) {
 			case "openAiModels": {
 				const updatedModels = message.openAiModels ?? []
-				setOpenAiModels(Object.fromEntries(updatedModels.map((item) => [item, openAiModelInfoSaneDefaults])))
+				const modelInfos = message.openAiModelInfos ?? {}
+				setOpenAiModels(
+					Object.fromEntries(
+						updatedModels.map((item) => [item, modelInfos[item] ?? openAiModelInfoSaneDefaults]),
+					),
+				)
 				break
 			}
 		}

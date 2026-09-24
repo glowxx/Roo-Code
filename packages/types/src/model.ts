@@ -178,16 +178,26 @@ export const costPrecisionSchema = z.enum(costPrecisions)
 export type CostPrecision = z.infer<typeof costPrecisionSchema>
 
 /**
+ * Strips provider/variant tags from a model ID (e.g. :free, :online, :beta, :extended)
+ * to allow fallback matching against canonical or base provider metadata.
+ */
+export function stripModelTag(modelId: string): string {
+	if (!modelId) return ""
+	return modelId.replace(/:(?:free|beta|preview|online|extended|nitro|floor|latest|[a-zA-Z0-9_-]+)$/i, "")
+}
+
+/**
  * Calculates the context window for a given model ID with a deterministic hierarchy
  * for modern model families, respecting base context or provider overrides.
  *
  * Hierarchy:
  * 1. Claude / Anthropic family:
  *    - Always 200,000 tokens (claude, anthropic, sonnet, opus, haiku regardless of version 3.5, 3.7, 4, 5).
+ *    - Explicit 1m variant allows 1,000,000.
  *    - Provider / router baseContext > 200k cannot inflate Claude context window (explicit custom override takes precedence outside).
  * 2. 1M+ models (explicit patterns and known families):
  *    - Explicit '2m' pattern or Gemini 2M pro variants (1.5-pro, 2.0-pro, 3.0-pro, not flash/2.5) -> 2,000,000.
- *    - Explicit '1m' pattern, 'astra', 'gpt-6' or Gemini family (1.5, 2.0, 2.5, 3.0) -> 1,000,000.
+ *    - Explicit '1m' pattern, 'astra', 'gpt-6', Gemini family, or modern Qwen 1M series (3.x, max, plus, turbo, omni) -> 1,000,000.
  * 3. 512k explicit pattern -> 524,288.
  * 4. OpenAI o-series & GPT family:
  *    - o1, o3, o4, gpt-5 -> 200,000 (provider metadata > 200k like 400k takes precedence).
@@ -199,7 +209,7 @@ export type CostPrecision = z.infer<typeof costPrecisionSchema>
  *
  * Provider metadata / baseContext hierarchy:
  * - If baseContext is a valid number > 0:
- *   - For Claude: strictly 200,000 (never inflated by router/provider metadata).
+ *   - For Claude: strictly 200,000 unless explicit 1m model (never inflated by router/provider metadata).
  *   - For DeepSeek: supports 64,000 if provided, otherwise defaults to 128,000 (or higher if valid).
  *   - Generic 128k default should never suppress higher family/flagship limits.
  *   - Provider metadata greater than the determined limit takes precedence (except Claude).
@@ -209,7 +219,7 @@ export type CostPrecision = z.infer<typeof costPrecisionSchema>
 export function getModelContextWindow(modelId: string, baseContext?: number): number {
 	const lower = (modelId || "").toLowerCase()
 
-	// 1. Claude / Anthropic family: ALWAYS 200,000
+	// 1. Claude / Anthropic family: ALWAYS 200,000 (unless explicit 1m pattern)
 	// Routers / providers reporting > 200k baseContext must not inflate Claude
 	const isClaude =
 		lower.includes("claude") ||
@@ -219,11 +229,14 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 		lower.includes("haiku")
 
 	if (isClaude) {
+		if (lower.includes("1m") || lower.includes("1-m")) {
+			return 1_000_000
+		}
 		return 200_000
 	}
 
-	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra, gpt-5.6, terra, sol, luna)
-	// or the Gemini family (gemini-1.5, gemini-2.5, gemini-3.0)
+	// 2. 1M+ models: exclusively models containing explicit patterns (1m, 2m, astra, gpt-6-astra, gpt-5.6, terra, sol, luna),
+	// the Gemini family (gemini-1.5, gemini-2.5, gemini-3.0), or modern Qwen 1M series (3.x, max, plus, turbo, omni)
 	const is2mPattern = lower.includes("2m") || /(?:^|[\/_\-.:])2m(?:[\/_\-.:]|$)/i.test(lower) || lower.includes("-2m") || lower.includes("_2m")
 	const isGpt56OrTerra =
 		lower.includes("gpt-5.6") ||
@@ -238,6 +251,14 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 		isGpt56OrTerra
 	const isAstraOrGpt6 = lower.includes("astra") || lower.includes("gpt-6")
 	const isGemini = lower.includes("gemini")
+	const isQwen1M =
+		lower.includes("qwen") &&
+		(lower.includes("3") ||
+			lower.includes("max") ||
+			lower.includes("plus") ||
+			lower.includes("turbo") ||
+			lower.includes("omni") ||
+			lower.includes("coder-32b"))
 
 	if (is2mPattern) {
 		const limit = 2_000_000
@@ -262,7 +283,7 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
 		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
 	}
 
-	if (is1mPattern || isAstraOrGpt6) {
+	if (is1mPattern || isAstraOrGpt6 || isQwen1M) {
 		const limit = 1_000_000
 		return typeof baseContext === "number" && baseContext > limit ? baseContext : limit
 	}

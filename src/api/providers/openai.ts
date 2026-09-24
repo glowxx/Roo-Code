@@ -9,6 +9,7 @@ import {
 	getOpenAiModelInfo,
 	getModelContextWindow,
 	modelSupportsReasoning,
+	stripModelTag,
 	DEEP_SEEK_DEFAULT_TEMPERATURE,
 	OPENAI_AZURE_AI_INFERENCE_PATH,
 } from "@roo-code/types"
@@ -110,7 +111,8 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			if (deepseekReasoner) {
 				convertedMessages = convertToR1Format([{ role: "user", content: systemPrompt }, ...messages])
 			} else {
-				if (modelInfo.supportsPromptCache) {
+				const isOpenRouter = this.options.openAiBaseUrl?.includes("openrouter.ai")
+				if (isOpenRouter && modelInfo.supportsPromptCache) {
 					systemMessage = {
 						role: "system",
 						content: [
@@ -129,7 +131,6 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 				// Do not inject Anthropic cache_control headers for native OpenAI / xKiro endpoints.
 				// OpenAI uses automatic prefix caching; injecting and sliding ephemeral markers
 				// mutates historical messages across turns and causes prefix cache misses.
-				const isOpenRouter = this.options.openAiBaseUrl?.includes("openrouter.ai")
 				if (isOpenRouter && modelInfo.supportsPromptCache) {
 					// Note: the following logic is copied from openrouter:
 					// Add cache_control to the last two user messages
@@ -196,36 +197,40 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			let lastUsage
 			const activeToolCallIds = new Set<string>()
 
-			for await (const chunk of stream) {
-				const delta = chunk.choices?.[0]?.delta ?? {}
-				const finishReason = chunk.choices?.[0]?.finish_reason
+			try {
+				for await (const chunk of stream) {
+					const delta = chunk.choices?.[0]?.delta ?? {}
+					const finishReason = chunk.choices?.[0]?.finish_reason
 
-				if (delta.content) {
-					for (const chunk of matcher.update(delta.content)) {
-						yield chunk
+					if (delta.content) {
+						for (const chunk of matcher.update(delta.content)) {
+							yield chunk
+						}
+					}
+
+					if ("reasoning_content" in delta && delta.reasoning_content) {
+						yield {
+							type: "reasoning",
+							text: (delta.reasoning_content as string | undefined) || "",
+						}
+					}
+
+					yield* this.processToolCalls(delta, finishReason, activeToolCallIds)
+
+					if (chunk.usage) {
+						lastUsage = chunk.usage
 					}
 				}
 
-				if ("reasoning_content" in delta && delta.reasoning_content) {
-					yield {
-						type: "reasoning",
-						text: (delta.reasoning_content as string | undefined) || "",
-					}
+				for (const chunk of matcher.final()) {
+					yield chunk
 				}
 
-				yield* this.processToolCalls(delta, finishReason, activeToolCallIds)
-
-				if (chunk.usage) {
-					lastUsage = chunk.usage
+				if (lastUsage) {
+					yield this.processUsageMetrics(lastUsage, modelInfo)
 				}
-			}
-
-			for (const chunk of matcher.final()) {
-				yield chunk
-			}
-
-			if (lastUsage) {
-				yield this.processUsageMetrics(lastUsage, modelInfo)
+			} catch (error) {
+				throw handleOpenAIError(error, this.providerName)
 			}
 		} else {
 			const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
@@ -319,11 +324,24 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 	override getModel() {
 		const id = this.options.openAiModelId ?? ""
 		const cachedInfo = getCachedOpenAiModelInfo(id)
-		const customInfo =
+		const rawCustomInfo =
 			this.options.openAiCustomModelInfo && Object.keys(this.options.openAiCustomModelInfo).length > 0
 				? this.options.openAiCustomModelInfo
-				: cachedInfo
-		const info: ModelInfo = getOpenAiModelInfo(id, customInfo)
+				: undefined
+
+		// Prioritize live provider metadata from /models endpoint over stale/synthetic custom info
+		const baseInfo = cachedInfo ?? rawCustomInfo
+		const customContext = (this.options as any).customContextWindow || (this.options as any).xkiroCustomContextWindow
+		const info: ModelInfo = getOpenAiModelInfo(id, baseInfo, cachedInfo)
+
+		if (customContext && typeof customContext === "number" && customContext > 0) {
+			info.contextWindow = customContext
+		}
+
+		console.log(
+			`[ModelMetadataAudit] OpenAiHandler.getModel resolved: id="${id}", contextWindow=${info.contextWindow}, maxTokens=${info.maxTokens}, source=${cachedInfo ? "cached_provider_api" : rawCustomInfo ? "custom_info" : "fallback_defaults"}`,
+		)
+
 		const params = getModelParams({
 			format: "openai",
 			modelId: id,
@@ -712,7 +730,28 @@ export function sortOpenAiModels(models: string[]): string[] {
 export const openAiModelInfoCache = new Map<string, ModelInfo>()
 
 export function getCachedOpenAiModelInfo(modelId: string): ModelInfo | undefined {
-	return openAiModelInfoCache.get(modelId)
+	if (!modelId) return undefined
+	const direct = openAiModelInfoCache.get(modelId)
+	if (direct) return direct
+
+	const stripped = stripModelTag(modelId)
+	if (stripped && stripped !== modelId) {
+		const strippedInfo = openAiModelInfoCache.get(stripped)
+		if (strippedInfo) {
+			if (modelId.toLowerCase().endsWith(":free")) {
+				return {
+					...strippedInfo,
+					inputPrice: 0,
+					outputPrice: 0,
+					cacheReadsPrice: 0,
+					cacheWritesPrice: 0,
+					isFree: true,
+				}
+			}
+			return strippedInfo
+		}
+	}
+	return undefined
 }
 
 export function initializeOpenAiModelInfoCache(cachedInfos: Record<string, ModelInfo>): void {

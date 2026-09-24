@@ -150,6 +150,7 @@ import { AutoApprovalHandler, checkAutoApproval, type CheckAutoApprovalResult } 
 import { MessageManager } from "../message-manager"
 import { validateAndFixToolResultIds } from "./validateToolResultIds"
 import { mergeConsecutiveApiMessages } from "./mergeConsecutiveApiMessages"
+import { classifyApiError } from "../../api/providers/utils/error-classifier"
 
 const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
@@ -246,6 +247,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private consecutiveAttemptCompletionCount: number = 0
 	private lastCompletionResultText?: string
 	private approvalOrchestrator: ApprovalOrchestrator = new ApprovalOrchestrator()
+	private lastFailedRequestFingerprint?: string
+	private consecutiveIdenticalFailures: number = 0
 
 	/**
 	 * The API configuration name (provider profile) associated with this task.
@@ -2297,12 +2300,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			return contextTokens >= hardModelLimit
 		}
 
-		// Configurable economic soft cap (default: 200,000 tokens for massive 1M+ models)
+		// Configurable economic soft cap - only applied if explicitly configured by the user via environment variable
+		// Models with 1M+ context window operate at their native capacity (hardModelLimit) unless explicitly capped.
 		const customCap = process.env.ROO_MAX_WORKING_CONTEXT_TOKENS
 			? parseInt(process.env.ROO_MAX_WORKING_CONTEXT_TOKENS, 10)
-			: Task.DEFAULT_ECONOMIC_CONTEXT_CAP
+			: undefined
 
-		const capacityLimit = Math.min(hardModelLimit, customCap)
+		const capacityLimit = customCap ? Math.min(hardModelLimit, customCap) : hardModelLimit
 		if (contextTokens >= capacityLimit) {
 			return true
 		}
@@ -3654,18 +3658,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						modelId,
 					)
 
+					const effectiveInputTokens =
+						inputTokens > 0
+							? inputTokens
+							: (cancelReason === "streaming_failed" && this.currentAuditRecord?.estimatedInputTokens)
+								? this.currentAuditRecord.estimatedInputTokens
+								: 0
+
 					const costResult =
 						apiProtocol === "anthropic"
 							? calculateApiCostAnthropic(
 									streamModelInfo,
-									inputTokens,
+									effectiveInputTokens,
 									outputTokens,
 									cacheWriteTokens,
 									cacheReadTokens,
 								)
 							: calculateApiCostOpenAI(
 									streamModelInfo,
-									inputTokens,
+									effectiveInputTokens,
 									outputTokens,
 									cacheWriteTokens,
 									cacheReadTokens,
@@ -3681,7 +3692,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						finalCost = totalCost
 					} else {
 						finalCost = costResult.totalCost
-						if (
+						if (inputTokens === 0 && effectiveInputTokens > 0) {
+							costSource = "local-estimate"
+							precision = "estimated"
+						} else if (
 							(this.apiConfiguration as any).xkiroCustomModelInfo ||
 							this.apiConfiguration.openAiCustomModelInfo ||
 							(this.apiConfiguration as any).xkiroDiscountMultiplier !== undefined
@@ -4287,15 +4301,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								`[Task#${this.taskId}.${this.instanceId}] Stream failed, will retry: ${streamingFailedMessage}`,
 							)
 
+							const classification = classifyApiError(error)
 							const currentRetry = currentItem.retryAttempt ?? 0
-							if (currentRetry >= MAX_API_RETRIES) {
+							const maxAllowedRetries = Math.min(MAX_API_RETRIES, classification.maxRetries)
+
+							if (!classification.retryable || currentRetry >= maxAllowedRetries) {
 								console.error(
-									`[Task#${this.taskId}.${this.instanceId}] Max mid-stream retries (${MAX_API_RETRIES}) exceeded: ${streamingFailedMessage}`,
+									`[Task#${this.taskId}.${this.instanceId}] Max mid-stream retries (${maxAllowedRetries}) or deterministic failure (${classification.category}): ${streamingFailedMessage}`,
 								)
-								const { response } = await this.ask(
-									"api_req_failed",
-									`Max stream retries (${MAX_API_RETRIES}) exceeded: ${streamingFailedMessage}`,
-								)
+								const reasonText = !classification.retryable
+									? `Deterministic stream failure (${classification.category}): ${streamingFailedMessage}`
+									: `Max stream retries (${maxAllowedRetries}) exceeded: ${streamingFailedMessage}`
+								const { response } = await this.ask("api_req_failed", reasonText)
 								if (response !== "yesButtonClicked") {
 									this.abortReason = "streaming_failed"
 									await this.abortTask()
@@ -4311,7 +4328,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							}
 
 							// Apply exponential backoff similar to first-chunk errors
-							await this.backoffAndAnnounce(currentRetry, error)
+							await this.backoffAndAnnounce(currentRetry, error, classification.retryAfterSeconds)
 
 							// Check if task was aborted during the backoff
 							if (this.abort) {
@@ -5340,6 +5357,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			logTokenAudit(this.currentAuditRecord)
 		}
 
+		const currentFingerprint = this.calculateRequestFingerprint(
+			this.api.getModel().id,
+			systemPrompt,
+			cleanConversationHistory,
+			allTools,
+		)
+
 		// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
 		const stream = this.api.createMessage(
 			systemPrompt,
@@ -5379,7 +5403,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 			yield firstChunk.value
 			this.isWaitingForFirstChunk = false
-		} catch (error) {
+			this.consecutiveIdenticalFailures = 0
+			this.lastFailedRequestFingerprint = undefined
+		} catch (error: any) {
 			this.isWaitingForFirstChunk = false
 			this.currentRequestAbortController = undefined
 			if (isTokenAuditEnabled() && this.currentAuditRecord) {
@@ -5403,26 +5429,43 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				return
 			}
 
+			const classification = classifyApiError(error)
+			const maxAllowedRetries = Math.min(MAX_API_RETRIES, classification.maxRetries)
+
+			if (this.lastFailedRequestFingerprint === currentFingerprint) {
+				this.consecutiveIdenticalFailures++
+			} else {
+				this.lastFailedRequestFingerprint = currentFingerprint
+				this.consecutiveIdenticalFailures = 1
+			}
+
+			const isCircuitBroken = this.consecutiveIdenticalFailures > maxAllowedRetries
+
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (autoApprovalEnabled) {
-				if (retryAttempt >= MAX_API_RETRIES) {
+				if (!classification.retryable || isCircuitBroken || retryAttempt >= maxAllowedRetries) {
+					const reasonText = !classification.retryable
+						? `Deterministic API error (${classification.category}): ${error?.message || "Unknown error"}`
+						: isCircuitBroken
+							? `Circuit breaker: identical request failed consecutively (${error?.message || "Unknown error"}). Auto-retry stopped to prevent token waste.`
+							: `Max retries (${maxAllowedRetries}) exceeded: ${error?.message ?? JSON.stringify(serializeError(error), null, 2)}`
+
 					console.error(
-						`[Task#attemptApiRequest] Max retries (${MAX_API_RETRIES}) exceeded for task ${this.taskId}.${this.instanceId}. Error: ${error.message}`,
+						`[Task#attemptApiRequest] ${reasonText} for task ${this.taskId}.${this.instanceId}. Error: ${error?.message}`,
 					)
-					const { response } = await this.ask(
-						"api_req_failed",
-						`Max retries (${MAX_API_RETRIES}) exceeded: ${error.message ?? JSON.stringify(serializeError(error), null, 2)}`,
-					)
+					const { response } = await this.ask("api_req_failed", reasonText)
 					if (response !== "yesButtonClicked") {
-						throw new Error(`API request failed after ${MAX_API_RETRIES} retries: ${error.message}`)
+						throw new Error(`API request failed: ${reasonText}`)
 					}
 					await this.say("api_req_retried")
+					this.consecutiveIdenticalFailures = 0
+					this.lastFailedRequestFingerprint = undefined
 					yield* this.attemptApiRequest(0)
 					return
 				}
 
 				// Apply shared exponential backoff and countdown UX
-				await this.backoffAndAnnounce(retryAttempt, error)
+				await this.backoffAndAnnounce(retryAttempt, error, classification.retryAfterSeconds)
 
 				// CRITICAL: Check if task was aborted during the backoff countdown
 				// This prevents infinite loops when users cancel during auto-retry
@@ -5441,7 +5484,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			} else {
 				const { response } = await this.ask(
 					"api_req_failed",
-					error.message ?? JSON.stringify(serializeError(error), null, 2),
+					error?.message ?? JSON.stringify(serializeError(error), null, 2),
 				)
 
 				if (response !== "yesButtonClicked") {
@@ -5451,6 +5494,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 
 				await this.say("api_req_retried")
+				this.consecutiveIdenticalFailures = 0
+				this.lastFailedRequestFingerprint = undefined
 
 				// Delegate generator output from the recursive call.
 				yield* this.attemptApiRequest()
@@ -5469,8 +5514,25 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		yield* iterator
 	}
 
+	private calculateRequestFingerprint(
+		modelId: string,
+		systemPrompt: string,
+		messages: unknown[],
+		tools: unknown[],
+	): string {
+		const hash = crypto.createHash("sha256")
+		hash.update(modelId || "")
+		hash.update("::")
+		hash.update(systemPrompt || "")
+		hash.update("::")
+		hash.update(JSON.stringify(messages || []))
+		hash.update("::")
+		hash.update(JSON.stringify(tools || []))
+		return hash.digest("hex")
+	}
+
 	// Shared exponential backoff for retries (first-chunk and mid-stream)
-	private async backoffAndAnnounce(retryAttempt: number, error: any): Promise<void> {
+	private async backoffAndAnnounce(retryAttempt: number, error: any, overrideDelaySeconds?: number): Promise<void> {
 		try {
 			const state = await this.providerRef.deref()?.getState()
 			const baseDelay = state?.requestDelaySeconds || 5
@@ -5488,14 +5550,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				rateLimitDelay = Math.ceil(Math.min(rateLimit, Math.max(0, rateLimit * 1000 - elapsed) / 1000))
 			}
 
-			// Prefer RetryInfo on 429 if present
-			if (error?.status === 429) {
+			// Prefer explicit override, error.retryAfter, or RetryInfo on 429
+			if (typeof overrideDelaySeconds === "number" && overrideDelaySeconds > 0) {
+				exponentialDelay = overrideDelaySeconds + 1
+			} else if (error?.retryAfter && typeof error.retryAfter === "number") {
+				exponentialDelay = error.retryAfter + 1
+			} else if (error?.status === 429) {
 				const retryInfo = error?.errorDetails?.find(
 					(d: any) => d["@type"] === "type.googleapis.com/google.rpc.RetryInfo",
 				)
-				const match = retryInfo?.retryDelay?.match?.(/^(\d+)s$/)
+				const match = retryInfo?.retryDelay?.match?.(/^(\d+(?:\.\d+)?)s$/)
 				if (match) {
-					exponentialDelay = Number(match[1]) + 1
+					exponentialDelay = Math.ceil(Number(match[1])) + 1
 				}
 			}
 

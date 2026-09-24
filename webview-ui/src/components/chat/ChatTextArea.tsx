@@ -108,9 +108,10 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			enterBehavior,
 			lockApiConfigAcrossModes,
 			apiConfiguration,
+			openAiModelInfos,
 		} = useExtensionState()
 
-		const { id: modelId, info: model } = useSelectedModel(apiConfiguration)
+		const { id: modelId, info: model } = useSelectedModel(apiConfiguration, openAiModelInfos)
 		const customContextOverride =
 			(apiConfiguration as any)?.xkiroCustomContextWindow || (apiConfiguration as any)?.customContextWindow
 		const contextWindow = customContextOverride || model?.contextWindow || getModelContextWindow(modelId)

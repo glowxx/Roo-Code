@@ -1543,5 +1543,60 @@ describe("getOpenAiModels", () => {
 			})
 			expect(handlerWith128k.getModel().info.contextWindow).toBe(1_000_000)
 		})
+
+		it("should preserve system prompt as plain string for xKiro / non-OpenRouter endpoints even when supportsPromptCache is true", async () => {
+			const xkiroHandler = new OpenAiHandler({
+				openAiApiKey: "test-key",
+				openAiBaseUrl: "https://api.xkiro.com/v1",
+				openAiModelId: "qwen/qwen3.8-max:free",
+				openAiCustomModelInfo: {
+					contextWindow: 128_000,
+					supportsPromptCache: true,
+				},
+			})
+
+			const stream = xkiroHandler.createMessage("Test system instructions", [
+				{ role: "user", content: "Test user prompt" },
+			])
+
+			// Consume first chunk
+			await stream.next()
+
+			const createCalls = mockCreate.mock.calls
+			expect(createCalls.length).toBeGreaterThan(0)
+			const lastCallArgs = createCalls[createCalls.length - 1][0]
+			const systemMsg = lastCallArgs.messages.find((m: any) => m.role === "system")
+			expect(systemMsg).toBeDefined()
+			expect(typeof systemMsg.content).toBe("string")
+			expect(systemMsg.content).toBe("Test system instructions")
+			expect(Array.isArray(systemMsg.content)).toBe(false)
+		})
+
+		it("should wrap mid-stream iterator exceptions with handleOpenAIError", async () => {
+			mockCreate.mockImplementationOnce(async () => ({
+				[Symbol.asyncIterator]: async function* () {
+					yield {
+						choices: [{ delta: { content: "First part..." }, index: 0 }],
+					}
+					const err: any = new Error("A server error occurred. Please try again.")
+					err.status = 500
+					throw err
+				},
+			}))
+
+			const handler = new OpenAiHandler({
+				openAiApiKey: "test-key",
+				openAiBaseUrl: "https://api.xkiro.com/v1",
+				openAiModelId: "qwen/qwen3.8-max:free",
+			})
+
+			const stream = handler.createMessage("system", [{ role: "user", content: "hi" }])
+
+			await expect(async () => {
+				for await (const chunk of stream) {
+					// reading stream
+				}
+			}).rejects.toThrow(/OpenAI completion error: A server error occurred/)
+		})
 	})
 })

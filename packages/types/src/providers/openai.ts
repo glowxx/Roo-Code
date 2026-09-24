@@ -602,12 +602,19 @@ export const openAiModelInfoSaneDefaults: ModelInfo = {
 /**
  * Resolves ModelInfo for OpenAI-compatible providers, applying dynamic context window
  * detection and reasoning capability detection based on model ID and optional overrides.
+ * Prioritizes live provider metadata over synthetic defaults or unverified custom info.
  */
-export function getOpenAiModelInfo(modelId?: string, customInfo?: ModelInfo | null): ModelInfo {
-	const base = customInfo ?? openAiModelInfoSaneDefaults
+export function getOpenAiModelInfo(
+	modelId?: string,
+	customInfo?: ModelInfo | null,
+	liveInfo?: ModelInfo | null,
+): ModelInfo {
+	const base = liveInfo ?? customInfo ?? openAiModelInfoSaneDefaults
 	const id = modelId ?? ""
-	const contextWindow = getModelContextWindow(id, base.contextWindow)
-	const supportsReasoningEffort = base.supportsReasoningEffort ?? (modelSupportsReasoning(id, base) ? true : undefined)
+	const rawContext = liveInfo?.contextWindow ?? customInfo?.contextWindow ?? base.contextWindow
+	const contextWindow = getModelContextWindow(id, rawContext)
+	const supportsReasoningEffort =
+		base.supportsReasoningEffort ?? (modelSupportsReasoning(id, base) ? true : undefined)
 	return {
 		...base,
 		contextWindow,

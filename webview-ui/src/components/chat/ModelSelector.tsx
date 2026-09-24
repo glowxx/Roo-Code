@@ -10,6 +10,7 @@ import {
 	openAiModelInfoSaneDefaults,
 	cleanModelDisplayName,
 	formatModelDisplayName,
+	stripModelTag,
 } from "@roo-code/types"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -512,18 +513,20 @@ export const ModelSelector = ({
 										? "Vision"
 										: undefined
 
-						const dynamicContext = openAiModelInfos?.[id]?.contextWindow
+						const strippedId = stripModelTag(id)
+						const dynamicInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]
+						const dynamicContext = dynamicInfo?.contextWindow
 
 						result.push({
 							id,
-							name: cleanModelDisplayName(id, openAiModelInfos?.[id]),
+							name: cleanModelDisplayName(id, dynamicInfo),
 							contextWindow: getModelContextWindow(id, dynamicContext),
 							isReasoning,
 							isFast,
 							isCoder,
 							isVision,
 							badge,
-							modelInfo: openAiModelInfos?.[id],
+							modelInfo: dynamicInfo,
 						})
 					}
 				})
@@ -770,7 +773,8 @@ export const ModelSelector = ({
 				targetModelItem?.modelInfo ||
 				MODELS_BY_PROVIDER[provider]?.[modelId] ||
 				(provider === "openrouter" ? routerModels?.openrouter?.[modelId] : undefined) ||
-				openAiModelInfos?.[modelId]
+				openAiModelInfos?.[modelId] ||
+				openAiModelInfos?.[stripModelTag(modelId)]
 			const targetSupportsReasoning =
 				!!targetModelInfo?.supportsReasoningEffort ||
 				(Array.isArray(targetModelInfo?.reasoningEffortLevels) && targetModelInfo.reasoningEffortLevels.length > 0) ||
@@ -821,14 +825,16 @@ export const ModelSelector = ({
 			delete updatedConfig.modelMaxTokens
 			delete updatedConfig.modelMaxThinkingTokens
 
-			// Ensure openAiCustomModelInfo is immediately updated with the correct contextWindow
-			const resolvedContextWindow =
-				targetModelItem?.contextWindow ||
-				openAiModelInfos?.[modelId]?.contextWindow ||
-				getModelContextWindow(modelId)
-			if (provider === "openai" || provider === "xkiro" || updatedConfig.openAiCustomModelInfo) {
+			// Only update openAiCustomModelInfo if it already exists as an explicit custom configuration
+			if (updatedConfig.openAiCustomModelInfo) {
+				const strippedId = stripModelTag(modelId)
+				const liveContext =
+					targetModelItem?.contextWindow ||
+					openAiModelInfos?.[modelId]?.contextWindow ||
+					openAiModelInfos?.[strippedId]?.contextWindow
+				const resolvedContextWindow = liveContext || getModelContextWindow(modelId)
 				updatedConfig.openAiCustomModelInfo = {
-					...(updatedConfig.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+					...updatedConfig.openAiCustomModelInfo,
 					contextWindow: resolvedContextWindow,
 				}
 			}
