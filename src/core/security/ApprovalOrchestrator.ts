@@ -23,6 +23,8 @@ import {
 	sanitizeForSafetyPrompt,
 } from "./safetyPromptTemplate"
 import { DecisionLogStore } from "./DecisionLogStore"
+import { ProviderRequestCoordinator } from "../../api/coordination/ProviderRequestCoordinator"
+import { RequestPriority, RequestTicket } from "../../api/coordination/types"
 
 export interface ApprovalOrchestratorOptions {
 	timeoutMs?: number
@@ -202,7 +204,17 @@ export class ApprovalOrchestrator {
 					}, currentTimeout)
 				})
 
+				const coordinator = ProviderRequestCoordinator.getInstance()
+				const providerKey = coordinator.deriveProviderKey(candidate.provider, candidate.apiKey)
+				let ticket: RequestTicket | undefined
+
 				try {
+					ticket = await coordinator.acquireTicket({
+						providerKey,
+						priority: RequestPriority.VERIFIER,
+						abortSignal: abortController.signal,
+					})
+
 					const callParams = {
 						provider: candidate.provider,
 						modelId: candidate.modelId,
@@ -219,6 +231,7 @@ export class ApprovalOrchestrator {
 						: this.judge.callProvider(callParams)
 
 					const rawResponse = await Promise.race([providerCall, timeoutPromise])
+					coordinator.reportSuccess(providerKey)
 					if (timeoutId) clearTimeout(timeoutId)
 					return {
 						rawResponse,
@@ -231,10 +244,15 @@ export class ApprovalOrchestrator {
 					if (timeoutId) clearTimeout(timeoutId)
 					lastError = error instanceof Error ? error : new Error(String(error))
 					lastCategory = classifyVerifierError(lastError)
+					if (lastCategory === VerifierFailureCategory.RATE_LIMIT) {
+						coordinator.reportRateLimit(providerKey, 5)
+					}
 
 					if (!isTransientVerifierError(lastCategory)) {
 						break
 					}
+				} finally {
+					ticket?.release()
 				}
 			}
 		}

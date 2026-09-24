@@ -430,6 +430,8 @@ export interface ApprovalDecisionResult {
 	missingCriteria?: string[]
 	infrastructureFailure?: boolean
 	approvalAttemptCount?: number
+	verifierUnavailable?: boolean
+	verifierFailureCategory?: VerifierFailureCategory
 	auditLog: string
 }
 

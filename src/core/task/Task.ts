@@ -68,6 +68,8 @@ import { ApprovalOrchestrator } from "../security/ApprovalOrchestrator"
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
 import { ApiStream, GroundingSource } from "../../api/transform/stream"
 import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
+import { ProviderRequestCoordinator } from "../../api/coordination/ProviderRequestCoordinator"
+import { RequestPriority } from "../../api/coordination/types"
 
 // shared
 import { findLastIndex } from "../../shared/array"
@@ -318,7 +320,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// API
 	apiConfiguration: ProviderSettings
 	api: ApiHandler
-	private static lastGlobalApiRequestTime?: number
+	static get lastGlobalApiRequestTime(): number | undefined {
+		return ProviderRequestCoordinator.getInstance().getLastRequestTime()
+	}
+	static set lastGlobalApiRequestTime(val: number | undefined) {
+		if (val !== undefined) {
+			ProviderRequestCoordinator.getInstance().setLastRequestTime(val)
+		}
+	}
 	private autoApprovalHandler: AutoApprovalHandler
 
 	/**
@@ -326,7 +335,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	 * @internal
 	 */
 	static resetGlobalApiRequestTime(): void {
-		Task.lastGlobalApiRequestTime = undefined
+		ProviderRequestCoordinator.resetInstance()
 	}
 
 	toolRepetitionDetector: ToolRepetitionDetector
@@ -5170,12 +5179,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const rateLimitSeconds =
 			state?.apiConfiguration?.rateLimitSeconds ?? this.apiConfiguration?.rateLimitSeconds ?? 0
 
-		if (rateLimitSeconds <= 0 || !Task.lastGlobalApiRequestTime) {
+		const coordinator = ProviderRequestCoordinator.getInstance()
+		const providerKey = coordinator.deriveProviderKey(
+			this.apiConfiguration?.apiProvider,
+			this.apiConfiguration?.apiKey,
+			state?.currentApiConfigName,
+		)
+		const lastRequestTime = coordinator.getLastRequestTime(providerKey) ?? Task.lastGlobalApiRequestTime
+
+		if (rateLimitSeconds <= 0 || !lastRequestTime) {
 			return
 		}
 
 		const now = performance.now()
-		const timeSinceLastRequest = now - Task.lastGlobalApiRequestTime
+		const timeSinceLastRequest = now - lastRequestTime
 		const rateLimitDelay = Math.ceil(
 			Math.min(rateLimitSeconds, Math.max(0, rateLimitSeconds * 1000 - timeSinceLastRequest) / 1000),
 		)
@@ -5227,6 +5244,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// timestamp earlier to include the environment details build. We still set it
 		// here for direct callers (tests) and for the case where we didn't rate-limit
 		// in the caller.
+		const coordinator = ProviderRequestCoordinator.getInstance()
+		const providerKey = coordinator.deriveProviderKey(
+			this.apiConfiguration?.apiProvider,
+			this.apiConfiguration?.apiKey,
+			state?.currentApiConfigName,
+		)
+		coordinator.setLastRequestTime(performance.now(), providerKey)
 		Task.lastGlobalApiRequestTime = performance.now()
 		this.requestsSinceLastCompaction++
 
@@ -5531,154 +5555,174 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			allTools,
 		)
 
-		// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
-		const stream = this.api.createMessage(
-			systemPrompt,
-			cleanConversationHistory as unknown as Anthropic.Messages.MessageParam[],
-			metadata,
-		)
-		const iterator = stream[Symbol.asyncIterator]()
+		const providerDeref = this.providerRef.deref()
+		const isForeground =
+			!providerDeref ||
+			(providerDeref as any).foregroundTaskId === undefined ||
+			(providerDeref as any).foregroundTaskId === this.taskId
+		const priority = isForeground ? RequestPriority.FOREGROUND : RequestPriority.BACKGROUND
 
-		// Set up abort handling - when the signal is aborted, clean up the controller reference
-		abortSignal.addEventListener("abort", () => {
-			console.log(`[Task#${this.taskId}.${this.instanceId}] AbortSignal triggered for current request`)
-			this.currentRequestAbortController = undefined
+		const ticket = await coordinator.acquireTicket({
+			providerKey,
+			taskId: this.taskId,
+			priority,
+			abortSignal,
 		})
 
 		try {
-			// Awaiting first chunk to see if it will throw an error.
-			this.isWaitingForFirstChunk = true
+			// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
+			const stream = this.api.createMessage(
+				systemPrompt,
+				cleanConversationHistory as unknown as Anthropic.Messages.MessageParam[],
+				metadata,
+			)
+			const iterator = stream[Symbol.asyncIterator]()
 
-			// Race between the first chunk and the abort signal
-			const firstChunkPromise = iterator.next()
-			const abortPromise = new Promise<never>((_, reject) => {
-				if (abortSignal.aborted) {
-					reject(new Error("Request cancelled by user"))
-				} else {
-					abortSignal.addEventListener("abort", () => {
-						reject(new Error("Request cancelled by user"))
-					})
-				}
+			// Set up abort handling - when the signal is aborted, clean up the controller reference
+			abortSignal.addEventListener("abort", () => {
+				console.log(`[Task#${this.taskId}.${this.instanceId}] AbortSignal triggered for current request`)
+				this.currentRequestAbortController = undefined
 			})
 
-			const firstChunk = await Promise.race([firstChunkPromise, abortPromise])
-			if (isTokenAuditEnabled() && this.currentAuditRecord) {
-				const timeToFirstChunkMs = performance.now() - requestStartTime
-				recordRequestTiming(this.taskId, this.currentAuditRecord, {
-					timeToFirstChunkMs,
-				})
-			}
-			yield firstChunk.value
-			this.isWaitingForFirstChunk = false
-			this.consecutiveIdenticalFailures = 0
-			this.lastFailedRequestFingerprint = undefined
-		} catch (error: any) {
-			this.isWaitingForFirstChunk = false
-			this.currentRequestAbortController = undefined
-			if (isTokenAuditEnabled() && this.currentAuditRecord) {
-				const requestDurationMs = performance.now() - requestStartTime
-				recordRequestTiming(this.taskId, this.currentAuditRecord, {
-					requestDurationMs,
-				})
-			}
-			const isContextWindowExceededError = checkContextWindowExceededError(error)
+			try {
+				// Awaiting first chunk to see if it will throw an error.
+				this.isWaitingForFirstChunk = true
 
-			// If it's a context window error and we haven't exceeded max retries for this error type
-			if (isContextWindowExceededError && retryAttempt < MAX_CONTEXT_WINDOW_RETRIES) {
-				console.warn(
-					`[Task#${this.taskId}] Context window exceeded for model ${this.api.getModel().id}. ` +
-						`Retry attempt ${retryAttempt + 1}/${MAX_CONTEXT_WINDOW_RETRIES}. ` +
-						`Attempting automatic truncation...`,
-				)
-				await this.handleContextWindowExceededError()
-				// Retry the request after handling the context window error
-				yield* this.attemptApiRequest(retryAttempt + 1)
-				return
-			}
-
-			const classification = classifyApiError(error)
-			const maxAllowedRetries = Math.min(MAX_API_RETRIES, classification.maxRetries)
-
-			if (this.lastFailedRequestFingerprint === currentFingerprint) {
-				this.consecutiveIdenticalFailures++
-			} else {
-				this.lastFailedRequestFingerprint = currentFingerprint
-				this.consecutiveIdenticalFailures = 1
-			}
-
-			const isCircuitBroken = this.consecutiveIdenticalFailures > maxAllowedRetries
-
-			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
-			if (autoApprovalEnabled) {
-				if (!classification.retryable || isCircuitBroken || retryAttempt >= maxAllowedRetries) {
-					const reasonText = !classification.retryable
-						? `Deterministic API error (${classification.category}): ${error?.message || "Unknown error"}`
-						: isCircuitBroken
-							? `Circuit breaker: identical request failed consecutively (${error?.message || "Unknown error"}). Auto-retry stopped to prevent token waste.`
-							: `Max retries (${maxAllowedRetries}) exceeded: ${error?.message ?? JSON.stringify(serializeError(error), null, 2)}`
-
-					console.error(
-						`[Task#attemptApiRequest] ${reasonText} for task ${this.taskId}.${this.instanceId}. Error: ${error?.message}`,
-					)
-					const { response } = await this.ask("api_req_failed", reasonText)
-					if (response !== "yesButtonClicked") {
-						throw new Error(`API request failed: ${reasonText}`)
+				// Race between the first chunk and the abort signal
+				const firstChunkPromise = iterator.next()
+				const abortPromise = new Promise<never>((_, reject) => {
+					if (abortSignal.aborted) {
+						reject(new Error("Request cancelled by user"))
+					} else {
+						abortSignal.addEventListener("abort", () => {
+							reject(new Error("Request cancelled by user"))
+						})
 					}
-					await this.say("api_req_retried")
-					this.consecutiveIdenticalFailures = 0
-					this.lastFailedRequestFingerprint = undefined
-					yield* this.attemptApiRequest(0)
+				})
+
+				const firstChunk = await Promise.race([firstChunkPromise, abortPromise])
+				coordinator.reportSuccess(providerKey)
+				if (isTokenAuditEnabled() && this.currentAuditRecord) {
+					const timeToFirstChunkMs = performance.now() - requestStartTime
+					recordRequestTiming(this.taskId, this.currentAuditRecord, {
+						timeToFirstChunkMs,
+					})
+				}
+				yield firstChunk.value
+				this.isWaitingForFirstChunk = false
+				this.consecutiveIdenticalFailures = 0
+				this.lastFailedRequestFingerprint = undefined
+			} catch (error: any) {
+				ticket.release()
+				this.isWaitingForFirstChunk = false
+				this.currentRequestAbortController = undefined
+				if (isTokenAuditEnabled() && this.currentAuditRecord) {
+					const requestDurationMs = performance.now() - requestStartTime
+					recordRequestTiming(this.taskId, this.currentAuditRecord, {
+						requestDurationMs,
+					})
+				}
+				const isContextWindowExceededError = checkContextWindowExceededError(error)
+
+				// If it's a context window error and we haven't exceeded max retries for this error type
+				if (isContextWindowExceededError && retryAttempt < MAX_CONTEXT_WINDOW_RETRIES) {
+					console.warn(
+						`[Task#${this.taskId}] Context window exceeded for model ${this.api.getModel().id}. ` +
+							`Retry attempt ${retryAttempt + 1}/${MAX_CONTEXT_WINDOW_RETRIES}. ` +
+							`Attempting automatic truncation...`,
+					)
+					await this.handleContextWindowExceededError()
+					// Retry the request after handling the context window error
+					yield* this.attemptApiRequest(retryAttempt + 1)
 					return
 				}
 
-				// Apply shared exponential backoff and countdown UX
-				await this.backoffAndAnnounce(retryAttempt, error, classification.retryAfterSeconds)
+				const classification = classifyApiError(error)
+				const maxAllowedRetries = Math.min(MAX_API_RETRIES, classification.maxRetries)
 
-				// CRITICAL: Check if task was aborted during the backoff countdown
-				// This prevents infinite loops when users cancel during auto-retry
-				// Without this check, the recursive call below would continue even after abort
-				if (this.abort) {
-					throw new Error(
-						`[Task#attemptApiRequest] task ${this.taskId}.${this.instanceId} aborted during retry`,
+				if (this.lastFailedRequestFingerprint === currentFingerprint) {
+					this.consecutiveIdenticalFailures++
+				} else {
+					this.lastFailedRequestFingerprint = currentFingerprint
+					this.consecutiveIdenticalFailures = 1
+				}
+
+				const isCircuitBroken = this.consecutiveIdenticalFailures > maxAllowedRetries
+
+				// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
+				if (autoApprovalEnabled) {
+					if (!classification.retryable || isCircuitBroken || retryAttempt >= maxAllowedRetries) {
+						const reasonText = !classification.retryable
+							? `Deterministic API error (${classification.category}): ${error?.message || "Unknown error"}`
+							: isCircuitBroken
+								? `Circuit breaker: identical request failed consecutively (${error?.message || "Unknown error"}). Auto-retry stopped to prevent token waste.`
+								: `Max retries (${maxAllowedRetries}) exceeded: ${error?.message ?? JSON.stringify(serializeError(error), null, 2)}`
+
+						console.error(
+							`[Task#attemptApiRequest] ${reasonText} for task ${this.taskId}.${this.instanceId}. Error: ${error?.message}`,
+						)
+						const { response } = await this.ask("api_req_failed", reasonText)
+						if (response !== "yesButtonClicked") {
+							throw new Error(`API request failed: ${reasonText}`)
+						}
+						await this.say("api_req_retried")
+						this.consecutiveIdenticalFailures = 0
+						this.lastFailedRequestFingerprint = undefined
+						yield* this.attemptApiRequest(0)
+						return
+					}
+
+					// Apply shared exponential backoff and countdown UX
+					await this.backoffAndAnnounce(retryAttempt, error, classification.retryAfterSeconds)
+
+					// CRITICAL: Check if task was aborted during the backoff countdown
+					// This prevents infinite loops when users cancel during auto-retry
+					// Without this check, the recursive call below would continue even after abort
+					if (this.abort) {
+						throw new Error(
+							`[Task#attemptApiRequest] task ${this.taskId}.${this.instanceId} aborted during retry`,
+						)
+					}
+
+					// Delegate generator output from the recursive call with
+					// incremented retry count.
+					yield* this.attemptApiRequest(retryAttempt + 1)
+
+					return
+				} else {
+					const { response } = await this.ask(
+						"api_req_failed",
+						error?.message ?? JSON.stringify(serializeError(error), null, 2),
 					)
+
+					if (response !== "yesButtonClicked") {
+						// This will never happen since if noButtonClicked, we will
+						// clear current task, aborting this instance.
+						throw new Error("API request failed")
+					}
+
+					await this.say("api_req_retried")
+					this.consecutiveIdenticalFailures = 0
+					this.lastFailedRequestFingerprint = undefined
+
+					// Delegate generator output from the recursive call.
+					yield* this.attemptApiRequest()
+					return
 				}
-
-				// Delegate generator output from the recursive call with
-				// incremented retry count.
-				yield* this.attemptApiRequest(retryAttempt + 1)
-
-				return
-			} else {
-				const { response } = await this.ask(
-					"api_req_failed",
-					error?.message ?? JSON.stringify(serializeError(error), null, 2),
-				)
-
-				if (response !== "yesButtonClicked") {
-					// This will never happen since if noButtonClicked, we will
-					// clear current task, aborting this instance.
-					throw new Error("API request failed")
-				}
-
-				await this.say("api_req_retried")
-				this.consecutiveIdenticalFailures = 0
-				this.lastFailedRequestFingerprint = undefined
-
-				// Delegate generator output from the recursive call.
-				yield* this.attemptApiRequest()
-				return
 			}
-		}
 
-		// No error, so we can continue to yield all remaining chunks.
-		// (Needs to be placed outside of try/catch since it we want caller to
-		// handle errors not with api_req_failed as that is reserved for first
-		// chunk failures only.)
-		// This delegates to another generator or iterable object. In this case,
-		// it's saying "yield all remaining values from this iterator". This
-		// effectively passes along all subsequent chunks from the original
-		// stream.
-		yield* iterator
+			// No error, so we can continue to yield all remaining chunks.
+			// (Needs to be placed outside of try/catch since it we want caller to
+			// handle errors not with api_req_failed as that is reserved for first
+			// chunk failures only.)
+			// This delegates to another generator or iterable object. In this case,
+			// it's saying "yield all remaining values from this iterator". This
+			// effectively passes along all subsequent chunks from the original
+			// stream.
+			yield* iterator
+		} finally {
+			ticket.release()
+		}
 	}
 
 	private calculateRequestFingerprint(
@@ -5712,8 +5756,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// Respect provider rate limit window
 			let rateLimitDelay = 0
 			const rateLimit = (state?.apiConfiguration ?? this.apiConfiguration)?.rateLimitSeconds || 0
-			if (Task.lastGlobalApiRequestTime && rateLimit > 0) {
-				const elapsed = performance.now() - Task.lastGlobalApiRequestTime
+			const coordinator = ProviderRequestCoordinator.getInstance()
+			const providerKey = coordinator.deriveProviderKey(
+				this.apiConfiguration?.apiProvider,
+				this.apiConfiguration?.apiKey,
+				state?.currentApiConfigName,
+			)
+			const lastRequestTime = coordinator.getLastRequestTime(providerKey) ?? Task.lastGlobalApiRequestTime
+			if (lastRequestTime && rateLimit > 0) {
+				const elapsed = performance.now() - lastRequestTime
 				rateLimitDelay = Math.ceil(Math.min(rateLimit, Math.max(0, rateLimit * 1000 - elapsed) / 1000))
 			}
 
@@ -5735,6 +5786,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const finalDelay = Math.max(exponentialDelay, rateLimitDelay)
 			if (finalDelay <= 0) {
 				return
+			}
+
+			if (error?.status === 429 || overrideDelaySeconds || error?.retryAfter) {
+				coordinator.reportRateLimit(providerKey, finalDelay)
 			}
 
 			// Build header text; fall back to error message if none provided
