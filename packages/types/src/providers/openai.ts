@@ -615,10 +615,12 @@ export function getOpenAiModelInfo(
 	const contextWindow = getModelContextWindow(id, rawContext)
 	const supportsReasoningEffort =
 		base.supportsReasoningEffort ?? (modelSupportsReasoning(id, base) ? true : undefined)
+	const isFree = id.toLowerCase().endsWith(":free") || base.isFree === true
 	return {
 		...base,
 		contextWindow,
 		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+		...(isFree ? { isFree: true, inputPrice: 0, outputPrice: 0 } : {}),
 	}
 }
 

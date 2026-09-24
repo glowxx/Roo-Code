@@ -732,7 +732,19 @@ export const openAiModelInfoCache = new Map<string, ModelInfo>()
 export function getCachedOpenAiModelInfo(modelId: string): ModelInfo | undefined {
 	if (!modelId) return undefined
 	const direct = openAiModelInfoCache.get(modelId)
-	if (direct) return direct
+	if (direct) {
+		if (modelId.toLowerCase().endsWith(":free") && !direct.isFree) {
+			return {
+				...direct,
+				inputPrice: 0,
+				outputPrice: 0,
+				cacheReadsPrice: 0,
+				cacheWritesPrice: 0,
+				isFree: true,
+			}
+		}
+		return direct
+	}
 
 	const stripped = stripModelTag(modelId)
 	if (stripped && stripped !== modelId) {
@@ -798,6 +810,11 @@ export function parseOpenAiModelInfo(rawItem: any): ModelInfo {
 		cacheWritesPrice = typeof pricing.cache_write === "number" ? pricing.cache_write : undefined
 	}
 
+	const isFree =
+		id.toLowerCase().endsWith(":free") ||
+		rawItem?.access_tier === "free" ||
+		(inputPrice === 0 && outputPrice === 0 && pricing !== undefined)
+
 	const capabilities = rawItem?.capabilities
 	const supportsImages = typeof capabilities?.vision === "boolean" ? capabilities.vision : true
 	const supportsPromptCache = cacheReadsPrice !== undefined || cacheWritesPrice !== undefined || true
@@ -821,13 +838,14 @@ export function parseOpenAiModelInfo(rawItem: any): ModelInfo {
 		contextWindow: resolvedContextWindow,
 		supportsImages,
 		supportsPromptCache,
-		inputPrice,
-		outputPrice,
-		cacheReadsPrice,
-		cacheWritesPrice,
+		inputPrice: isFree ? 0 : inputPrice,
+		outputPrice: isFree ? 0 : outputPrice,
+		cacheReadsPrice: isFree ? 0 : cacheReadsPrice,
+		cacheWritesPrice: isFree ? 0 : cacheWritesPrice,
 		displayName: rawDisplayName,
 		description: rawItem?.display_name ? `${rawItem.display_name} (${id})` : undefined,
 		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+		...(isFree ? { isFree: true } : {}),
 	}
 }
 
