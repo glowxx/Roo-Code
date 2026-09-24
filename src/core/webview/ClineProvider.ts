@@ -1889,34 +1889,18 @@ export class ClineProvider
 		} else {
 			this.currentWorkspaceEpoch++
 		}
-		const capturedEpoch = this.currentWorkspaceEpoch
 
 		this.currentWorkspacePath = newPath || getWorkspacePath()
-		// 1. Anuluj i wyczyść aktywne zadania
-		while (this.clineStack.length > 0) {
-			const task = this.clineStack.pop()
-			if (task) {
-				try {
-					await task.abortTask(true)
-				} catch (e) {
-					this.log(`Error aborting task on workspace change: ${e}`)
-				}
-				if (this.currentWorkspaceEpoch !== capturedEpoch) {
-					return
-				}
-			}
+
+		// Multi-project concurrency: do NOT abort running background tasks from other projects.
+		// If current foreground task belongs to a different workspace, unfocus it in the UI.
+		const currentTask = this.getCurrentTask()
+		if (currentTask && this.currentWorkspacePath && currentTask.cwd !== this.currentWorkspacePath) {
+			currentTask.emit(RooCodeEventName.TaskUnfocused)
+			this.foregroundTaskId = undefined
 		}
 
-		if (this.currentWorkspaceEpoch !== capturedEpoch) {
-			return
-		}
-
-		// 2. Wyczyść listenery zadań
-		this.taskEventListeners.clear()
-		// 3. Wyślij komunikat do Webview o resecie czatu
-		this.postMessageToWebview({ type: "action", action: "clearTask" })
-		await this.postStateToWebview()
-		// 4. Przeładuj umiejętności i reguły
+		// Reinitialize skills and rules for the newly selected workspace
 		if (this.skillsManager) {
 			try {
 				await this.skillsManager.initialize()
@@ -1924,19 +1908,8 @@ export class ClineProvider
 				this.log(`Error reinitializing skills: ${e}`)
 			}
 		}
-		await this.postStateToWebviewWithoutClineMessages()
-		// 5. Wyczyść terminale
-		try {
-			TerminalRegistry.cleanup()
-		} catch (e) {
-			this.log(`Error cleaning terminals: ${e}`)
-		}
-		// 6. Wyczyść serwery MCP starego projektu
-		try {
-			await this.mcpHub?.cleanupProjectMcpServers?.()
-		} catch (e) {
-			this.log(`Error cleaning up project MCP servers: ${e}`)
-		}
+
+		await this.postStateToWebview()
 	}
 
 	async refreshWorkspace() {

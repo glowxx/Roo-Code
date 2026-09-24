@@ -31,8 +31,10 @@ export class DesktopAgentHost extends EventEmitter {
 	private storageDir?: string
 	private status: AgentStatusType = "idle"
 	private terminalLogs: TerminalLogEntry[] = []
+	private terminalLogsByWorkspace: Map<string, TerminalLogEntry[]> = new Map()
 	private archivedTerminalLogs: Array<{ workspace: string; timestamp: number; logs: TerminalLogEntry[] }> = []
 	private diffFiles: Map<string, DiffFileEntry> = new Map()
+	private diffFilesByWorkspace: Map<string, Map<string, DiffFileEntry>> = new Map()
 	private provider: any = null
 	private currentWorkspaceEpoch = 0
 	private pendingWorkspaceChangeAbortController: AbortController | null = null
@@ -57,23 +59,17 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 		this.pendingWorkspaceChangeAbortController = new AbortController()
 
-		// Archive active terminal sessions from previous workspace
-		if (this.terminalLogs.length > 0) {
-			this.archivedTerminalLogs.push({
-				workspace: this.currentWorkspace,
-				timestamp: Date.now(),
-				logs: [...this.terminalLogs],
-			})
-			if (this.archivedTerminalLogs.length > 20) {
-				this.archivedTerminalLogs.shift()
-			}
+		// Save current workspace state before switching
+		if (this.currentWorkspace) {
+			this.terminalLogsByWorkspace.set(this.currentWorkspace, [...this.terminalLogs])
+			this.diffFilesByWorkspace.set(this.currentWorkspace, new Map(this.diffFiles))
 		}
-		this.terminalLogs = []
-		this.emit("terminalLogsCleared")
 
 		if (!newWorkspace || typeof newWorkspace !== "string" || !newWorkspace.trim()) {
 			this.currentWorkspace = ""
-			this.diffFiles.clear()
+			this.terminalLogs = []
+			this.diffFiles = new Map()
+			this.emit("terminalLogsCleared")
 			this.emit("diffsUpdated", [])
 			if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
 				const ws = (this.vscode as Record<string, unknown>).workspace as any
@@ -98,7 +94,11 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 
 		this.currentWorkspace = normalized
+		this.terminalLogs = this.terminalLogsByWorkspace.get(this.currentWorkspace) || []
+		this.diffFiles = this.diffFilesByWorkspace.get(this.currentWorkspace) || new Map()
 		this.refreshDiffsFromGit()
+		this.emit("terminalLogsUpdated", this.terminalLogs)
+		this.emit("diffsUpdated", Array.from(this.diffFiles.values()))
 		if (this.vscode && (this.vscode as Record<string, unknown>).workspace) {
 			const ws = (this.vscode as Record<string, unknown>).workspace as any
 			if (typeof ws.setWorkspaceFolders === "function") {
@@ -489,6 +489,10 @@ export class DesktopAgentHost extends EventEmitter {
 			if (this.archivedTerminalLogs.length > 20) {
 				this.archivedTerminalLogs.shift()
 			}
+		}
+		if (this.currentWorkspace) {
+			this.diffFilesByWorkspace.delete(this.currentWorkspace)
+			this.terminalLogsByWorkspace.delete(this.currentWorkspace)
 		}
 		this.terminalLogs = []
 		this.diffFiles.clear()
