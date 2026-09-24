@@ -2,12 +2,28 @@ import { z } from "zod"
 import type { ProviderSettings } from "./provider-settings.js"
 import type { ExtensionState } from "./vscode-extension-host.js"
 
+export enum VerifierFailureCategory {
+	RATE_LIMIT = "RATE_LIMIT",
+	FREE_QUOTA_EXHAUSTED = "FREE_QUOTA_EXHAUSTED",
+	PAYMENT_REQUIRED = "PAYMENT_REQUIRED",
+	MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE",
+	TIMEOUT = "TIMEOUT",
+	NETWORK = "NETWORK",
+	AUTH = "AUTH",
+	INVALID_MODEL = "INVALID_MODEL",
+	OTHER_TRANSIENT = "OTHER_TRANSIENT",
+}
+
 export interface CommandSafetyConfig {
 	enabled: boolean
 	provider: string
 	modelId: string
 	apiKey?: string
 	customPromptTemplate?: string
+	secondaryProvider?: string
+	secondaryModelId?: string
+	secondaryApiKey?: string
+	allowWorkerFallback?: boolean
 }
 
 export const commandSafetyConfigSchema = z.object({
@@ -16,6 +32,10 @@ export const commandSafetyConfigSchema = z.object({
 	modelId: z.string(),
 	apiKey: z.string().optional(),
 	customPromptTemplate: z.string().optional(),
+	secondaryProvider: z.string().optional(),
+	secondaryModelId: z.string().optional(),
+	secondaryApiKey: z.string().optional(),
+	allowWorkerFallback: z.boolean().optional(),
 })
 
 export const DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE = `Analyze the following command for potential security risks before execution:

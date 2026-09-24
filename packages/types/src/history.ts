@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { queuedMessageSchema } from "./message.js"
 
 /**
  * HistoryItem
@@ -20,7 +21,8 @@ export const historyItemSchema = z.object({
 	workspace: z.string().optional(),
 	mode: z.string().optional(),
 	apiConfigName: z.string().optional(), // Provider profile name for sticky profile feature
-	status: z.enum(["active", "completed", "delegated"]).optional(),
+	status: z.enum(["active", "completed", "delegated", "cancelled", "failed", "interrupted"]).optional(),
+	promptQueue: z.array(queuedMessageSchema).optional(),
 	delegatedToId: z.string().optional(), // Last child this parent delegated to
 	childIds: z.array(z.string()).optional(), // All children spawned by this task
 	awaitingChildId: z.string().optional(), // Child currently awaited (set when delegated)

@@ -104,6 +104,18 @@ export enum TaskStatus {
 	None = "none",
 }
 
+export enum TaskLifecycleState {
+	Running = "RUNNING",
+	WaitingApproval = "WAITING_APPROVAL",
+	WaitingUser = "WAITING_USER",
+	Retrying = "RETRYING",
+	Blocked = "BLOCKED",
+	Completed = "COMPLETED",
+	Failed = "FAILED",
+	Cancelled = "CANCELLED",
+	Interrupted = "INTERRUPTED",
+}
+
 export const taskMetadataSchema = z.object({
 	task: z.string().optional(),
 	images: z.array(z.string()).optional(),
