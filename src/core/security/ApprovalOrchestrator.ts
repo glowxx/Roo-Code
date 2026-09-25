@@ -14,7 +14,7 @@ import {
 	resolveProviderApiKey,
 	VerifierFailureCategory,
 } from "@roo-code/types"
-import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS } from "./CommandSafetyJudge"
+import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS, type ProviderCallDetails } from "./CommandSafetyJudge"
 import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
 import { containsDangerousSubstitution } from "../auto-approval/commands"
 import {
@@ -25,6 +25,7 @@ import {
 import { DecisionLogStore } from "./DecisionLogStore"
 import { ProviderRequestCoordinator } from "../../api/coordination/ProviderRequestCoordinator"
 import { RequestPriority, RequestTicket } from "../../api/coordination/types"
+import { safeExtractJson, type SafeJsonExtractResult } from "./SafeJsonExtractor"
 
 export interface ApprovalOrchestratorOptions {
 	timeoutMs?: number
@@ -108,7 +109,7 @@ export class ApprovalOrchestrator {
 	private readonly judge: CommandSafetyJudge
 
 	constructor(options?: ApprovalOrchestratorOptions) {
-		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+		this.timeoutMs = options?.timeoutMs ?? 25000
 		this.judge = options?.judge ?? new CommandSafetyJudge({ timeoutMs: this.timeoutMs })
 	}
 
@@ -166,12 +167,14 @@ export class ApprovalOrchestrator {
 		userPrompt: string
 		state: Partial<ExtensionState>
 		maxTokens?: number
+		responseFormat?: "json_object" | "text"
 	}): Promise<{
 		rawResponse: string | null
 		usedCandidate: VerifierCandidate | null
 		lastError: Error | null
 		lastCategory: VerifierFailureCategory
 		attempts: number
+		callDetails?: ProviderCallDetails | null
 	}> {
 		const candidates = this.getVerifierCandidates(params.state)
 		let totalAttempts = 0
@@ -224,13 +227,19 @@ export class ApprovalOrchestrator {
 						state: params.state,
 						signal: abortController.signal,
 						maxTokens: params.maxTokens ?? 350,
+						responseFormat: params.responseFormat,
 					}
 
 					const providerCall = CommandSafetyJudge.globalCallProviderOverride
 						? CommandSafetyJudge.globalCallProviderOverride(callParams)
-						: this.judge.callProvider(callParams)
+						: typeof (this.judge as any).callProviderDetails === "function"
+							? this.judge.callProviderDetails(callParams)
+							: this.judge.callProvider(callParams)
 
-					const rawResponse = await Promise.race([providerCall, timeoutPromise])
+					const callRes = await Promise.race([providerCall, timeoutPromise])
+					const callDetails: ProviderCallDetails = typeof callRes === "string" ? { text: callRes } : callRes
+					const rawResponse = callDetails.text
+
 					coordinator.reportSuccess(providerKey)
 					if (timeoutId) clearTimeout(timeoutId)
 					return {
@@ -239,6 +248,7 @@ export class ApprovalOrchestrator {
 						lastError: null,
 						lastCategory: VerifierFailureCategory.OTHER_TRANSIENT,
 						attempts: totalAttempts,
+						callDetails,
 					}
 				} catch (error: any) {
 					if (timeoutId) clearTimeout(timeoutId)
@@ -795,39 +805,96 @@ export class ApprovalOrchestrator {
 					: undefined,
 		})
 
-		const execResult = await this.executeWithFallback({
-			systemPrompt,
-			userPrompt,
-			state,
-			maxTokens: 400,
-		})
+		const MAX_JUDGE_PARSE_RETRIES = 1 // 1 initial attempt + 1 retry = max 2 attempts total
+		let lastErrorCategory = "UNKNOWN"
+		let lastErrorMessage = "Unknown error"
+		let totalAttempts = 0
+		let currentPrompt = userPrompt
+		let lastUsedCandidate: VerifierCandidate | null = null
 
-		if (execResult.rawResponse !== null && execResult.usedCandidate) {
-			const parsed = this.parseCompletionJudgeResponse(execResult.rawResponse)
-			const mappedDecision = parsed.decision === "ALLOW_COMPLETION" ? "ALLOW_AUTO" : "CONTINUE_WORK"
-			const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
-			const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText} finalDecision=${mappedDecision} reason="${parsed.reason}"`
+		for (let judgeAttempt = 0; judgeAttempt <= MAX_JUDGE_PARSE_RETRIES; judgeAttempt++) {
+			const isRetry = judgeAttempt > 0
+			const maxTokens = isRetry ? 1200 : 1024
 
-			const result: ApprovalDecisionResult = {
-				decision: mappedDecision,
-				risk: mappedDecision === "ALLOW_AUTO" ? "safe" : "medium",
-				reason: parsed.reason,
-				taskAligned: mappedDecision === "ALLOW_AUTO",
-				unresolvedItems: parsed.unresolvedItems,
-				missingCriteria: parsed.missingCriteria,
-				replanGuidance: parsed.guidance,
-				approvalAttemptCount: execResult.attempts,
-				auditLog,
+			const execResult = await this.executeWithFallback({
+				systemPrompt,
+				userPrompt: currentPrompt,
+				state,
+				maxTokens,
+				responseFormat: "json_object",
+			})
+
+			totalAttempts += execResult.attempts
+			if (execResult.usedCandidate) {
+				lastUsedCandidate = execResult.usedCandidate
 			}
 
-			this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
-			return result
+			if (execResult.rawResponse !== null && execResult.usedCandidate) {
+				const extraction = safeExtractJson(execResult.rawResponse, completionJudgeResponseSchema)
+
+				if (extraction.success && extraction.data) {
+					const parsed = extraction.data
+					const mappedDecision = parsed.decision === "ALLOW_COMPLETION" ? "ALLOW_AUTO" : "CONTINUE_WORK"
+					const retryText = totalAttempts > 1 ? ` retry=true attempt=${totalAttempts}` : ""
+					const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
+					const extractionNote = extraction.category !== "VALID_JSON" ? ` jsonCategory=${extraction.category}` : ""
+					const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote} finalDecision=${mappedDecision} reason="${parsed.reason}" workerReinvoked=false`
+
+					const result: ApprovalDecisionResult = {
+						decision: mappedDecision,
+						risk: mappedDecision === "ALLOW_AUTO" ? "safe" : "medium",
+						reason: parsed.reason,
+						taskAligned: mappedDecision === "ALLOW_AUTO",
+						unresolvedItems: parsed.unresolvedItems,
+						missingCriteria: parsed.missingCriteria,
+						replanGuidance: parsed.guidance,
+						approvalAttemptCount: totalAttempts,
+						auditLog,
+					}
+
+					this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
+					return result
+				} else {
+					// Safe extraction failed (category: TRUNCATED_JSON, WRONG_SCHEMA, EMPTY_RESPONSE, etc.)
+					lastErrorCategory = extraction.category
+					lastErrorMessage = extraction.error ? extraction.error.message : "Failed to extract valid JSON"
+
+					if (judgeAttempt < MAX_JUDGE_PARSE_RETRIES) {
+						// Build targeted correction prompt for bounded retry
+						currentPrompt = `${userPrompt}\n\n[CRITICAL CORRECTION FOR PREVIOUS RESPONSE]\nYour previous output could not be parsed: [${extraction.category}] ${extraction.error ? extraction.error.message : "Parse error"}.\nYou MUST output ONLY a valid, single JSON object adhering strictly to the schema. Do NOT include markdown code blocks, do NOT include explanations outside JSON, and do NOT truncate the output.`
+						continue
+					}
+				}
+			} else {
+				// Provider call failed completely (e.g. rate limit, auth, network on all candidates)
+				lastErrorCategory = execResult.lastCategory || "VERIFIER_FAILED"
+				lastErrorMessage = execResult.lastError ? execResult.lastError.message : "Provider call failed"
+				break
+			}
 		}
 
-		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown error"
-		const reason = `Completion Judge adjudication failed (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
-		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+		// If bounded retries exhausted or verifier failed: FAIL CLOSED TO MANUAL_APPROVAL
+		// Invariant: NEVER throw uncaught error that reinvokes worker model or causes infinite regeneration loop!
+		const verifierUnavailable =
+			lastErrorCategory === "RATE_LIMIT" ||
+			lastErrorCategory === "AUTH_ERROR" ||
+			lastErrorCategory === "NETWORK_TIMEOUT" ||
+			lastErrorCategory === "VERIFIER_FAILED"
+		const reason = `Completion Judge verification could not produce a valid decision (${lastErrorCategory}: ${lastErrorMessage}). Task completion requires manual approval.`
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true attempt=${totalAttempts} infrastructureFailure=true verifierUnavailable=${verifierUnavailable} verifierCategory=${lastErrorCategory} finalDecision=MANUAL_APPROVAL reason="${reason}" workerReinvoked=false`
+
+		let mappedFailureCategory: VerifierFailureCategory | undefined
+		if (lastErrorCategory === "RATE_LIMIT") {
+			mappedFailureCategory = VerifierFailureCategory.RATE_LIMIT
+		} else if (lastErrorCategory === "AUTH_ERROR") {
+			mappedFailureCategory = VerifierFailureCategory.AUTH
+		} else if (lastErrorCategory === "NETWORK_TIMEOUT") {
+			mappedFailureCategory = VerifierFailureCategory.TIMEOUT
+		} else if (lastErrorCategory === "NETWORK_ERROR") {
+			mappedFailureCategory = VerifierFailureCategory.NETWORK
+		} else if (Object.values(VerifierFailureCategory).includes(lastErrorCategory as any)) {
+			mappedFailureCategory = lastErrorCategory as VerifierFailureCategory
+		}
 
 		const result: ApprovalDecisionResult = {
 			decision: "MANUAL_APPROVAL",
@@ -835,13 +902,13 @@ export class ApprovalOrchestrator {
 			reason,
 			taskAligned: false,
 			infrastructureFailure: true,
-			verifierUnavailable: true,
-			verifierFailureCategory: execResult.lastCategory,
-			approvalAttemptCount: execResult.attempts,
+			verifierUnavailable,
+			verifierFailureCategory: mappedFailureCategory,
+			approvalAttemptCount: totalAttempts,
 			auditLog,
 		}
 
-		this.recordDecision(request, result, "none", false, state)
+		this.recordDecision(request, result, lastUsedCandidate?.modelId || "none", false, state)
 		return result
 	}
 
@@ -855,45 +922,28 @@ export class ApprovalOrchestrator {
 		missingCriteria: string[]
 		guidance?: string
 	} {
-		if (!rawResponse || typeof rawResponse !== "string" || rawResponse.trim().length === 0) {
-			throw new Error("Empty response from Completion Judge model")
-		}
-
-		const trimmed = rawResponse.trim()
-		let parsedObject: any = null
-
-		try {
-			parsedObject = JSON.parse(trimmed)
-		} catch {
-			const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-			if (match && match[1]) {
-				try {
-					parsedObject = JSON.parse(match[1].trim())
-				} catch {}
+		const extraction = safeExtractJson(rawResponse, completionJudgeResponseSchema)
+		if (!extraction.success || !extraction.data) {
+			if (extraction.category === "EMPTY_RESPONSE") {
+				throw new Error("Empty response from Completion Judge model")
 			}
-			if (!parsedObject) {
-				const start = trimmed.indexOf("{")
-				const end = trimmed.lastIndexOf("}")
-				if (start !== -1 && end > start) {
-					try {
-						parsedObject = JSON.parse(trimmed.substring(start, end + 1))
-					} catch {}
-				}
+			if (
+				extraction.category === "WRONG_SCHEMA" ||
+				extraction.category === "WRONG_ENUM" ||
+				extraction.category === "MISSING_FIELD"
+			) {
+				throw new Error(`Completion response validation failed: ${extraction.error}`)
 			}
+			throw new Error(`Malformed JSON response from Completion Judge model: [${extraction.category}] ${extraction.error}`)
 		}
 
-		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
-			throw new Error("Malformed JSON response from Completion Judge model")
+		return {
+			decision: extraction.data.decision,
+			reason: extraction.data.reason,
+			unresolvedItems: extraction.data.unresolvedItems ?? [],
+			missingCriteria: extraction.data.missingCriteria ?? [],
+			guidance: extraction.data.guidance,
 		}
-
-		const validated = completionJudgeResponseSchema.safeParse(parsedObject)
-		if (!validated.success) {
-			throw new Error(
-				`Completion response validation failed: ${validated.error.issues.map((i) => i.message).join(", ")}`
-			)
-		}
-
-		return validated.data
 	}
 
 	private sanitizeTarget(

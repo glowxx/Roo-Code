@@ -429,7 +429,14 @@ CRITICAL INVARIANTS:
 - If all user requirements, tests, and criteria are verifiably satisfied, return ALLOW_COMPLETION.
 - If open TODO items are obsolete, superseded, or purely optional, and all primary user requirements are met, they should NOT permanently block completion (ALLOW_COMPLETION is acceptable with explanation).
 
-Respond ONLY with a valid JSON object matching this schema:
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+- Output ONLY a single raw JSON object matching the schema below.
+- DO NOT wrap the output in markdown code blocks (\`\`\` or \`\`\`json).
+- DO NOT output any introductory text, preambles, explanations, greetings, or conclusions outside the JSON object.
+- DO NOT output <think> or reasoning tags in the text output.
+- Keep the "reason" field concise and focused (under 200 words).
+
+Schema:
 {
   "decision": "ALLOW_COMPLETION" | "CONTINUE_WORK",
   "reason": "<concise explanation of why task can complete or why more work is needed>",
@@ -452,32 +459,67 @@ export interface BuildCompletionJudgePromptOptions {
 	finalResponseSummary?: string
 	recentToolResults?: string[]
 	recentFailures?: string[]
+	correctionNotice?: string
+}
+
+function compactText(str: string | undefined, maxChars: number): string {
+	if (!str) return ""
+	if (str.length <= maxChars) return str
+	const head = Math.floor(maxChars * 0.7)
+	const tail = maxChars - head - 60
+	return `${str.slice(0, head)}\n[... content truncated for compact evaluation ...]\n${str.slice(-tail)}`
 }
 
 export function buildCompletionJudgePrompt(options: BuildCompletionJudgePromptOptions): SafetyPrompt {
 	const systemPrompt = COMPLETION_JUDGE_SYSTEM_PROMPT
 
+	// Context compaction to prevent token blowup and judge timeouts
+	const compactedGoal = compactText(options.activeGoal, 1000)
+	const compactedInstruction = compactText(options.latestUserInstruction, 1000)
+	const compactedSummary = options.finalResponseSummary
+		? compactText(options.finalResponseSummary, 3000)
+		: "No summary provided"
+
+	const boundedCriteria = (options.completionCriteria || [])
+		.slice(0, 15)
+		.map((c) => compactText(c, 250))
+
+	// Prioritize active and pending todos
+	const sortedTodos = [...(options.todoList || [])].sort((a, b) => {
+		const order: Record<string, number> = { in_progress: 0, pending: 1, completed: 2 }
+		return (order[a.status] ?? 3) - (order[b.status] ?? 3)
+	})
+	const boundedTodos = sortedTodos.slice(0, 15).map((t) => ({
+		id: t.id,
+		content: compactText(t.content, 150),
+		status: t.status,
+	}))
+
 	const payload = {
-		latestUserInstruction: options.latestUserInstruction,
-		activeGoal: options.activeGoal,
-		completionCriteria: options.completionCriteria,
-		todoList: options.todoList,
-		finalResponseSummary: options.finalResponseSummary || "No summary provided",
-		recentToolResults: options.recentToolResults || [],
-		recentFailures: options.recentFailures || [],
+		latestUserInstruction: compactedInstruction,
+		activeGoal: compactedGoal,
+		completionCriteria: boundedCriteria,
+		todoList: boundedTodos,
+		finalResponseSummary: compactedSummary,
+		recentToolResults: (options.recentToolResults || []).slice(-5),
+		recentFailures: (options.recentFailures || []).slice(-5),
 	}
 
-	const userPrompt = [
+	const promptLines = [
 		"Please independently evaluate whether the following autonomous task is complete or requires continued work:",
 		"```json",
 		JSON.stringify(payload, null, 2),
 		"```",
-		"Respond ONLY with the specified JSON object format.",
-	].join("\n")
+		"Respond ONLY with the specified raw JSON object format. No markdown, no prose.",
+	]
+
+	if (options.correctionNotice) {
+		promptLines.push(`\nCRITICAL RETRY CORRECTION: ${options.correctionNotice}`)
+	}
 
 	return {
 		systemPrompt,
-		userPrompt,
+		userPrompt: promptLines.join("\n"),
 	}
 }
 

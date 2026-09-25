@@ -543,6 +543,32 @@ describe("attemptCompletionTool", () => {
 				)
 				expect(mockPushToolResult).toHaveBeenCalledWith(expect.stringContaining("<user_message>"))
 			})
+
+			it("calls handleError with 'completing task' (not 'inspecting site') when ask rejects", async () => {
+				const block: AttemptCompletionToolUse = {
+					type: "tool_use",
+					name: "attempt_completion",
+					params: { result: "Done" },
+					nativeArgs: { result: "Done" },
+					partial: false,
+				}
+
+				const testError = new Error("Unexpected error during ask")
+				mockTask.ask = vi.fn().mockRejectedValue(testError)
+
+				const callbacks: AttemptCompletionCallbacks = {
+					askApproval: mockAskApproval,
+					handleError: mockHandleError,
+					pushToolResult: mockPushToolResult,
+					askFinishSubTaskApproval: mockAskFinishSubTaskApproval,
+					toolDescription: mockToolDescription,
+				}
+
+				await attemptCompletionTool.handle(mockTask as Task, block, callbacks)
+
+				expect(mockHandleError).toHaveBeenCalledWith("completing task", testError)
+				expect(mockHandleError).not.toHaveBeenCalledWith("inspecting site", expect.anything())
+			})
 		})
 	})
 })

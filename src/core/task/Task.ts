@@ -53,6 +53,7 @@ import {
 	type TwoStageSafetyResult,
 	type UnifiedApprovalRequest,
 	type ApprovalActionType,
+	type ApprovalDecisionResult,
 	QueuedMessage,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -478,7 +479,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private _started = false
 	// No streaming parser is required.
 	assistantMessageParser?: undefined
-	private providerProfileChangeListener?: (config: { name: string; provider?: string }) => void
+	private providerProfileChangeListener?: (config: {
+		name: string
+		provider?: string
+		targetTaskId?: string
+	}) => void | Promise<void>
 
 	// Native tool call streaming state (track which index each tool is at)
 	private streamingToolCallIndices: Map<string, number> = new Map()
@@ -755,8 +760,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			return
 		}
 
-		this.providerProfileChangeListener = async () => {
+		this.providerProfileChangeListener = async (payload: {
+			name: string
+			provider?: string
+			targetTaskId?: string
+		}) => {
 			try {
+				const isForeground =
+					!("foregroundTaskId" in provider) || (provider as any).foregroundTaskId === this.taskId
+				const isTargeted = payload?.targetTaskId ? payload.targetTaskId === this.taskId : isForeground
+				if (!isTargeted) {
+					return
+				}
 				const newState = await provider.getState()
 				if (newState?.apiConfiguration) {
 					this.updateApiConfiguration(newState.apiConfiguration)
@@ -1262,7 +1277,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const isForeground =
 			!provider ||
 			!("foregroundTaskId" in provider) ||
-			(provider as any).foregroundTaskId === undefined ||
 			(provider as any).foregroundTaskId === this.taskId
 		if (isForeground) {
 			// Avoid resending large, mostly-static fields (notably taskHistory) on every chat message update.
@@ -1284,7 +1298,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const isForeground =
 			!provider ||
 			!("foregroundTaskId" in provider) ||
-			(provider as any).foregroundTaskId === undefined ||
 			(provider as any).foregroundTaskId === this.taskId
 		if (isForeground) {
 			await provider?.postMessageToWebview({ type: "messageUpdated", clineMessage: message })
@@ -1541,7 +1554,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						.map((l) => l.replace(/^[-*•\d.]\s*/, "").trim())
 						.filter((l) => l.length > 0 && !l.startsWith("["))
 					criteria.push(...lines)
-					if (criteria.length > 0) return criteria
+					if (criteria.length > 0) {
+						return criteria.slice(0, 15).map((c) => (c.length > 300 ? c.slice(0, 297) + "..." : c))
+					}
 				}
 			}
 		}
@@ -1563,7 +1578,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 		}
 
-		return criteria
+		return criteria.slice(0, 15).map((c) => (c.length > 300 ? c.slice(0, 297) + "..." : c))
 	}
 
 	// Note that `partial` has three valid states true (partial message),
@@ -1705,7 +1720,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					this.updateClineMessage(askMsg)
 				}
 				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
-				const decisionResult = await this.approvalOrchestrator.evaluate(request, state)
+				let decisionResult: ApprovalDecisionResult
+				try {
+					decisionResult = await this.approvalOrchestrator.evaluate(request, state)
+				} catch (err) {
+					const errorMsg = err instanceof Error ? err.message : String(err)
+					console.error(`[ApprovalOrchestrator] evaluate threw an unexpected error:`, err)
+					decisionResult = {
+						decision: "MANUAL_APPROVAL",
+						risk: "high",
+						reason: `Safety evaluation infrastructure error: ${errorMsg}. Falling back to manual user approval.`,
+						taskAligned: false,
+						infrastructureFailure: true,
+						verifierUnavailable: true,
+						approvalAttemptCount: 1,
+						auditLog: `[ApprovalAudit] taskId=${this.taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false infrastructureFailure=true finalDecision=MANUAL_APPROVAL reason="Unexpected evaluate error: ${errorMsg}" workerReinvoked=false`,
+					}
+				}
 
 				if (decisionResult.auditLog) {
 					console.log(decisionResult.auditLog)
@@ -5703,7 +5734,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const providerDeref = this.providerRef.deref()
 		const isForeground =
 			!providerDeref ||
-			(providerDeref as any).foregroundTaskId === undefined ||
+			!("foregroundTaskId" in providerDeref) ||
 			(providerDeref as any).foregroundTaskId === this.taskId
 		const priority = isForeground ? RequestPriority.FOREGROUND : RequestPriority.BACKGROUND
 

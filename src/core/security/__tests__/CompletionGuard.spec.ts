@@ -287,4 +287,152 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 		expect(result.reason).toContain("in_progress")
 		expect(result.unresolvedItems!.some((i) => i.content === "Run full test suite")).toBe(true)
 	})
+
+	it("13. Safe extraction: Markdown-wrapped JSON response from Completion Judge allows completion", async () => {
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue(
+			"```json\n" +
+			JSON.stringify({
+				decision: "ALLOW_COMPLETION",
+				reason: "All tasks verified inside markdown code block",
+				unresolvedItems: [],
+				missingCriteria: [],
+			}) +
+			"\n```"
+		)
+
+		const request = createCompletionRequest({
+			completionResult: "Work complete.",
+			completionCriteria: ["Implement feature"],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+		expect(result.reason).toContain("All tasks verified inside markdown code block")
+		expect(result.auditLog).toContain("workerReinvoked=false")
+	})
+
+	it("14. Safe extraction: Prose + JSON response from Completion Judge allows completion", async () => {
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue(
+			"Here is my final evaluation of the task completion:\n\n" +
+			JSON.stringify({
+				decision: "ALLOW_COMPLETION",
+				reason: "Prose preceded JSON object safely parsed",
+				unresolvedItems: [],
+				missingCriteria: [],
+			}) +
+			"\n\nLet me know if anything else is needed."
+		)
+
+		const request = createCompletionRequest({
+			completionResult: "Work complete.",
+			completionCriteria: ["Implement feature"],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+		expect(result.reason).toContain("Prose preceded JSON object safely parsed")
+		expect(result.auditLog).toContain("workerReinvoked=false")
+	})
+
+	it("15. Safe extraction: <think> reasoning contamination from Completion Judge allows completion", async () => {
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockResolvedValue(
+			"<think>\n" +
+			"The user requested feature X. Worker provided full report and all criteria are met.\n" +
+			"I will approve the completion.\n" +
+			"</think>\n" +
+			JSON.stringify({
+				decision: "ALLOW_COMPLETION",
+				reason: "Reasoning stripped cleanly and completion accepted",
+				unresolvedItems: [],
+				missingCriteria: [],
+			})
+		)
+
+		const request = createCompletionRequest({
+			completionResult: "Work complete.",
+			completionCriteria: ["Implement feature"],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+		expect(result.reason).toContain("Reasoning stripped cleanly and completion accepted")
+		expect(result.auditLog).toContain("workerReinvoked=false")
+	})
+
+	it("16. Bounded retry: Truncated JSON on attempt 1 -> Attempt 2 succeeds with correction prompt", async () => {
+		let callCount = 0
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockImplementation(async (params: any) => {
+			callCount++
+			if (callCount === 1) {
+				// Attempt 1: Truncated JSON due to token limit
+				return '{"decision": "ALLOW_COMPLETION", "reason": "Cut off mid-'
+			}
+			// Attempt 2: Valid complete JSON
+			expect(params.userPrompt).toContain("[CRITICAL CORRECTION FOR PREVIOUS RESPONSE]")
+			return JSON.stringify({
+				decision: "ALLOW_COMPLETION",
+				reason: "Attempt 2 succeeded after correction",
+				unresolvedItems: [],
+				missingCriteria: [],
+			})
+		})
+
+		const request = createCompletionRequest({
+			completionResult: "Work complete.",
+			completionCriteria: ["Implement feature"],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.approvalAttemptCount).toBe(2)
+		expect(result.auditLog).toContain("retry=true attempt=2")
+		expect(result.auditLog).toContain("workerReinvoked=false")
+		expect(callCount).toBe(2)
+	})
+
+	it("17. Persistent malformed JSON after retries -> Fails closed to MANUAL_APPROVAL without throwing", async () => {
+		let callCount = 0
+		CommandSafetyJudge.globalCallProviderOverride = vi.fn().mockImplementation(async () => {
+			callCount++
+			return "I cannot provide JSON, here is plain text without any structure."
+		})
+
+		const request = createCompletionRequest({
+			completionResult: "Work complete.",
+			completionCriteria: ["Implement feature"],
+		})
+
+		// Must NOT throw! Must resolve to MANUAL_APPROVAL fail-closed!
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("MANUAL_APPROVAL")
+		expect(result.risk).toBe("high")
+		expect(result.infrastructureFailure).toBe(true)
+		expect(result.reason).toContain("Completion Judge verification could not produce a valid decision")
+		expect(result.auditLog).toContain("workerReinvoked=false")
+		expect(result.auditLog).toContain("finalDecision=MANUAL_APPROVAL")
+		expect(callCount).toBe(2) // 1 initial + 1 retry = exactly 2 calls
+	})
+
+	it("18. parseCompletionJudgeResponse helper validates various JSON envelopes and throws clear errors", () => {
+		// Valid JSON
+		const res1 = orchestrator.parseCompletionJudgeResponse(
+			JSON.stringify({ decision: "ALLOW_COMPLETION", reason: "Ok", unresolvedItems: [], missingCriteria: [] })
+		)
+		expect(res1.decision).toBe("ALLOW_COMPLETION")
+
+		// Markdown wrapped
+		const res2 = orchestrator.parseCompletionJudgeResponse(
+			"```json\n" + JSON.stringify({ decision: "CONTINUE_WORK", reason: "More work", unresolvedItems: [], missingCriteria: [] }) + "\n```"
+		)
+		expect(res2.decision).toBe("CONTINUE_WORK")
+
+		// Empty throws Empty response
+		expect(() => orchestrator.parseCompletionJudgeResponse("")).toThrow("Empty response from Completion Judge model")
+
+		// Wrong schema throws validation failed
+		expect(() => orchestrator.parseCompletionJudgeResponse(JSON.stringify({ decision: "INVALID_CHOICE" }))).toThrow("Completion response validation failed")
+	})
 })

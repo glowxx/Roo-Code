@@ -32,7 +32,7 @@ export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createF
 	"Command safety evaluation failed (timeout or network error). Auto-execution blocked defensively"
 )
 
-export const DEFAULT_TIMEOUT_MS = 25000
+export const DEFAULT_TIMEOUT_MS = 15000
 
 const FAST_PATH_PATTERNS = [
 	/^git\s+(diff|status|log|show|branch|rev-parse)(\s+.*)?$/i,
@@ -60,6 +60,13 @@ export interface EvaluateTwoStageOptions {
 	state?: Partial<ExtensionState> | null
 }
 
+export interface ProviderCallDetails {
+	text: string
+	finishReason?: string
+	inputTokens?: number
+	outputTokens?: number
+}
+
 export interface CallProviderParams {
 	provider: string
 	modelId: string
@@ -69,11 +76,12 @@ export interface CallProviderParams {
 	state?: Partial<ExtensionState> | null
 	signal: AbortSignal
 	maxTokens?: number
+	responseFormat?: "json_object" | "text"
 }
 
 export interface CommandSafetyJudgeOptions {
 	timeoutMs?: number
-	callProviderOverride?: (params: CallProviderParams) => Promise<string>
+	callProviderOverride?: (params: CallProviderParams) => Promise<string | ProviderCallDetails>
 }
 
 /**
@@ -81,12 +89,12 @@ export interface CommandSafetyJudgeOptions {
  */
 export class CommandSafetyJudge {
 	public static readonly DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS
-	public static globalCallProviderOverride?: (params: CallProviderParams) => Promise<string>
+	public static globalCallProviderOverride?: (params: CallProviderParams) => Promise<string | ProviderCallDetails>
 	private static readonly cache = new Map<string, SafetyEvaluationResult>()
 	private static readonly twoStageCache = new Map<string, TwoStageSafetyResult>()
 
 	private readonly timeoutMs: number
-	private readonly callProviderOverride?: (params: CallProviderParams) => Promise<string>
+	private readonly callProviderOverride?: (params: CallProviderParams) => Promise<string | ProviderCallDetails>
 
 	constructor(options?: CommandSafetyJudgeOptions) {
 		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
@@ -612,7 +620,8 @@ export class CommandSafetyJudge {
 							? CommandSafetyJudge.globalCallProviderOverride(callParams)
 							: this.callProvider(callParams)
 
-					rawStage2 = await Promise.race([providerCall, timeoutPromise])
+					const stage2Res = await Promise.race([providerCall, timeoutPromise])
+					rawStage2 = typeof stage2Res === "string" ? stage2Res : stage2Res.text
 				} finally {
 					if (timeoutId !== undefined) {
 						clearTimeout(timeoutId)
@@ -729,9 +738,10 @@ export class CommandSafetyJudge {
 					? this.callProviderOverride(callParams)
 					: CommandSafetyJudge.globalCallProviderOverride
 						? CommandSafetyJudge.globalCallProviderOverride(callParams)
-						: this.callProvider(callParams)
+						: this.callProviderDetails(callParams)
 
-				rawResponse = await Promise.race([providerCall, timeoutPromise])
+				const callRes = await Promise.race([providerCall, timeoutPromise])
+				rawResponse = typeof callRes === "string" ? callRes : callRes.text
 			} finally {
 				if (timeoutId !== undefined) {
 					clearTimeout(timeoutId)
@@ -777,49 +787,37 @@ export class CommandSafetyJudge {
 	}
 
 	/**
-	 * Dispatches request to the appropriate LLM provider client.
+	 * Dispatches request to the appropriate LLM provider client and returns full details.
 	 */
-	public async callProvider({
-		provider,
-		modelId,
-		apiKey,
-		systemPrompt,
-		userPrompt,
-		state,
-		signal,
-		maxTokens,
-	}: CallProviderParams): Promise<string> {
-		switch (provider.toLowerCase().trim()) {
+	public async callProviderDetails(params: CallProviderParams): Promise<ProviderCallDetails> {
+		if (this.callProviderOverride) {
+			const res = await this.callProviderOverride(params)
+			return typeof res === "string" ? { text: res } : res
+		}
+		if (CommandSafetyJudge.globalCallProviderOverride) {
+			const res = await CommandSafetyJudge.globalCallProviderOverride(params)
+			return typeof res === "string" ? { text: res } : res
+		}
+
+		switch (params.provider.toLowerCase().trim()) {
 			case "anthropic":
-				return this.callAnthropic({ modelId, apiKey, systemPrompt, userPrompt, state, signal, maxTokens })
-
+				return this.callAnthropic(params)
 			case "gemini":
-				return this.callGemini({ modelId, apiKey, systemPrompt, userPrompt, signal, maxTokens })
-
+				return this.callGemini(params)
 			default:
-				// Handles OpenAI, OpenRouter, xkiro, and other OpenAI-compatible endpoints
-				return this.callOpenAiCompatible({
-					provider,
-					modelId,
-					apiKey,
-					systemPrompt,
-					userPrompt,
-					state,
-					signal,
-					maxTokens,
-				})
+				return this.callOpenAiCompatible(params)
 		}
 	}
 
-	private async callAnthropic({
-		modelId,
-		apiKey,
-		systemPrompt,
-		userPrompt,
-		state,
-		signal,
-		maxTokens,
-	}: {
+	/**
+	 * Dispatches request to the appropriate LLM provider client.
+	 */
+	public async callProvider(params: CallProviderParams): Promise<string> {
+		const res = await this.callProviderDetails(params)
+		return res.text
+	}
+
+	private async callAnthropic(params: {
 		modelId: string
 		apiKey: string
 		systemPrompt: string
@@ -827,90 +825,99 @@ export class CommandSafetyJudge {
 		state?: Partial<ExtensionState> | null
 		signal: AbortSignal
 		maxTokens?: number
-	}): Promise<string> {
+		responseFormat?: "json_object" | "text"
+	}): Promise<ProviderCallDetails> {
 		const client = new Anthropic({
-			apiKey,
-			baseURL: state?.apiConfiguration?.anthropicBaseUrl || undefined,
+			apiKey: params.apiKey,
+			baseURL: params.state?.apiConfiguration?.anthropicBaseUrl || undefined,
 		})
 
 		const response = await client.messages.create(
 			{
-				model: modelId,
-				max_tokens: maxTokens || 150,
-				system: systemPrompt,
-				messages: [{ role: "user", content: userPrompt }],
+				model: params.modelId,
+				max_tokens: params.maxTokens || 150,
+				system: params.systemPrompt,
+				messages: [{ role: "user", content: params.userPrompt }],
 				temperature: 0.0,
 			},
 			{
-				signal,
+				signal: params.signal,
 			}
 		)
 
 		const textContent = response.content.find((block) => block.type === "text")
-		return textContent?.type === "text" ? textContent.text : ""
+		const text = textContent?.type === "text" ? textContent.text : ""
+		const finishReason = response.stop_reason === "max_tokens" ? "length" : response.stop_reason ?? undefined
+		return {
+			text,
+			finishReason,
+			inputTokens: response.usage?.input_tokens,
+			outputTokens: response.usage?.output_tokens,
+		}
 	}
 
-	private async callGemini({
-		modelId,
-		apiKey,
-		systemPrompt,
-		userPrompt,
-		signal,
-		maxTokens,
-	}: {
+	private async callGemini(params: {
 		modelId: string
 		apiKey: string
 		systemPrompt: string
 		userPrompt: string
 		signal: AbortSignal
 		maxTokens?: number
-	}): Promise<string> {
-		const client = new GoogleGenAI({ apiKey })
+		responseFormat?: "json_object" | "text"
+	}): Promise<ProviderCallDetails> {
+		const client = new GoogleGenAI({ apiKey: params.apiKey })
 
 		const abortPromise = new Promise<never>((_, reject) => {
-			if (signal.aborted) {
-				reject(signal.reason || new Error("Aborted"))
+			if (params.signal.aborted) {
+				reject(params.signal.reason || new Error("Aborted"))
 			} else {
-				signal.addEventListener(
+				params.signal.addEventListener(
 					"abort",
-					() => reject(signal.reason || new Error("Aborted")),
+					() => reject(params.signal.reason || new Error("Aborted")),
 					{ once: true }
 				)
 			}
 		})
 
+		const config: any = {
+			systemInstruction: params.systemPrompt,
+			temperature: 0.0,
+			maxOutputTokens: params.maxTokens || 150,
+			thinkingConfig: {
+				thinkingBudget: 0,
+			},
+		}
+
+		if (params.responseFormat === "json_object") {
+			config.responseMimeType = "application/json"
+		}
+
 		const generatePromise = client.models.generateContent({
-			model: modelId,
+			model: params.modelId,
 			contents: [
 				{
 					role: "user",
-					parts: [{ text: userPrompt }],
+					parts: [{ text: params.userPrompt }],
 				},
 			],
-			config: {
-				systemInstruction: systemPrompt,
-				temperature: 0.0,
-				maxOutputTokens: maxTokens || 150,
-				thinkingConfig: {
-					thinkingBudget: 0,
-				},
-			},
+			config,
 		})
 
 		const response = await Promise.race([generatePromise, abortPromise])
-		return response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || ""
+		const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || ""
+		const rawFinish = response.candidates?.[0]?.finishReason
+		const finishReason = rawFinish === "MAX_TOKENS" ? "length" : rawFinish
+		const inputTokens = response.usageMetadata?.promptTokenCount
+		const outputTokens = response.usageMetadata?.candidatesTokenCount
+		return {
+			text,
+			finishReason,
+			inputTokens,
+			outputTokens,
+		}
 	}
 
-	private async callOpenAiCompatible({
-		provider,
-		modelId,
-		apiKey,
-		systemPrompt,
-		userPrompt,
-		state,
-		signal,
-		maxTokens,
-	}: {
+	private async callOpenAiCompatible(params: {
 		provider: string
 		modelId: string
 		apiKey: string
@@ -919,61 +926,92 @@ export class CommandSafetyJudge {
 		state?: Partial<ExtensionState> | null
 		signal: AbortSignal
 		maxTokens?: number
-	}): Promise<string> {
+		responseFormat?: "json_object" | "text"
+	}): Promise<ProviderCallDetails> {
 		let baseURL: string | undefined
 		const defaultHeaders: Record<string, string> = {}
 
-		if (provider === "openrouter") {
-			baseURL = state?.apiConfiguration?.openRouterBaseUrl || "https://openrouter.ai/api/v1"
+		if (params.provider === "openrouter") {
+			baseURL = params.state?.apiConfiguration?.openRouterBaseUrl || "https://openrouter.ai/api/v1"
 			defaultHeaders["HTTP-Referer"] = "https://github.com/RooCodeInc/Roo-Code"
 			defaultHeaders["X-Title"] = "Roo Code"
-		} else if (provider === "xkiro") {
+		} else if (params.provider === "xkiro") {
 			baseURL =
-				(state?.apiConfiguration as any)?.xkiroBaseUrl ||
-				state?.apiConfiguration?.openAiBaseUrl ||
+				(params.state?.apiConfiguration as any)?.xkiroBaseUrl ||
+				params.state?.apiConfiguration?.openAiBaseUrl ||
 				"https://api.xkiro.com/v1"
-		} else if (provider === "openai") {
-			baseURL = state?.apiConfiguration?.openAiBaseUrl || "https://api.openai.com/v1"
-		} else if (provider === "ollama") {
-			baseURL = state?.apiConfiguration?.ollamaBaseUrl || "http://localhost:11434/v1"
-		} else if (provider === "lmstudio") {
-			baseURL = state?.apiConfiguration?.lmStudioBaseUrl || "http://localhost:1234/v1"
+		} else if (params.provider === "openai") {
+			baseURL = params.state?.apiConfiguration?.openAiBaseUrl || "https://api.openai.com/v1"
+		} else if (params.provider === "ollama") {
+			baseURL = params.state?.apiConfiguration?.ollamaBaseUrl || "http://localhost:11434/v1"
+		} else if (params.provider === "lmstudio") {
+			baseURL = params.state?.apiConfiguration?.lmStudioBaseUrl || "http://localhost:1234/v1"
 		} else {
-			baseURL = state?.apiConfiguration?.openAiBaseUrl || undefined
+			baseURL = params.state?.apiConfiguration?.openAiBaseUrl || undefined
 		}
 
-		if (state?.apiConfiguration?.openAiHeaders) {
-			Object.assign(defaultHeaders, state.apiConfiguration.openAiHeaders)
+		if (params.state?.apiConfiguration?.openAiHeaders) {
+			Object.assign(defaultHeaders, params.state.apiConfiguration.openAiHeaders)
 		}
 
 		const client = new OpenAI({
-			apiKey: apiKey || "noop",
+			apiKey: params.apiKey || "noop",
 			baseURL,
 			defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
 		})
 
 		const isReasoningModel =
-			modelId.toLowerCase().startsWith("o1") || modelId.toLowerCase().startsWith("o3")
+			params.modelId.toLowerCase().startsWith("o1") || params.modelId.toLowerCase().startsWith("o3")
 
 		const messages: OpenAI.Chat.ChatCompletionMessageParam[] = isReasoningModel
 			? [
-					{ role: "developer", content: systemPrompt },
-					{ role: "user", content: userPrompt },
+					{ role: "developer", content: params.systemPrompt },
+					{ role: "user", content: params.userPrompt },
 				]
 			: [
-					{ role: "system", content: systemPrompt },
-					{ role: "user", content: userPrompt },
+					{ role: "system", content: params.systemPrompt },
+					{ role: "user", content: params.userPrompt },
 				]
 
 		const requestParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
-			model: modelId,
+			model: params.modelId,
 			messages,
 			...(isReasoningModel
-				? { reasoning_effort: "low", max_completion_tokens: maxTokens || 150 }
-				: { temperature: 0.0, max_tokens: maxTokens || 150 }),
+				? { reasoning_effort: "low", max_completion_tokens: params.maxTokens || 150 }
+				: { temperature: 0.0, max_tokens: params.maxTokens || 150 }),
 		}
 
-		const completion = await client.chat.completions.create(requestParams, { signal })
-		return completion.choices?.[0]?.message?.content || ""
+		if (params.responseFormat === "json_object" && !isReasoningModel) {
+			requestParams.response_format = { type: "json_object" }
+		}
+
+		let completion: OpenAI.Chat.ChatCompletion
+		try {
+			completion = await client.chat.completions.create(requestParams, { signal: params.signal })
+		} catch (err: any) {
+			// If response_format caused a 400 error on an endpoint that doesn't support it, retry once without it
+			if (
+				requestParams.response_format &&
+				(err?.status === 400 || (err?.message && String(err.message).toLowerCase().includes("response_format")))
+			) {
+				delete requestParams.response_format
+				completion = await client.chat.completions.create(requestParams, { signal: params.signal })
+			} else {
+				throw err
+			}
+		}
+
+		const choice = completion.choices?.[0]
+		let text = choice?.message?.content || ""
+		if (!text && (choice?.message as any)?.reasoning_content) {
+			text = (choice?.message as any).reasoning_content
+		}
+
+		return {
+			text,
+			finishReason: choice?.finish_reason ?? undefined,
+			inputTokens: completion.usage?.prompt_tokens,
+			outputTokens: completion.usage?.completion_tokens,
+		}
 	}
 }
