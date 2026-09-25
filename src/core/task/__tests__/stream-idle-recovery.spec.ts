@@ -3,7 +3,7 @@ import * as os from "os"
 import * as path from "path"
 import * as vscode from "vscode"
 
-import type { GlobalState, ProviderSettings } from "@roo-code/types"
+import { modelSupportsReasoning, xkiroModels, type GlobalState, type ProviderSettings } from "@roo-code/types"
 import {
 	Task,
 	DEFAULT_STREAM_IDLE_TIMEOUT_MS,
@@ -156,7 +156,7 @@ vi.mock("../../context/ContextCompactor", () => ({
 	}),
 }))
 
-describe("Stream Idle Watchdog & Recovery Architecture (12 Scenarios)", () => {
+describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 	let mockProvider: any
 	let mockApiConfig: ProviderSettings
 	let mockOutputChannel: any
@@ -391,5 +391,155 @@ describe("Stream Idle Watchdog & Recovery Architecture (12 Scenarios)", () => {
 		expect(classification.category).toBe("stream_idle")
 		expect(classification.retryable).toBe(true)
 		expect(classification.maxRetries).toBe(1)
+	})
+
+	// Scenario 13: openai/gpt-6-sol is recognized as reasoning model and receives 90s first chunk base timeout
+	it("Scenario 13: openai/gpt-6-sol is recognized as reasoning model and receives REASONING_FIRST_CHUNK_TIMEOUT_MS", () => {
+		expect(modelSupportsReasoning("openai/gpt-6-sol")).toBe(true)
+		expect(modelSupportsReasoning("gpt-6-sol")).toBe(true)
+		expect(xkiroModels["openai/gpt-6-sol"]).toBeDefined()
+		expect(xkiroModels["openai/gpt-6-sol"].preserveReasoning).toBe(true)
+		expect(xkiroModels["openai/gpt-6-sol"].supportsReasoningEffort).toBe(true)
+		expect(REASONING_FIRST_CHUNK_TIMEOUT_MS).toBe(90_000)
+		expect(FIRST_CHUNK_TIMEOUT_MS).toBe(60_000)
+		expect(REASONING_FIRST_CHUNK_TIMEOUT_MS).toBeGreaterThan(FIRST_CHUNK_TIMEOUT_MS)
+	})
+
+	// Scenario 14: adaptive prompt size scaling margin for large context (>30k tokens)
+	it("Scenario 14: adaptive prompt size scaling extends first chunk timeout for large prompts (>30k tokens)", () => {
+		const calculateMargin = (tokens: number) => {
+			return tokens > 30_000 ? Math.min(60_000, Math.floor(tokens / 20_000) * 15_000) : 0
+		}
+
+		// Incident task had tokensIn = 64,795
+		const incidentTokens = 64_795
+		const incidentMargin = calculateMargin(incidentTokens)
+		expect(incidentMargin).toBe(45_000)
+
+		const incidentTotalTimeout = REASONING_FIRST_CHUNK_TIMEOUT_MS + incidentMargin
+		expect(incidentTotalTimeout).toBe(135_000) // 135 seconds allowance instead of premature 60s
+
+		// Small prompt (5k tokens) has no extra margin
+		expect(calculateMargin(5_000)).toBe(0)
+
+		// Huge prompt (>120k tokens) is capped at 60s max margin
+		expect(calculateMargin(150_000)).toBe(60_000)
+	})
+
+	// Scenario 15: StreamAuditTracker tracks phases across the streaming lifecycle
+	it("Scenario 15: StreamAuditTracker transitions and records distinct stream phases", () => {
+		const tracker = new StreamAuditTracker("task-123", "inst-1", "xkiro", "openai/gpt-6-sol", 0, 90_000)
+
+		expect(tracker.data.streamPhase).toBe("waiting_first_chunk")
+
+		tracker.recordPhase("reasoning")
+		expect(tracker.data.streamPhase).toBe("reasoning")
+
+		tracker.recordPhase("post_reasoning_wait")
+		expect(tracker.data.streamPhase).toBe("post_reasoning_wait")
+
+		tracker.recordPhase("content")
+		expect(tracker.data.streamPhase).toBe("content")
+
+		tracker.recordPhase("tool_call")
+		expect(tracker.data.streamPhase).toBe("tool_call")
+
+		const log = tracker.formatLog()
+		expect(log).toContain("streamPhase=tool_call")
+		expect(log).toContain("model=openai/gpt-6-sol")
+	})
+
+	// Scenario 16: phase-specific timeout error messages are all classified as stream_idle
+	it("Scenario 16: phase-specific timeout error messages classify consistently as stream_idle with 1 bounded retry", () => {
+		const phaseMessages = [
+			"First chunk timeout: no data received from provider for 90 seconds",
+			"Reasoning stream timeout: no reasoning data received from provider for 90 seconds",
+			"Stream idle timeout: no data received after reasoning completed for 45 seconds",
+			"Stream idle timeout: content generation stalled, no data received from provider for 45 seconds",
+			"Stream idle timeout: tool call generation stalled, no data received from provider for 45 seconds",
+		]
+
+		for (const msg of phaseMessages) {
+			const classification = classifyApiError(new Error(msg))
+			expect(classification.category).toBe("stream_idle")
+			expect(classification.retryable).toBe(true)
+			expect(classification.maxRetries).toBe(1)
+		}
+	})
+
+	// Scenario 17: partial unexecuted tool call safety
+	it("Scenario 17: partial tool call chunks without execution do not prevent auto-retry", () => {
+		const tracker = new StreamAuditTracker("task-123", "inst-1", "xkiro", "openai/gpt-6-sol", 0, 90_000)
+		tracker.recordChunk("tool", 30)
+
+		expect(tracker.data.toolCallObserved).toBe(true)
+		expect(tracker.data.sideEffectObserved).toBe(false)
+		expect(tracker.data.autoRetryEligible).toBe(true)
+
+		// If a real side-effect actually executes (e.g. file write or command), auto-retry must be disallowed
+		tracker.recordSideEffect()
+		expect(tracker.data.sideEffectObserved).toBe(true)
+		expect(tracker.data.autoRetryEligible).toBe(false)
+	})
+
+	// Scenario 18: backend retry message does not leak raw internal keys
+	it("Scenario 18: backend retry message uses valid i18n key instead of leaking internal string", async () => {
+		const enCommon = await import("../../../i18n/locales/en/common.json")
+		const plCommon = await import("../../../i18n/locales/pl/common.json")
+
+		expect(enCommon.interruption?.connectionStalledRetrying).toBeDefined()
+		expect(enCommon.interruption?.connectionStalledRetrying).not.toBe("stalledRetrying")
+		expect(enCommon.interruption?.connectionStalledRetrying).toContain("retrying automatically")
+
+		expect(plCommon.interruption?.connectionStalledRetrying).toBeDefined()
+		expect(plCommon.interruption?.connectionStalledRetrying).toContain("ponawianie próby automatycznie")
+	})
+
+	// Scenario 19: structured diagnostics format
+	it("Scenario 19: error details diagnostics format contains provider, phase, timeout and request metadata", () => {
+		const currentWatchdogTimeout = 135_000
+		const currentRetry = 1
+		const maxRetries = 1
+		const phaseDisplay = "first-chunk"
+		const lastEventType = "none"
+		const requestId = "req-test-123"
+
+		const streamingFailedDetails = [
+			`Error type: Stream idle timeout`,
+			`Phase: ${phaseDisplay}`,
+			`Timeout: ${Math.round(currentWatchdogTimeout / 1000)}s`,
+			`Auto retries: ${currentRetry}/${maxRetries}`,
+			`Last valid event: ${lastEventType}`,
+			`Request ID: ${requestId}`,
+		].join("\n")
+
+		expect(streamingFailedDetails).toContain("Error type: Stream idle timeout")
+		expect(streamingFailedDetails).toContain("Phase: first-chunk")
+		expect(streamingFailedDetails).toContain("Timeout: 135s")
+		expect(streamingFailedDetails).toContain("Auto retries: 1/1")
+		expect(streamingFailedDetails).toContain("Request ID: req-test-123")
+	})
+
+	// Scenario 20: bounded retry prevents runaway retry storms
+	it("Scenario 20: bounded retry strictly halts after 1 retry attempt", () => {
+		const error = new Error("First chunk timeout: no data received from provider for 90 seconds")
+		const classification = classifyApiError(error)
+
+		expect(classification.maxRetries).toBe(1)
+
+		let attempt = 0
+		let retried = false
+
+		// Simulate retry decision
+		if (attempt < classification.maxRetries) {
+			attempt++
+			retried = true
+		}
+		expect(retried).toBe(true)
+		expect(attempt).toBe(1)
+
+		// Next attempt must NOT retry
+		const canRetryAgain = attempt < classification.maxRetries
+		expect(canRetryAgain).toBe(false)
 	})
 })

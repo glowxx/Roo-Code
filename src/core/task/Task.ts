@@ -60,6 +60,8 @@ import {
 	MIN_CHECKPOINT_TIMEOUT_SECONDS,
 	MAX_MCP_TOOLS_THRESHOLD,
 	countEnabledMcpTools,
+	modelSupportsReasoning,
+	cleanModelDisplayName,
 } from "@roo-code/types"
 import { CommandSafetyJudge, SAFETY_EVALUATION_FALLBACK_RESULT } from "../security/CommandSafetyJudge"
 import { ApprovalOrchestrator } from "../security/ApprovalOrchestrator"
@@ -153,7 +155,7 @@ import { MessageManager } from "../message-manager"
 import { validateAndFixToolResultIds } from "./validateToolResultIds"
 import { mergeConsecutiveApiMessages } from "./mergeConsecutiveApiMessages"
 import { classifyApiError } from "../../api/providers/utils/error-classifier"
-import { StreamAuditTracker } from "./StreamAudit"
+import { StreamAuditTracker, type StreamPhase } from "./StreamAudit"
 
 const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
@@ -3890,6 +3892,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				await this.diffViewProvider.reset()
 
 				// Cache model info once per API request to avoid repeated calls during streaming
+				// Cache model info once per API request to avoid repeated calls during streaming
 				// This is especially important for tools and background usage collection
 				this.cachedStreamingModel = this.api.getModel()
 				const streamModelInfo = this.cachedStreamingModel.info
@@ -3898,17 +3901,61 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				const isReasoningModel = Boolean(
 					(streamModelInfo as any)?.reasoning ||
 					(streamModelInfo as any)?.thinking ||
+					(streamModelInfo as any)?.supportsReasoningEffort ||
+					(streamModelInfo as any)?.supportsReasoningBudget ||
+					(streamModelInfo as any)?.preserveReasoning ||
+					modelSupportsReasoning(cachedModelId, streamModelInfo) ||
 					cachedModelId.toLowerCase().includes("reason") ||
 					cachedModelId.toLowerCase().includes("think") ||
 					cachedModelId.toLowerCase().includes("qwen") ||
 					cachedModelId.toLowerCase().includes("deepseek-r1") ||
 					cachedModelId.toLowerCase().includes("claude-3-7-sonnet") ||
 					cachedModelId.toLowerCase().includes("o1") ||
-					cachedModelId.toLowerCase().includes("o3"),
+					cachedModelId.toLowerCase().includes("o3") ||
+					cachedModelId.toLowerCase().includes("o4") ||
+					cachedModelId.toLowerCase().includes("gpt-5") ||
+					cachedModelId.toLowerCase().includes("gpt-6") ||
+					cachedModelId.toLowerCase().includes("astra") ||
+					cachedModelId.toLowerCase().includes("sol"),
 				)
-				const initialFirstChunkTimeout = isReasoningModel ? REASONING_FIRST_CHUNK_TIMEOUT_MS : FIRST_CHUNK_TIMEOUT_MS
+
+				// Adaptive first-chunk timeout:
+				// Base: 90s for reasoning models (P99 is 87.5s), 60s for standard models.
+				// For large prompts (>30k tokens), scale dynamically because server-side prefill adds latency across all providers.
+				const estimatedInputTokens =
+					this.currentAuditRecord?.estimatedInputTokens ??
+					this.currentAuditRecord?.providerInputTokens ??
+					(currentUserContent ? JSON.stringify(currentUserContent).length / 4 : 0)
+				const promptSizeMarginMs =
+					estimatedInputTokens > 30_000
+						? Math.min(60_000, Math.floor(estimatedInputTokens / 20_000) * 15_000)
+						: 0
+
+				const initialFirstChunkTimeout =
+					(isReasoningModel ? REASONING_FIRST_CHUNK_TIMEOUT_MS : FIRST_CHUNK_TIMEOUT_MS) + promptSizeMarginMs
 				let currentIdleTimeout = isReasoningModel ? REASONING_STREAM_IDLE_TIMEOUT_MS : DEFAULT_STREAM_IDLE_TIMEOUT_MS
+				let currentWatchdogTimeout = initialFirstChunkTimeout
+				let currentStreamPhase: StreamPhase = "waiting_first_chunk"
+				let hadReasoning = false
 				let lastMeaningfulEventTime = performance.now()
+
+				const getPhaseTimeoutErrorMessage = (phase: StreamPhase, timeoutMs: number) => {
+					const seconds = Math.round(timeoutMs / 1000)
+					switch (phase) {
+						case "waiting_first_chunk":
+							return `First chunk timeout: no data received from provider for ${seconds} seconds`
+						case "reasoning":
+							return `Reasoning stream timeout: no reasoning data received from provider for ${seconds} seconds`
+						case "post_reasoning_wait":
+							return `Stream idle timeout: no data received after reasoning completed for ${seconds} seconds`
+						case "content":
+							return `Stream idle timeout: content generation stalled, no data received from provider for ${seconds} seconds`
+						case "tool_call":
+							return `Stream idle timeout: tool call generation stalled, no data received from provider for ${seconds} seconds`
+						default:
+							return `Stream idle timeout: no data received from provider for ${seconds} seconds`
+					}
+				}
 
 				const currentRetry = currentItem.retryAttempt ?? 0
 				const streamAudit = new StreamAuditTracker(
@@ -3917,6 +3964,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					this.apiConfiguration.apiProvider,
 					cachedModelId,
 					currentRetry,
+					initialFirstChunkTimeout,
 				)
 
 				// Yields only if the first chunk is successful, otherwise will
@@ -3935,8 +3983,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					const iterator = stream[Symbol.asyncIterator]()
 
 					// Helper to race iterator.next() with abort signal and adaptive stream idle watchdog
-					const nextChunkWithAbort = async (timeoutMs?: number) => {
+					const nextChunkWithAbort = async (timeoutMs?: number, phase?: StreamPhase) => {
 						const nextPromise = iterator.next()
+						const activePhase = phase ?? currentStreamPhase
+						streamAudit.recordPhase(activePhase)
+						currentWatchdogTimeout = timeoutMs ?? currentWatchdogTimeout
 
 						// If we have an abort controller, race it with the next chunk
 						let abortCleanup: (() => void) | undefined
@@ -3959,11 +4010,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						const idlePromise = timeoutMs
 							? new Promise<never>((_, reject) => {
 									idleTimer = setTimeout(() => {
-										reject(
-											new Error(
-												`Stream idle timeout: no data received from provider for ${timeoutMs / 1000} seconds`,
-											),
-										)
+										streamAudit.recordIdleTimeout(true)
+										reject(new Error(getPhaseTimeoutErrorMessage(activePhase, timeoutMs)))
 									}, timeoutMs)
 							  })
 							: null
@@ -3982,14 +4030,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						}
 					}
 
-					let item = await nextChunkWithAbort(initialFirstChunkTimeout)
+					let item = await nextChunkWithAbort(initialFirstChunkTimeout, "waiting_first_chunk")
 					this.isStreaming = true
 					while (!item.done) {
 						const chunk = item.value
-						item = await nextChunkWithAbort(currentIdleTimeout)
 						if (!chunk) {
 							// Sometimes chunk is undefined, no idea that can cause
 							// it, but this workaround seems to fix it.
+							if (currentStreamPhase === "reasoning") {
+								currentStreamPhase = "post_reasoning_wait"
+							}
+							item = await nextChunkWithAbort(currentIdleTimeout, currentStreamPhase)
 							continue
 						}
 
@@ -4005,9 +4056,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								// Transport activity without assistant content (SSE comment, keepalive ping, role-only frame).
 								// Watchdog was reset by chunk arrival, but no message content is created.
 								streamAudit.recordChunk("heartbeat")
+								if (
+									currentStreamPhase === "waiting_first_chunk" ||
+									currentStreamPhase === "reasoning" ||
+									currentStreamPhase === "post_reasoning_wait"
+								) {
+									currentIdleTimeout = isReasoningModel
+										? REASONING_STREAM_IDLE_TIMEOUT_MS
+										: DEFAULT_STREAM_IDLE_TIMEOUT_MS
+								}
 								break
 							}
 							case "reasoning": {
+								hadReasoning = true
+								currentStreamPhase = "reasoning"
 								currentIdleTimeout = REASONING_STREAM_IDLE_TIMEOUT_MS
 								lastMeaningfulEventTime = performance.now()
 								streamAudit.recordChunk("reasoning", chunk.text.length)
@@ -4050,6 +4112,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								}
 								break
 							case "tool_call_partial": {
+								currentStreamPhase = "tool_call"
+								currentIdleTimeout = DEFAULT_STREAM_IDLE_TIMEOUT_MS
 								lastMeaningfulEventTime = performance.now()
 								streamAudit.recordChunk("tool_call_partial", chunk.arguments?.length || 0)
 								// Process raw tool call chunk through NativeToolCallParser
@@ -4176,6 +4240,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							}
 
 							case "tool_call": {
+								currentStreamPhase = "tool_call"
+								currentIdleTimeout = DEFAULT_STREAM_IDLE_TIMEOUT_MS
 								lastMeaningfulEventTime = performance.now()
 								streamAudit.recordChunk("tool_call", chunk.arguments?.length || 0)
 								// Legacy: Handle complete tool calls (for backward compatibility)
@@ -4207,6 +4273,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								break
 							}
 							case "text": {
+								currentStreamPhase = "content"
+								currentIdleTimeout = DEFAULT_STREAM_IDLE_TIMEOUT_MS
 								lastMeaningfulEventTime = performance.now()
 								streamAudit.recordChunk("text", chunk.text.length)
 								assistantMessage += chunk.text
@@ -4259,6 +4327,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								"\n\n[Response interrupted by a tool use result. Only one tool may be used at a time and should be placed at the end of the message.]"
 							break
 						}
+
+						item = await nextChunkWithAbort(currentIdleTimeout, currentStreamPhase)
 					}
 
 					streamAudit.recordOutcome(true)
@@ -4460,7 +4530,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							await this.providerRef.deref()?.postStateToWebviewWithoutTaskHistory()
 
 							// Subtle retry notification UX instead of scary red error box
-							await this.say("api_req_retry_delayed", t("chat:stalledRetrying"))
+							await this.say("api_req_retry_delayed", t("common:interruption.connectionStalledRetrying"))
 
 							// Short backoff (2000ms + jitter)
 							const jitterMs = Math.floor(Math.random() * 500)
@@ -4487,8 +4557,38 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						// Determine cancellation reason
 						const cancelReason: ClineApiReqCancelReason = this.abort ? "user_cancelled" : "streaming_failed"
 
+						const formattedModelName = cleanModelDisplayName(cachedModelId)
+						const providerDisplayName =
+							this.apiConfiguration.apiProvider === "xkiro"
+								? "xKiro"
+								: (this.apiConfiguration.apiProvider || "Provider")
+
+						const phaseDisplay =
+							currentStreamPhase === "waiting_first_chunk"
+								? "first-chunk"
+								: currentStreamPhase === "reasoning"
+								? "reasoning"
+								: currentStreamPhase === "post_reasoning_wait"
+								? "post-reasoning"
+								: currentStreamPhase === "tool_call"
+								? "tool-call"
+								: "content"
+
+						const streamingFailedDetails = isStreamIdle
+							? [
+									`Error type: Stream idle timeout`,
+									`Phase: ${phaseDisplay}`,
+									`Timeout: ${Math.round(currentWatchdogTimeout / 1000)}s`,
+									`Auto retries: ${currentRetry}/${classification.maxRetries}`,
+									`Last valid event: ${streamAudit.data.lastEventType}`,
+									`Request ID: ${streamAudit.data.requestId}`,
+							  ].join("\n")
+							: ""
+
 						const streamingFailedMessage = this.abort
 							? undefined
+							: streamingFailedDetails
+							? `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}\n\n${streamingFailedDetails}`
 							: `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}`
 
 						// Clean up partial state
@@ -4511,9 +4611,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								console.error(
 									`[Task#${this.taskId}.${this.instanceId}] Max mid-stream retries (${maxAllowedRetries}) or deterministic failure (${classification.category}): ${streamingFailedMessage}`,
 								)
-								const reasonText = !classification.retryable
-									? `Deterministic stream failure (${classification.category}): ${streamingFailedMessage}`
-									: `Max stream retries (${maxAllowedRetries}) exceeded: ${streamingFailedMessage}`
+								let reasonText: string
+								if (isStreamIdle) {
+									reasonText = `${providerDisplayName} stream stalled\n\nThe provider did not send stream data for ${Math.round(
+										currentWatchdogTimeout / 1000,
+									)} seconds.\nAutomatic recovery was attempted ${currentRetry} time(s).\n\nModel:\n${formattedModelName}`
+								} else if (!classification.retryable) {
+									reasonText = `Deterministic stream failure (${classification.category}): ${streamingFailedMessage}`
+								} else {
+									reasonText = `Max stream retries (${maxAllowedRetries}) exceeded: ${streamingFailedMessage}`
+								}
 								const { response } = await this.ask("api_req_failed", reasonText)
 								if (response !== "yesButtonClicked") {
 									this.abortReason = "streaming_failed"

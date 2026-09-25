@@ -998,7 +998,12 @@ export class ClineProvider
 			onCreated: this.taskCreationCallback,
 			startTask: options?.startTask ?? true,
 			// Preserve the status from the history item to avoid overwriting it when the task saves messages
-			initialStatus: historyItem.status,
+			initialStatus:
+				historyItem.status === "completed"
+					? "completed"
+					: historyItem.status === "delegated"
+					? "delegated"
+					: "active",
 		})
 
 		if (isRehydratingCurrentTask) {
@@ -2114,7 +2119,7 @@ export class ClineProvider
 			{}
 
 		return {
-			version: this.context.extension?.packageJSON?.version ?? "",
+			version: this.context.extension?.packageJSON?.version ?? Package.version ?? "",
 			apiConfiguration,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,

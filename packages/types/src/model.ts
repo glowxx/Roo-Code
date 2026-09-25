@@ -388,7 +388,11 @@ export function getModelContextWindow(modelId: string, baseContext?: number): nu
  * Automatically recognizes modern reasoning models like o1, o3, o4, gpt-5, reasoner, thinking models.
  */
 export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null): boolean {
-	if (info?.supportsReasoningEffort || (info?.reasoningEffortLevels && info.reasoningEffortLevels.length > 0)) {
+	if (
+		info?.supportsReasoningEffort ||
+		info?.preserveReasoning ||
+		(info?.reasoningEffortLevels && info.reasoningEffortLevels.length > 0)
+	) {
 		return true
 	}
 	const lower = (modelId || "").toLowerCase()
@@ -399,6 +403,7 @@ export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null)
 		lower.includes("gpt-5") ||
 		lower.includes("gpt-6") ||
 		lower.includes("astra") ||
+		lower.includes("sol") ||
 		lower.includes("reasoner") ||
 		lower.includes("thinking")
 	)

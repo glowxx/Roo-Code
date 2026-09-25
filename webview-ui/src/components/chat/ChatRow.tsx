@@ -1159,6 +1159,29 @@ export const ChatRowContent = ({
 						</>
 					)
 				case "api_req_retry_delayed":
+					const textLower = (message.text || "").toLowerCase()
+					const isStalledRetry =
+						textLower.includes("stalled") ||
+						textLower.includes("zawieszone") ||
+						textLower.includes("retrying automatically") ||
+						message.text === "stalledRetrying"
+
+					if (isStalledRetry) {
+						const notificationText =
+							message.text === "stalledRetrying"
+								? t("chat:apiRequest.stalledRetrying", {
+										defaultValue: "Connection temporarily stalled — retrying automatically...",
+								  })
+								: message.text
+
+						return (
+							<div className="flex items-center gap-2 py-2 px-3 my-1 rounded bg-vscode-editor-inactiveSelectionBackground text-vscode-descriptionForeground text-xs">
+								<Repeat2 className="size-3.5 animate-spin" strokeWidth={1.5} />
+								<span>{notificationText}</span>
+							</div>
+						)
+					}
+
 					let body = t(`chat:apiRequest.failed`)
 					let retryInfo, rawError, code, docsURL
 					if (message.text !== undefined) {

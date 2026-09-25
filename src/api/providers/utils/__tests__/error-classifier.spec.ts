@@ -159,6 +159,20 @@ describe("error-classifier", () => {
 			expect(res.isDeterministic).toBe(false)
 		})
 
+		it("classifies first chunk timeout as stream_idle with bounded 1 retry", () => {
+			const res = classifyApiError(new Error("First chunk timeout: no data received from provider for 90 seconds"))
+			expect(res.category).toBe("stream_idle")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(1)
+		})
+
+		it("classifies reasoning stream timeout as stream_idle with bounded 1 retry", () => {
+			const res = classifyApiError(new Error("Reasoning stream timeout: no reasoning tokens received from provider for 90 seconds"))
+			expect(res.category).toBe("stream_idle")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(1)
+		})
+
 		it("preserves 503 Service Unavailable as gateway_error distinctly separate from stream_idle", () => {
 			const res503 = classifyApiError({ status: 503, message: "Service Unavailable" })
 			expect(res503.category).toBe("gateway_error")

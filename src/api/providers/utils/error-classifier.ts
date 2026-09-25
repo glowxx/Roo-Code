@@ -278,7 +278,7 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 
 	// 8. Stream Idle Timeout / Stalls (Transient - bounded recovery retry of 1 attempt)
 	if (
-		/stream idle timeout|no data received from provider|stream no-progress timeout|heartbeat\/keep-alive frames but no content/i.test(
+		/stream idle timeout|no data received from provider|first chunk timeout|first-chunk timeout|reasoning stream timeout|stream no-progress timeout|heartbeat\/keep-alive frames but no content/i.test(
 			message,
 		)
 	) {

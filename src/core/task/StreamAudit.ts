@@ -5,10 +5,13 @@
  * side-effect safety, and auto-retry recovery.
  */
 
+export type StreamPhase = "waiting_first_chunk" | "reasoning" | "post_reasoning_wait" | "content" | "tool_call"
+
 export interface StreamAuditData {
 	requestId: string
 	provider: string
 	model: string
+	streamPhase: StreamPhase
 
 	streamStartedAt: number // epoch ms
 	streamStartedAtIso: string
@@ -98,6 +101,7 @@ export class StreamAuditTracker {
 			idleTimeoutMs: idleMs,
 			idleTriggered: false,
 			idleCategory: "NONE",
+			streamPhase: "waiting_first_chunk",
 			partialChars: 0,
 			toolCallObserved: false,
 			sideEffectObserved: false,
@@ -105,6 +109,10 @@ export class StreamAuditTracker {
 			autoRetryAttempt: retryAttempt,
 			retrySucceeded: null,
 		}
+	}
+
+	public recordPhase(phase: StreamPhase): void {
+		this.data.streamPhase = phase
 	}
 
 	public recordEvent(
@@ -149,6 +157,13 @@ export class StreamAuditTracker {
 		type: "reasoning" | "text" | "tool" | "tool_call" | "tool_call_partial" | "usage" | "grounding" | "heartbeat",
 		charCount: number = 0,
 	): void {
+		if (type === "reasoning") {
+			this.data.streamPhase = "reasoning"
+		} else if (type === "text") {
+			this.data.streamPhase = "content"
+		} else if (type === "tool" || type === "tool_call" || type === "tool_call_partial") {
+			this.data.streamPhase = "tool_call"
+		}
 		const mappedType =
 			type === "tool_call" || type === "tool_call_partial"
 				? "tool"
@@ -185,6 +200,7 @@ export class StreamAuditTracker {
 			`requestId=${d.requestId} ` +
 			`provider=${d.provider} ` +
 			`model=${d.model} ` +
+			`streamPhase=${d.streamPhase} ` +
 			`streamStartedAt=${d.streamStartedAtIso} ` +
 			`firstEventMs=${d.firstEventMs ?? "null"} ` +
 			`firstReasoningMs=${d.firstReasoningMs ?? "null"} ` +

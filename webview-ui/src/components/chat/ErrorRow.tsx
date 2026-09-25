@@ -105,9 +105,13 @@ export const ErrorRow = memo(
 		const formattedErrorDetails = useMemo(() => {
 			if (!errorDetails) return undefined
 
+			const isDesktop = typeof (window as any).desktopBridge !== "undefined"
+			const versionLabel = isDesktop ? "App version" : "Extension version"
+			const effectiveVersion = version || (window as any).desktopBridge?.appVersion || "3.53.0"
+
 			const metadata = [
 				`Date/time: ${new Date().toISOString()}`,
-				`Extension version: ${version}`,
+				`${versionLabel}: ${effectiveVersion}`,
 				`Provider: ${provider}${usesProxy ? " (proxy)" : ""}`,
 				`Model: ${modelId}`,
 				"",
@@ -120,11 +124,13 @@ export const ErrorRow = memo(
 		const handleDownloadDiagnostics = useCallback(
 			(e: React.MouseEvent) => {
 				e.stopPropagation()
+				const isDesktop = typeof (window as any).desktopBridge !== "undefined"
+				const effectiveVersion = version || (window as any).desktopBridge?.appVersion || "3.53.0"
 				vscode.postMessage({
 					type: "downloadErrorDiagnostics",
 					values: {
 						timestamp: new Date().toISOString(),
-						version,
+						version: effectiveVersion,
 						provider,
 						model: modelId,
 						details: errorDetails || "",
