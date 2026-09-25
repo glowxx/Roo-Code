@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { getModelContextWindow } from "../model.js"
+import { getOpenAiModelInfo } from "../providers/openai.js"
 
 describe("getModelContextWindow", () => {
 	describe("Rule 1: Explicit size indicators and next-gen prefixes", () => {
@@ -166,6 +167,24 @@ describe("getModelContextWindow", () => {
 				// Higher live metadata (e.g. 2M) takes precedence
 				expect(getModelContextWindow(m, 2_000_000)).toBe(2_000_000)
 			}
+		})
+	})
+
+	describe("Free model pricing zeroing in getOpenAiModelInfo", () => {
+		it("zeros inputPrice, outputPrice, cacheReadsPrice, and cacheWritesPrice when model ends with :free or isFree is true", () => {
+			const info = getOpenAiModelInfo("qwen/qwen-2.5-coder-32b:free", {
+				inputPrice: 0.2,
+				outputPrice: 0.6,
+				cacheReadsPrice: 0.05,
+				cacheWritesPrice: 0.1,
+				contextWindow: 128_000,
+				supportsPromptCache: true,
+			})
+			expect(info.isFree).toBe(true)
+			expect(info.inputPrice).toBe(0)
+			expect(info.outputPrice).toBe(0)
+			expect(info.cacheReadsPrice).toBe(0)
+			expect(info.cacheWritesPrice).toBe(0)
 		})
 	})
 })

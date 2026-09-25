@@ -620,7 +620,7 @@ export function getOpenAiModelInfo(
 		...base,
 		contextWindow,
 		...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
-		...(isFree ? { isFree: true, inputPrice: 0, outputPrice: 0 } : {}),
+		...(isFree ? { isFree: true, inputPrice: 0, outputPrice: 0, cacheReadsPrice: 0, cacheWritesPrice: 0 } : {}),
 	}
 }
 
