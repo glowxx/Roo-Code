@@ -116,64 +116,14 @@ export function useScrollLifecycle({
 	// --- Message editing lock ---
 	const isEditingMessageRef = useRef(false)
 
-	// -----------------------------------------------------------------------
-	// Phase transitions
-	// -----------------------------------------------------------------------
-
-	const transitionScrollPhase = useCallback((nextPhase: ScrollPhase) => {
-		if (scrollPhaseRef.current === nextPhase) {
-			return
-		}
-		scrollPhaseRef.current = nextPhase
-		setScrollPhase(nextPhase)
-	}, [])
-
-	const enterAnchoredFollowing = useCallback(() => {
-		transitionScrollPhase("ANCHORED_FOLLOWING")
-		setShowScrollToBottom(false)
-	}, [transitionScrollPhase])
-
-	const enterUserBrowsingHistory = useCallback(
-		(_source: ScrollFollowDisengageSource) => {
-			transitionScrollPhase("USER_BROWSING_HISTORY")
-			// Always show the scroll-to-bottom CTA when the user explicitly
-			// disengages. If they happen to still be at the physical bottom,
-			// the next Virtuoso atBottomStateChange(true) will hide it.
-			setShowScrollToBottom(true)
-		},
-		[transitionScrollPhase],
-	)
-
-	const setEditingMessage = useCallback(
-		(isEditing: boolean) => {
-			isEditingMessageRef.current = isEditing
-			if (isEditing) {
-				enterUserBrowsingHistory("message-editing")
-			}
-		},
-		[enterUserBrowsingHistory],
-	)
-
-	const cancelReanchorFrame = useCallback(() => {
-		if (reanchorAnimationFrameRef.current !== null) {
-			cancelAnimationFrame(reanchorAnimationFrameRef.current)
-			reanchorAnimationFrameRef.current = null
-		}
-	}, [])
+	// --- Per-conversation scroll phase cache ---
+	// --- Per-conversation scroll phase cache ---
+	const taskScrollPhasesRef = useRef<Map<number, ScrollPhase>>(new Map())
+	const previousTaskTsRef = useRef<number | undefined>(undefined)
 
 	// -----------------------------------------------------------------------
-	// Scroll commands
+	// Scroll commands & Hydration helpers
 	// -----------------------------------------------------------------------
-
-	const scrollToBottomSmooth = useMemo(
-		() =>
-			debounce(
-				() => virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" }),
-				10,
-				{ immediate: true },
-			),
-		[virtuosoRef],
-	)
 
 	const scrollToBottomAuto = useCallback(() => {
 		virtuosoRef.current?.scrollToIndex({
@@ -191,6 +141,72 @@ export function useScrollLifecycle({
 			hydrationTimeoutRef.current = null
 		}
 	}, [])
+
+	// -----------------------------------------------------------------------
+	// Phase transitions
+	// -----------------------------------------------------------------------
+
+	const transitionScrollPhase = useCallback((nextPhase: ScrollPhase) => {
+		if (scrollPhaseRef.current === nextPhase) {
+			return
+		}
+		scrollPhaseRef.current = nextPhase
+		setScrollPhase(nextPhase)
+	}, [])
+
+	const enterAnchoredFollowing = useCallback(() => {
+		clearHydrationWindow()
+		transitionScrollPhase("ANCHORED_FOLLOWING")
+		setShowScrollToBottom(false)
+		if (taskTs) {
+			taskScrollPhasesRef.current.set(taskTs, "ANCHORED_FOLLOWING")
+		}
+	}, [clearHydrationWindow, taskTs, transitionScrollPhase])
+
+	const enterUserBrowsingHistory = useCallback(
+		(_source: ScrollFollowDisengageSource) => {
+			transitionScrollPhase("USER_BROWSING_HISTORY")
+			// Always show the scroll-to-bottom CTA when the user explicitly
+			// disengages. If they happen to still be at the physical bottom,
+			// the next Virtuoso atBottomStateChange(true) will hide it.
+			setShowScrollToBottom(true)
+			if (taskTs) {
+				taskScrollPhasesRef.current.set(taskTs, "USER_BROWSING_HISTORY")
+			}
+		},
+		[taskTs, transitionScrollPhase],
+	)
+
+	const setEditingMessage = useCallback(
+		(isEditing: boolean) => {
+			isEditingMessageRef.current = isEditing
+			if (isEditing) {
+				enterUserBrowsingHistory("message-editing")
+			} else {
+				if (isAtBottomRef.current) {
+					enterAnchoredFollowing()
+				}
+			}
+		},
+		[enterAnchoredFollowing, enterUserBrowsingHistory],
+	)
+
+	const cancelReanchorFrame = useCallback(() => {
+		if (reanchorAnimationFrameRef.current !== null) {
+			cancelAnimationFrame(reanchorAnimationFrameRef.current)
+			reanchorAnimationFrameRef.current = null
+		}
+	}, [])
+
+	const scrollToBottomSmooth = useMemo(
+		() =>
+			debounce(
+				() => virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" }),
+				10,
+				{ immediate: true },
+			),
+		[virtuosoRef],
+	)
 
 	const finishHydrationWindow = useCallback(() => {
 		if (!isMountedRef.current || !isHydratingRef.current) {
@@ -252,16 +268,29 @@ export function useScrollLifecycle({
 		scrollPhaseRef.current = scrollPhase
 	}, [scrollPhase])
 
-	// Task switch: reset and begin a short hydration window
+	// Task switch: maintain per-conversation scroll state
 	useEffect(() => {
 		isAtBottomRef.current = false
 		clearHydrationWindow()
 		cancelReanchorFrame()
 
+		if (previousTaskTsRef.current !== undefined && previousTaskTsRef.current !== taskTs) {
+			taskScrollPhasesRef.current.set(previousTaskTsRef.current, scrollPhaseRef.current)
+		}
+		previousTaskTsRef.current = taskTs
+
 		if (taskTs) {
-			transitionScrollPhase("HYDRATING_PINNED_TO_BOTTOM")
-			setShowScrollToBottom(false)
-			startHydrationWindow()
+			const savedPhase = taskScrollPhasesRef.current.get(taskTs)
+			if (savedPhase === "USER_BROWSING_HISTORY") {
+				// User was browsing history in this task - preserve it without jumping to bottom
+				transitionScrollPhase("USER_BROWSING_HISTORY")
+				setShowScrollToBottom(true)
+			} else {
+				// New task or was previously following bottom
+				transitionScrollPhase("HYDRATING_PINNED_TO_BOTTOM")
+				setShowScrollToBottom(false)
+				startHydrationWindow()
+			}
 		} else {
 			transitionScrollPhase("USER_BROWSING_HISTORY")
 			setShowScrollToBottom(false)
@@ -273,12 +302,39 @@ export function useScrollLifecycle({
 		}
 	}, [cancelReanchorFrame, clearHydrationWindow, startHydrationWindow, taskTs, transitionScrollPhase])
 
+	// Container resize: maintain sticky bottom if user is following bottom
+	useEffect(() => {
+		const container = scrollContainerRef.current
+		if (!container || typeof ResizeObserver === "undefined") {
+			return
+		}
+
+		let lastHeight: number | null = container.clientHeight > 0 ? container.clientHeight : null
+
+		const observer = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const newHeight = entry.contentRect.height
+				if (lastHeight !== null && newHeight !== lastHeight) {
+					if (scrollPhaseRef.current === "ANCHORED_FOLLOWING" && !isEditingMessageRef.current) {
+						scrollToBottomAuto()
+					}
+				}
+				lastHeight = newHeight
+			}
+		})
+
+		observer.observe(container)
+		return () => {
+			observer.disconnect()
+		}
+	}, [scrollContainerRef, scrollToBottomAuto])
+
 	// -----------------------------------------------------------------------
 	// Row height change handler
 	// -----------------------------------------------------------------------
 
 	const handleRowHeightChange = useCallback(
-		(isTaller: boolean) => {
+		(_isTaller: boolean) => {
 			if (
 				isEditingMessageRef.current ||
 				scrollPhaseRef.current === "USER_BROWSING_HISTORY" ||
@@ -287,16 +343,13 @@ export function useScrollLifecycle({
 				return
 			}
 
-			const shouldForcePinForAnchoredStreaming = scrollPhaseRef.current === "ANCHORED_FOLLOWING" && isStreaming
-			if (isAtBottomRef.current || shouldForcePinForAnchoredStreaming) {
-				if (isTaller) {
-					scrollToBottomSmooth()
-				} else {
-					scrollToBottomAuto()
-				}
+			// When following bottom (or physically at bottom), follow output instantly
+			// using auto behavior to avoid animation queues/backlog during fast streaming
+			if (scrollPhaseRef.current === "ANCHORED_FOLLOWING" || isAtBottomRef.current) {
+				scrollToBottomAuto()
 			}
 		},
-		[isStreaming, scrollToBottomSmooth, scrollToBottomAuto],
+		[scrollToBottomAuto],
 	)
 
 	// -----------------------------------------------------------------------
@@ -323,8 +376,8 @@ export function useScrollLifecycle({
 		if (isEditingMessageRef.current) {
 			return false
 		}
-		return scrollPhase === "USER_BROWSING_HISTORY" ? false : "auto"
-	}, [scrollPhase])
+		return scrollPhaseRef.current === "USER_BROWSING_HISTORY" ? false : "auto"
+	}, [])
 
 	// -----------------------------------------------------------------------
 	// Virtuoso callback: atBottomStateChange
@@ -336,7 +389,11 @@ export function useScrollLifecycle({
 
 			const currentPhase = scrollPhaseRef.current
 
-			if (!isAtBottom && isHydratingRef.current && currentPhase !== "USER_BROWSING_HISTORY") {
+			if (
+				!isAtBottom &&
+				(isHydratingRef.current || reanchorAnimationFrameRef.current !== null) &&
+				currentPhase !== "USER_BROWSING_HISTORY"
+			) {
 				setShowScrollToBottom(false)
 				return
 			}
@@ -354,11 +411,7 @@ export function useScrollLifecycle({
 				return
 			}
 
-			if (currentPhase === "ANCHORED_FOLLOWING" && !isAtBottom && pointerScrollActiveRef.current) {
-				enterUserBrowsingHistory("pointer-scroll-up")
-				return
-			}
-
+			// In ANCHORED_FOLLOWING, if isStreaming is active, auto-scroll to keep up with stream
 			if (currentPhase === "ANCHORED_FOLLOWING" && isStreaming) {
 				scrollToBottomAuto()
 				setShowScrollToBottom(false)
@@ -367,7 +420,7 @@ export function useScrollLifecycle({
 
 			setShowScrollToBottom(currentPhase === "USER_BROWSING_HISTORY")
 		},
-		[enterAnchoredFollowing, enterUserBrowsingHistory, isStreaming, scrollToBottomAuto],
+		[enterAnchoredFollowing, isStreaming, scrollToBottomAuto],
 	)
 
 	// -----------------------------------------------------------------------

@@ -180,18 +180,15 @@ const ChatRow = memo(
 		)
 
 		// Check if height has changed and is valid
-		const isInitialRender = prevHeightRef.current === 0
 		const isHeightValid = height !== undefined && height > 0
 
 		useEffect(() => {
-			// Trigger handleRowHeightChange only on actual height changes, not on initial render
+			// Trigger handleRowHeightChange on height changes for the last row
 			if (isLast && isHeightValid && height !== prevHeightRef.current) {
-				if (!isInitialRender) {
-					onHeightChange(height > prevHeightRef.current)
-				}
+				onHeightChange(prevHeightRef.current === 0 ? true : height > prevHeightRef.current)
 				prevHeightRef.current = height
 			}
-		}, [height, isLast, onHeightChange, isInitialRender, isHeightValid])
+		}, [height, isLast, onHeightChange, isHeightValid])
 
 		// we cannot return null as virtuoso does not support it, so we use a separate visibleMessages array to filter out messages that should not be rendered
 		return chatrow
