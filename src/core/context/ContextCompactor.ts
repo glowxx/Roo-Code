@@ -235,6 +235,10 @@ export function extractCleanInitialBlocks(
 ): Anthropic.Messages.ContentBlockParam[] {
 	const blocks = toContentBlocks(content)
 	const clean = blocks.filter((block) => {
+		// Strip tool_result blocks that may have been merged into Message 0 from previous compaction cycles
+		if (block.type === "tool_result") {
+			return false
+		}
 		if (block.type === "text" && typeof block.text === "string") {
 			if (
 				block.text.includes("[Context Compacted Summary]") ||
@@ -266,7 +270,12 @@ export function extractCleanInitialBlocks(
 				text.length > 4000 &&
 				(text.includes("# /graphify") ||
 					text.includes("name: graphify") ||
-					text.includes("--- Skill Instructions ---"))
+					text.includes("name: using-agent-skills") ||
+					text.includes("--- Skill Instructions ---") ||
+					text.startsWith("Skill: ") ||
+					(text.startsWith("---\nname:") && text.includes("description:")) ||
+					(text.includes("<skill") && text.includes("</skill>")) ||
+					(text.includes("## Usage") && text.includes("skill")))
 			) {
 				text =
 					`[Skill instructions loaded in earlier turn (${text.length} bytes). Instructions active in session]\n\n` +

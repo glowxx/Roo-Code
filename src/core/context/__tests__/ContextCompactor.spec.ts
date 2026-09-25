@@ -649,6 +649,23 @@ describe("ContextCompactor", () => {
 			expect((clean[0] as any).text).toBe("Original user prompt from beginning of task")
 		})
 
+		it("extractCleanInitialBlocks strips merged tool_result blocks and ephemeralizes general skills", () => {
+			const largeSkillText =
+				`---\nname: using-agent-skills\ndescription: Discovers and invokes agent skills.\n---\n` +
+				"Detailed instructions... ".repeat(300)
+			const contentWithToolResults: any[] = [
+				{ type: "text", text: "Original user prompt" },
+				{ type: "tool_result", tool_use_id: "call_1", content: "Some file content from previous cycle" },
+				{ type: "text", text: largeSkillText },
+			]
+			const clean = extractCleanInitialBlocks(contentWithToolResults)
+			expect(clean).toHaveLength(2)
+			expect((clean[0] as any).text).toBe("Original user prompt")
+			expect((clean[1] as any).text).toContain("[Skill instructions loaded in earlier turn")
+			expect((clean[1] as any).text).toContain("Instructions active in session")
+			expect(clean.some((b: any) => b.type === "tool_result")).toBe(false)
+		})
+
 		it("findLatestUserInstruction finds the most recent user prompt ignoring summaries", () => {
 			const messages: ApiMessage[] = [
 				{ role: "user", content: "Initial prompt", ts: 1 },

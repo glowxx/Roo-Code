@@ -146,8 +146,11 @@ export function determineToolCategory(
 		if (
 			text.includes("# /graphify") ||
 			text.includes("name: graphify") ||
+			text.includes("name: using-agent-skills") ||
 			text.startsWith("Skill: ") ||
 			text.includes("--- Skill Instructions ---") ||
+			(text.startsWith("---\nname:") && text.includes("description:")) ||
+			(text.includes("<skill") && text.includes("</skill>")) ||
 			(text.includes("## Usage") && text.includes("skill"))
 		) {
 			return "skill"
@@ -511,7 +514,14 @@ export function optimizeEffectiveApiHistory(
 				!isSummary &&
 				isZone2 &&
 				text.length > 4000 &&
-				(text.includes("# /graphify") || text.includes("name: graphify") || text.includes("--- Skill Instructions ---"))
+				(text.includes("# /graphify") ||
+					text.includes("name: graphify") ||
+					text.includes("name: using-agent-skills") ||
+					text.includes("--- Skill Instructions ---") ||
+					text.startsWith("Skill: ") ||
+					(text.startsWith("---\nname:") && text.includes("description:")) ||
+					(text.includes("<skill") && text.includes("</skill>")) ||
+					(text.includes("## Usage") && text.includes("skill")))
 			) {
 				text =
 					`[Skill instructions loaded in earlier turn (${text.length} bytes). Instructions active in session]\n\n` +
@@ -589,7 +599,12 @@ export function optimizeEffectiveApiHistory(
 						newText.length > 4000 &&
 						(newText.includes("# /graphify") ||
 							newText.includes("name: graphify") ||
-							newText.includes("--- Skill Instructions ---"))
+							newText.includes("name: using-agent-skills") ||
+							newText.includes("--- Skill Instructions ---") ||
+							newText.startsWith("Skill: ") ||
+							(newText.startsWith("---\nname:") && newText.includes("description:")) ||
+							(newText.includes("<skill") && newText.includes("</skill>")) ||
+							(newText.includes("## Usage") && newText.includes("skill")))
 					) {
 						newText =
 							`[Skill instructions loaded in earlier turn (${newText.length} bytes). Instructions active in session]\n\n` +

@@ -255,4 +255,35 @@ describe("optimizeEffectiveApiHistory", () => {
 		expect(warmMsgBlocks[1].content).not.toContain("(cold turn)")
 		expect(warmMsgBlocks[1].content).toContain("const line0 = 0;")
 	})
+
+	it("ephemeralizes using-agent-skills and general skill payloads in Zone 2", () => {
+		const skillPayload =
+			"---\nname: using-agent-skills\ndescription: Discovers and invokes agent skills.\n---\n" +
+			"# Using Agent Skills\n\n" +
+			"Detailed instructions... ".repeat(300)
+
+		const messages: ApiMessage[] = [
+			{ role: "user", content: skillPayload, ts: 1 },
+			{ role: "assistant", content: [{ type: "text", text: "Turn 1" }], ts: 2 },
+			{ role: "user", content: "Prompt 2", ts: 3 },
+			{ role: "assistant", content: [{ type: "text", text: "Turn 2" }], ts: 4 },
+			{ role: "user", content: "Prompt 3", ts: 5 },
+			{ role: "assistant", content: [{ type: "text", text: "Turn 3" }], ts: 6 },
+			{ role: "user", content: "Prompt 4", ts: 7 },
+			{ role: "assistant", content: [{ type: "text", text: "Turn 4" }], ts: 8 },
+			{ role: "user", content: "Recent prompt", ts: 9 },
+			{ role: "assistant", content: [{ type: "text", text: "Recent reply" }], ts: 10 },
+		]
+
+		const optimized = optimizeEffectiveApiHistory(messages, {
+			recentMessagesPreserved: 2,
+			warmTurnsPreserved: 1, // messages 0-5 are in Zone 2
+		})
+
+		expect(typeof optimized[0].content).toBe("string")
+		const text = optimized[0].content as string
+		expect(text).toContain("[Skill instructions loaded in earlier turn")
+		expect(text).toContain("Instructions active in session")
+		expect(text).toContain("... [Remaining skill documentation omitted in historical turn] ...")
+	})
 })
