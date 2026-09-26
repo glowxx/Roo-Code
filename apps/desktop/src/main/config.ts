@@ -52,8 +52,22 @@ export function loadDesktopConfig(): DesktopConfig {
 		if (fs.existsSync(configPath)) {
 			const content = fs.readFileSync(configPath, "utf-8")
 			const parsed = JSON.parse(content) as DesktopConfig
+			if (parsed.lastWorkspacePath) {
+				parsed.lastWorkspacePath = canonicalizePath(parsed.lastWorkspacePath)
+			}
 			if (parsed.lastWorkspacePath && (!parsed.recentWorkspaces || !Array.isArray(parsed.recentWorkspaces) || parsed.recentWorkspaces.length === 0)) {
 				parsed.recentWorkspaces = [parsed.lastWorkspacePath]
+			}
+			if (Array.isArray(parsed.recentWorkspaces)) {
+				const deduped: string[] = []
+				for (const p of parsed.recentWorkspaces) {
+					if (!p || typeof p !== "string") continue
+					const canon = canonicalizePath(p)
+					if (!deduped.some((existing) => arePathsEqual(existing, canon))) {
+						deduped.push(canon)
+					}
+				}
+				parsed.recentWorkspaces = deduped
 			}
 			return parsed
 		}
@@ -89,6 +103,45 @@ export function loadDesktopConfig(): DesktopConfig {
 }
 
 /**
+ * Canonicalizes a filesystem path for consistent cross-platform and Windows storage/lookup.
+ * - Resolves relative paths
+ * - On Windows: normalizes drive letter to uppercase, handles UNC paths, strips \\?\ prefixes
+ * - Removes trailing slashes (except root paths like C:\ or /)
+ */
+export function canonicalizePath(p: string): string {
+	if (!p || typeof p !== "string" || !p.trim()) return ""
+	let normalized = path.normalize(path.resolve(p.trim()))
+	if (process.platform === "win32") {
+		if (normalized.startsWith("\\\\?\\UNC\\")) {
+			normalized = "\\\\" + normalized.slice(8)
+		} else if (normalized.startsWith("\\\\?\\")) {
+			normalized = normalized.slice(4)
+		}
+		if (/^[a-z]:/i.test(normalized)) {
+			normalized = normalized.charAt(0).toUpperCase() + normalized.slice(1)
+		}
+	}
+	if (normalized.length > 3 && (normalized.endsWith("\\") || normalized.endsWith("/"))) {
+		normalized = normalized.slice(0, -1)
+	}
+	return normalized
+}
+
+/**
+ * Compares two filesystem paths for equality.
+ * On Windows, comparison is case-insensitive.
+ */
+export function arePathsEqual(p1: string, p2: string): boolean {
+	const c1 = canonicalizePath(p1)
+	const c2 = canonicalizePath(p2)
+	if (!c1 || !c2) return false
+	if (process.platform === "win32") {
+		return c1.toLowerCase() === c2.toLowerCase()
+	}
+	return c1 === c2
+}
+
+/**
  * Saves or updates the desktop configuration on disk.
  * Includes a Zero-State Guard to prevent erasing lastWorkspacePath with empty or undefined values.
  * Automatically adds any selected or changed lastWorkspacePath to recentWorkspaces (max 25, no duplicates).
@@ -101,7 +154,7 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 		// Zero-State Guard: Never overwrite an existing valid lastWorkspacePath with an empty, whitespace, or undefined value
 		let finalWorkspacePath = current.lastWorkspacePath
 		if (typeof updates.lastWorkspacePath === "string" && updates.lastWorkspacePath.trim().length > 0) {
-			finalWorkspacePath = updates.lastWorkspacePath.trim()
+			finalWorkspacePath = canonicalizePath(updates.lastWorkspacePath)
 		}
 
 		// Manage recentWorkspaces list (up to 25 items, no duplicates)
@@ -110,30 +163,30 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 			recent = [...updates.recentWorkspaces]
 		} else if (Array.isArray(current.recentWorkspaces)) {
 			recent = [...current.recentWorkspaces]
-		} else if (current.lastWorkspacePath) {
-			recent = [current.lastWorkspacePath]
+		} else if (finalWorkspacePath) {
+			recent = [finalWorkspacePath]
 		}
 
-		if (finalWorkspacePath) {
-			const normFinal = path.normalize(path.resolve(finalWorkspacePath))
-			recent = [
-				finalWorkspacePath,
-				...recent.filter((p) => {
-					if (!p || typeof p !== "string" || !p.trim()) return false
-					try {
-						return path.normalize(path.resolve(p)) !== normFinal
-					} catch {
-						return p !== finalWorkspacePath
-					}
-				}),
-			].slice(0, 25)
+		// If a new lastWorkspacePath was explicitly updated, ensure it's at the front of recentWorkspaces
+		if (updates.lastWorkspacePath && finalWorkspacePath) {
+			recent = [finalWorkspacePath, ...recent.filter((p) => !arePathsEqual(p, finalWorkspacePath!))]
+		}
+
+		// Deduplicate recentWorkspaces using arePathsEqual
+		const dedupedRecent: string[] = []
+		for (const p of recent) {
+			if (!p || typeof p !== "string" || !p.trim()) continue
+			const canon = canonicalizePath(p)
+			if (!dedupedRecent.some((existing) => arePathsEqual(existing, canon))) {
+				dedupedRecent.push(canon)
+			}
 		}
 
 		const merged: DesktopConfig = {
 			...current,
 			...updates,
 			lastWorkspacePath: finalWorkspacePath,
-			recentWorkspaces: recent,
+			recentWorkspaces: dedupedRecent.slice(0, 25),
 			windowBounds: updates.windowBounds
 				? { ...current.windowBounds, ...updates.windowBounds }
 				: current.windowBounds,

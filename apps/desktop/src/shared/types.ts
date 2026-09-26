@@ -33,11 +33,15 @@ export interface SidebarChatEntry {
 	id: string
 	title: string
 	ts: number
+	status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
+	hasUnread?: boolean
+	lastReadTs?: number
 }
 
 export interface SidebarData {
 	recentWorkspaces: string[]
 	currentWorkspace: string
+	activeTaskId?: string | null
 	chats: Record<string, SidebarChatEntry[]>
 }
 
@@ -62,6 +66,7 @@ export type DesktopClientMessage =
 	| { type: "switchChat"; taskId: string; workspacePath?: string }
 	| { type: "newChat"; workspacePath?: string }
 	| { type: "removeRecentWorkspace"; path: string }
+	| { type: "markChatRead"; taskId: string }
 
 export type DesktopServerMessage =
 	| { type: "extensionMessage"; message: ExtensionMessage }

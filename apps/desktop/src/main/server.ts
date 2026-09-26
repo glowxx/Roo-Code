@@ -9,7 +9,7 @@ import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
 import { execSync, spawn } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
-import { loadDesktopConfig, saveDesktopConfig } from "./config.js"
+import { loadDesktopConfig, saveDesktopConfig, canonicalizePath, arePathsEqual } from "./config.js"
 import type { DesktopClientMessage, DesktopServerMessage, SidebarData, WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -397,19 +397,20 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		const config = loadDesktopConfig()
 		let recent = Array.isArray(config.recentWorkspaces) ? [...config.recentWorkspaces] : []
 		if (recent.length === 0 && config.lastWorkspacePath) {
-			recent = [config.lastWorkspacePath]
+			recent = [canonicalizePath(config.lastWorkspacePath)]
 		}
 		const curWs = agentHost.getWorkspace()
 		if (curWs) {
-			const normCur = path.normalize(path.resolve(curWs))
-			if (!recent.some((p) => path.normalize(path.resolve(p)) === normCur)) {
-				recent.unshift(curWs)
+			const canonCur = canonicalizePath(curWs)
+			if (!recent.some((p) => arePathsEqual(p, canonCur))) {
+				recent.unshift(canonCur)
 			}
 		}
 		const chats = agentHost.getChatsByWorkspace()
 		return {
 			recentWorkspaces: recent,
 			currentWorkspace: curWs,
+			activeTaskId: agentHost.getActiveTaskId(),
 			chats,
 		}
 	}
@@ -615,6 +616,37 @@ export function createDesktopServer(options: DesktopServerOptions): {
 						await agentHost.showTaskWithId(taskId)
 						broadcastSidebarData()
 
+						res.writeHead(200, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ success: true, taskId }))
+					} catch (e) {
+						res.writeHead(500, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: String(e) }))
+					}
+				})
+				return
+			}
+			res.writeHead(405, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ error: "Method not allowed" }))
+			return
+		}
+
+		if (pathname === "/api/chat/read") {
+			if (req.method === "POST") {
+				let body = ""
+				req.on("data", (chunk) => {
+					body += chunk
+				})
+				req.on("end", async () => {
+					try {
+						const data = JSON.parse(body || "{}")
+						const taskId = data.taskId
+						if (!taskId || typeof taskId !== "string") {
+							res.writeHead(400, { "Content-Type": "application/json" })
+							res.end(JSON.stringify({ error: "Missing or invalid taskId" }))
+							return
+						}
+						await agentHost.markChatRead(taskId)
+						broadcastSidebarData()
 						res.writeHead(200, { "Content-Type": "application/json" })
 						res.end(JSON.stringify({ success: true, taskId }))
 					} catch (e) {
@@ -1635,6 +1667,11 @@ window.addEventListener("keydown", function(e) {
 					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 				} else if (clientMsg.type === "getSidebarData") {
 					safeSend(ws, { type: "sidebarData", data: getSidebarData() })
+				} else if (clientMsg.type === "markChatRead") {
+					if (clientMsg.taskId) {
+						await agentHost.markChatRead(clientMsg.taskId)
+						broadcastSidebarData()
+					}
 				} else if (clientMsg.type === "switchChat") {
 					if (clientMsg.workspacePath && fs.existsSync(clientMsg.workspacePath)) {
 						try {
@@ -1687,9 +1724,9 @@ window.addEventListener("keydown", function(e) {
 					broadcastSidebarData()
 				} else if (clientMsg.type === "removeRecentWorkspace") {
 					const curCfg = loadDesktopConfig()
-					const normRemove = path.normalize(path.resolve(clientMsg.path))
+					const removePath = clientMsg.path
 					const updated = (curCfg.recentWorkspaces || []).filter(
-						(p) => path.normalize(path.resolve(p)) !== normRemove
+						(p) => !arePathsEqual(p, removePath)
 					)
 					saveDesktopConfig({ recentWorkspaces: updated })
 					broadcastSidebarData()

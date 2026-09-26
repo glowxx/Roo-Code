@@ -23,7 +23,7 @@ import os from "os"
 import { fileURLToPath } from "url"
 import { DesktopAgentHost } from "./agent-host.js"
 import { createDesktopServer, validatePathWithinRoot, getGitBranch, listWorkspaceFiles, scanWorkspace } from "./server.js"
-import { loadDesktopConfig, saveDesktopConfig } from "./config.js"
+import { loadDesktopConfig, saveDesktopConfig, canonicalizePath } from "./config.js"
 import type { WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -56,7 +56,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 
 	let workspacePath = ""
 	if (explicitWsFromArg && explicitWsFromArg.trim()) {
-		const resolvedArg = path.normalize(path.resolve(explicitWsFromArg.trim()))
+		const resolvedArg = canonicalizePath(explicitWsFromArg.trim())
 		if (fs.existsSync(resolvedArg)) {
 			try {
 				if (fs.statSync(resolvedArg).isDirectory()) {
@@ -66,7 +66,7 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 			} catch {}
 		}
 	} else if (options.workspacePath && options.workspacePath.trim()) {
-		const resolvedOpt = path.normalize(path.resolve(options.workspacePath.trim()))
+		const resolvedOpt = canonicalizePath(options.workspacePath.trim())
 		if (fs.existsSync(resolvedOpt)) {
 			try {
 				if (fs.statSync(resolvedOpt).isDirectory()) {
@@ -82,14 +82,14 @@ export async function startDesktopApp(options: DesktopRunOptions = {}) {
 		if (config.lastWorkspacePath && fs.existsSync(config.lastWorkspacePath)) {
 			try {
 				if (fs.statSync(config.lastWorkspacePath).isDirectory()) {
-					workspacePath = path.normalize(path.resolve(config.lastWorkspacePath))
+					workspacePath = canonicalizePath(config.lastWorkspacePath)
 				}
 			} catch {}
 		}
 	}
 
 	// Zero-state resilience: do not force process.cwd() when no workspace is selected!
-	workspacePath = workspacePath && workspacePath.trim() ? path.normalize(path.resolve(workspacePath)) : ""
+	workspacePath = workspacePath && workspacePath.trim() ? canonicalizePath(workspacePath) : ""
 	const port = options.port || 4500
 	const storageDir = options.storageDir || path.join(os.homedir(), ".roo-desktop-data")
 	if (!fs.existsSync(storageDir)) {

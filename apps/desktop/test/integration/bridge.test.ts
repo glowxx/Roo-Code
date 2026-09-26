@@ -310,4 +310,191 @@ describe("Desktop Shell & Agent Host Integration Bridge", () => {
 			expect(diffFiles[1]!.filePath).toBe("src/utils.ts")
 		})
 	})
+
+	describe("Sidebar Chat Indicators, Precedence & Unread State Persistence", () => {
+		it("should accurately classify running tasks without false needs_attention", () => {
+			const mockRunningTasks = new Map<string, any>()
+			const fakeProvider = {
+				runningTasks: mockRunningTasks,
+				taskHistoryStore: {
+					getAll: () => [
+						{ id: "task-running-1", task: "Task 1", ts: 1000, workspace: tempDir },
+						{ id: "task-completed-1", task: "Task 2", ts: 2000, workspace: tempDir },
+						{ id: "task-attention-1", task: "Task 3", ts: 3000, workspace: tempDir },
+					],
+				},
+			}
+
+			// Task 1: actively streaming
+			mockRunningTasks.set("task-running-1", {
+				taskId: "task-running-1",
+				isStreaming: true,
+				isTaskCompleted: false,
+			})
+
+			// Task 2: completed, blocked on resume_completed_task (must NOT be needs_attention!)
+			mockRunningTasks.set("task-completed-1", {
+				taskId: "task-completed-1",
+				isStreaming: false,
+				isTaskCompleted: true,
+				currentAskType: "resume_completed_task",
+				askResponse: undefined,
+			})
+
+			// Task 3: genuinely waiting on user followup question
+			mockRunningTasks.set("task-attention-1", {
+				taskId: "task-attention-1",
+				isStreaming: false,
+				isTaskCompleted: false,
+				currentAskType: "followup",
+				askResponse: undefined,
+			})
+
+			host.registerWebviewProvider("test-view", fakeProvider)
+			const chatsByWs = host.getChatsByWorkspace()
+			const chats = chatsByWs[path.normalize(path.resolve(tempDir))]!
+
+			expect(chats).toBeDefined()
+			const t1 = chats.find((c) => c.id === "task-running-1")
+			const t2 = chats.find((c) => c.id === "task-completed-1")
+			const t3 = chats.find((c) => c.id === "task-attention-1")
+
+			expect(t1?.status).toBe("running")
+			expect(t2?.status).toBe("completed") // NOT needs_attention!
+			expect(t3?.status).toBe("needs_attention")
+		})
+
+		it("should flag background task completion as hasUnread=true and foreground completion as hasUnread=false", async () => {
+			const storeItems = new Map<string, any>([
+				["bg-task", { id: "bg-task", task: "Background Work", ts: 1000, workspace: tempDir }],
+				["fg-task", { id: "fg-task", task: "Foreground Work", ts: 2000, workspace: tempDir }],
+			])
+
+			const fakeProvider = {
+				runningTasks: new Map(),
+				taskHistoryStore: {
+					getAll: () => Array.from(storeItems.values()),
+					get: (id: string) => storeItems.get(id),
+					upsert: async (item: any) => {
+						storeItems.set(item.id, item)
+						return Array.from(storeItems.values())
+					},
+				},
+			}
+
+			host.registerWebviewProvider("test-view", fakeProvider)
+
+			// Set active task to fg-task
+			await host.setActiveTaskId("fg-task")
+			expect(host.getActiveTaskId()).toBe("fg-task")
+
+			// Background task completes
+			await host.handleTaskCompleted("bg-task")
+			expect(storeItems.get("bg-task").hasUnread).toBe(true)
+
+			// Foreground task completes while user is viewing it
+			await host.handleTaskCompleted("fg-task")
+			expect(storeItems.get("fg-task").hasUnread).toBe(false)
+
+			// Verify in chats list
+			const chats = host.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]!
+			const bgChat = chats.find((c) => c.id === "bg-task")
+			const fgChat = chats.find((c) => c.id === "fg-task")
+			expect(bgChat?.hasUnread).toBe(true)
+			expect(fgChat?.hasUnread).toBe(false)
+		})
+
+		it("should clear hasUnread when user switches to chat or calls markChatRead", async () => {
+			const storeItems = new Map<string, any>([
+				["bg-task", { id: "bg-task", task: "Background Work", ts: 1000, workspace: tempDir, hasUnread: true }],
+			])
+
+			const fakeProvider = {
+				runningTasks: new Map(),
+				taskHistoryStore: {
+					getAll: () => Array.from(storeItems.values()),
+					get: (id: string) => storeItems.get(id),
+					upsert: async (item: any) => {
+						storeItems.set(item.id, item)
+						return Array.from(storeItems.values())
+					},
+				},
+			}
+
+			host.registerWebviewProvider("test-view", fakeProvider)
+
+			// Initially unread
+			expect(storeItems.get("bg-task").hasUnread).toBe(true)
+
+			// User opens/activates the chat
+			await host.showTaskWithId("bg-task")
+			expect(host.getActiveTaskId()).toBe("bg-task")
+			expect(storeItems.get("bg-task").hasUnread).toBe(false)
+			expect(storeItems.get("bg-task").lastReadTs).toBeGreaterThan(0)
+
+			// Verify in chats list
+			const chats = host.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]!
+			expect(chats.find((c) => c.id === "bg-task")?.hasUnread).toBe(false)
+		})
+
+		it("should persist unread state to disk and survive host restart", async () => {
+			const storageDir = path.join(tempDir, "storage")
+			const tasksDir = path.join(storageDir, "global-storage", "tasks", "task-disk-1")
+			fs.mkdirSync(tasksDir, { recursive: true })
+
+			const historyItem = {
+				id: "task-disk-1",
+				task: "Disk Persisted Task",
+				ts: Date.now(),
+				workspace: tempDir,
+				status: "completed",
+				hasUnread: true,
+				lastAssistantMessageTs: Date.now(),
+			}
+			fs.writeFileSync(path.join(tasksDir, "history_item.json"), JSON.stringify(historyItem, null, 2), "utf-8")
+
+			// Create a brand new host instance pointing to same storageDir (simulating app restart)
+			const host2 = new DesktopAgentHost({
+				workspacePath: tempDir,
+				extensionPath: tempDir,
+				storageDir,
+			})
+
+			const chats = host2.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]!
+			const chat = chats.find((c) => c.id === "task-disk-1")
+			expect(chat).toBeDefined()
+			expect(chat?.hasUnread).toBe(true)
+			expect(chat?.status).toBe("completed")
+
+			// Marking read updates disk
+			await host2.markChatRead("task-disk-1")
+			const onDisk = JSON.parse(fs.readFileSync(path.join(tasksDir, "history_item.json"), "utf-8"))
+			expect(onDisk.hasUnread).toBe(false)
+			expect(onDisk.lastReadTs).toBeGreaterThan(0)
+		})
+
+		it("should verify status precedence in UI rendering: running > needs_attention > completed_unread > completed_read", () => {
+			// Helper mimicking app.js status slot calculation
+			function computeIndicator(chat: { status?: string; hasUnread?: boolean }) {
+				if (chat.status === "running") return "SPINNER"
+				if (chat.status === "needs_attention") return "EXCLAMATION"
+				if (chat.hasUnread) return "BLUE_DOT"
+				return "EMPTY"
+			}
+
+			// Precedence 1: Running overrides unread and needs_attention
+			expect(computeIndicator({ status: "running", hasUnread: true })).toBe("SPINNER")
+			expect(computeIndicator({ status: "running", hasUnread: false })).toBe("SPINNER")
+
+			// Precedence 2: Needs attention overrides unread
+			expect(computeIndicator({ status: "needs_attention", hasUnread: true })).toBe("EXCLAMATION")
+			expect(computeIndicator({ status: "needs_attention", hasUnread: false })).toBe("EXCLAMATION")
+
+			// Precedence 3: Completed with unread shows Blue Dot
+			expect(computeIndicator({ status: "completed", hasUnread: true })).toBe("BLUE_DOT")
+
+			// Precedence 4: Completed and read is empty
+			expect(computeIndicator({ status: "completed", hasUnread: false })).toBe("EMPTY")
+		})
+	})
 })

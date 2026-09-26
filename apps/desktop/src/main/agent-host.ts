@@ -7,9 +7,10 @@ import { execSync } from "child_process"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-import type { ExtensionMessage, WebviewMessage } from "@roo-code/types"
+import { RooCodeEventName, type ExtensionMessage, type WebviewMessage } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
 import type { AgentStatusType, TerminalLogEntry, DiffFileEntry } from "../shared/types.js"
+import { canonicalizePath } from "./config.js"
 
 export interface AgentHostOptions {
 	workspacePath: string
@@ -30,6 +31,8 @@ export class DesktopAgentHost extends EventEmitter {
 	private extensionPath: string
 	private storageDir?: string
 	private status: AgentStatusType = "idle"
+	private activeTaskId: string | null = null
+	private providerCleanupFns: Array<() => void> = []
 	private terminalLogs: TerminalLogEntry[] = []
 	private terminalLogsByWorkspace: Map<string, TerminalLogEntry[]> = new Map()
 	private archivedTerminalLogs: Array<{ workspace: string; timestamp: number; logs: TerminalLogEntry[] }> = []
@@ -41,7 +44,7 @@ export class DesktopAgentHost extends EventEmitter {
 
 	constructor(options: AgentHostOptions) {
 		super()
-		this.currentWorkspace = options.workspacePath && options.workspacePath.trim() ? path.normalize(path.resolve(options.workspacePath)) : ""
+		this.currentWorkspace = options.workspacePath && options.workspacePath.trim() ? canonicalizePath(options.workspacePath) : ""
 		this.extensionPath = path.normalize(path.resolve(options.extensionPath))
 		this.storageDir = options.storageDir ? path.normalize(path.resolve(options.storageDir)) : undefined
 	}
@@ -63,6 +66,16 @@ export class DesktopAgentHost extends EventEmitter {
 		if (this.currentWorkspace) {
 			this.terminalLogsByWorkspace.set(this.currentWorkspace, [...this.terminalLogs])
 			this.diffFilesByWorkspace.set(this.currentWorkspace, new Map(this.diffFiles))
+			if (this.terminalLogs.length > 0) {
+				this.archivedTerminalLogs.push({
+					workspace: this.currentWorkspace,
+					timestamp: Date.now(),
+					logs: [...this.terminalLogs],
+				})
+				if (this.archivedTerminalLogs.length > 20) {
+					this.archivedTerminalLogs.shift()
+				}
+			}
 		}
 
 		if (!newWorkspace || typeof newWorkspace !== "string" || !newWorkspace.trim()) {
@@ -87,7 +100,7 @@ export class DesktopAgentHost extends EventEmitter {
 			return
 		}
 
-		const normalized = path.normalize(path.resolve(newWorkspace))
+		const normalized = canonicalizePath(newWorkspace)
 		if (!fs.existsSync(normalized)) {
 			console.warn(`Directory does not exist: ${normalized}`)
 			return
@@ -378,16 +391,164 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public registerWebviewProvider(_viewId: string, provider: unknown): void {
+		this.unregisterWebviewProvider(_viewId)
 		this.provider = provider
+		if (this.provider && typeof this.provider.on === "function") {
+			const onTaskStarted = () => {
+				this.emit("taskHistoryChanged")
+			}
+			const onTaskCompleted = async (taskId: string) => {
+				await this.handleTaskCompleted(taskId)
+			}
+			const onTaskAborted = () => {
+				this.emit("taskHistoryChanged")
+			}
+			const onTaskChanged = () => {
+				this.emit("taskHistoryChanged")
+			}
+
+			this.provider.on(RooCodeEventName.TaskStarted, onTaskStarted)
+			this.provider.on(RooCodeEventName.TaskCompleted, onTaskCompleted)
+			this.provider.on(RooCodeEventName.TaskAborted, onTaskAborted)
+			this.provider.on(RooCodeEventName.TaskActive, onTaskChanged)
+			this.provider.on(RooCodeEventName.TaskIdle, onTaskChanged)
+			this.provider.on(RooCodeEventName.TaskInteractive, onTaskChanged)
+
+			this.providerCleanupFns.push(
+				() => this.provider?.off?.(RooCodeEventName.TaskStarted, onTaskStarted),
+				() => this.provider?.off?.(RooCodeEventName.TaskCompleted, onTaskCompleted),
+				() => this.provider?.off?.(RooCodeEventName.TaskAborted, onTaskAborted),
+				() => this.provider?.off?.(RooCodeEventName.TaskActive, onTaskChanged),
+				() => this.provider?.off?.(RooCodeEventName.TaskIdle, onTaskChanged),
+				() => this.provider?.off?.(RooCodeEventName.TaskInteractive, onTaskChanged),
+			)
+		}
 	}
+
 	public unregisterWebviewProvider(_viewId: string): void {
+		for (const cleanup of this.providerCleanupFns) {
+			try {
+				cleanup()
+			} catch {}
+		}
+		this.providerCleanupFns = []
 		this.provider = null
 	}
+
 	public getProvider(): any {
 		return this.provider
 	}
 
-	public getChatsByWorkspace(): Record<string, Array<{ id: string; title: string; ts: number }>> {
+	public getActiveTaskId(): string | null {
+		return this.activeTaskId
+	}
+
+	public async setActiveTaskId(taskId: string | null): Promise<void> {
+		this.activeTaskId = taskId
+		if (taskId) {
+			await this.markChatRead(taskId)
+		}
+	}
+
+	public async markChatRead(taskId: string): Promise<void> {
+		if (!taskId) return
+		let changed = false
+
+		if (this.provider?.taskHistoryStore) {
+			try {
+				const item = this.provider.taskHistoryStore.get?.(taskId)
+				if (item && item.hasUnread) {
+					await this.provider.taskHistoryStore.upsert({
+						...item,
+						hasUnread: false,
+						lastReadTs: Date.now(),
+					})
+					changed = true
+				}
+			} catch (e) {
+				console.warn("[DesktopAgentHost] Error updating taskHistoryStore on markChatRead:", e)
+			}
+		}
+
+		if (this.storageDir) {
+			try {
+				const itemPath = path.join(this.storageDir, "global-storage", "tasks", taskId, "history_item.json")
+				if (fs.existsSync(itemPath)) {
+					const raw = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
+					if (raw && raw.hasUnread) {
+						raw.hasUnread = false
+						raw.lastReadTs = Date.now()
+						fs.writeFileSync(itemPath, JSON.stringify(raw, null, 2), "utf-8")
+						changed = true
+					}
+				}
+			} catch {}
+		}
+
+		if (changed) {
+			this.emit("taskHistoryChanged")
+		}
+	}
+
+	public async handleTaskCompleted(taskId: string): Promise<void> {
+		if (!taskId) return
+		const isBackground = taskId !== this.activeTaskId
+		let changed = false
+
+		if (this.provider?.taskHistoryStore) {
+			try {
+				const item = this.provider.taskHistoryStore.get?.(taskId)
+				if (item) {
+					const updated = {
+						...item,
+						status: "completed" as const,
+						hasUnread: isBackground,
+						lastAssistantMessageTs: Date.now(),
+						...(isBackground ? {} : { lastReadTs: Date.now() }),
+					}
+					await this.provider.taskHistoryStore.upsert(updated)
+					changed = true
+				}
+			} catch (e) {
+				console.warn("[DesktopAgentHost] Error updating taskHistoryStore on completion:", e)
+			}
+		}
+
+		if (this.storageDir) {
+			try {
+				const itemPath = path.join(this.storageDir, "global-storage", "tasks", taskId, "history_item.json")
+				if (fs.existsSync(itemPath)) {
+					const raw = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
+					if (raw) {
+						raw.status = "completed"
+						raw.hasUnread = isBackground
+						raw.lastAssistantMessageTs = Date.now()
+						if (!isBackground) {
+							raw.lastReadTs = Date.now()
+						}
+						fs.writeFileSync(itemPath, JSON.stringify(raw, null, 2), "utf-8")
+						changed = true
+					}
+				}
+			} catch {}
+		}
+
+		if (changed) {
+			this.emit("taskHistoryChanged")
+		}
+	}
+
+	public getChatsByWorkspace(): Record<
+		string,
+		Array<{
+			id: string
+			title: string
+			ts: number
+			status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
+			hasUnread?: boolean
+			lastReadTs?: number
+		}>
+	> {
 		let items: any[] = []
 
 		// 1. Try in-memory provider.taskHistoryStore
@@ -437,24 +598,78 @@ export class DesktopAgentHost extends EventEmitter {
 			} catch {}
 		}
 
-		const result: Record<string, Array<{ id: string; title: string; ts: number }>> = {}
+		const result: Record<
+			string,
+			Array<{
+				id: string
+				title: string
+				ts: number
+				status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
+				hasUnread?: boolean
+				lastReadTs?: number
+			}>
+		> = {}
 
 		for (const item of items) {
 			if (!item || !item.id) continue
 			let ws = ""
 			if (item.workspace && typeof item.workspace === "string" && item.workspace.trim()) {
-				ws = path.normalize(path.resolve(item.workspace.trim()))
+				ws = canonicalizePath(item.workspace.trim())
 			} else if (this.currentWorkspace) {
-				ws = path.normalize(path.resolve(this.currentWorkspace))
+				ws = canonicalizePath(this.currentWorkspace)
 			} else {
 				ws = "__unassigned__"
 			}
+
+			let status: "running" | "needs_attention" | "queued" | "completed" | "failed" = "completed"
+			const runningTask = this.provider?.runningTasks?.get(String(item.id))
+			if (runningTask) {
+				const isCompleted =
+					runningTask.isTaskCompleted === true ||
+					runningTask.currentAskType === "resume_completed_task"
+
+				const isAborted = runningTask.abort === true || runningTask.abandoned === true
+
+				if (isCompleted) {
+					status = "completed"
+				} else if (isAborted) {
+					status = item.status === "failed" ? "failed" : "completed"
+				} else {
+					const isWaitingInteractiveUser =
+						runningTask.askResponse === undefined &&
+						!runningTask.isStreaming &&
+						!runningTask.isWaitingForFirstChunk &&
+						!runningTask.autoApprovalTimeoutRef &&
+						(runningTask.currentAskType === "followup" ||
+							runningTask.currentAskType === "command" ||
+							runningTask.currentAskType === "tool" ||
+							runningTask.currentAskType === "api_req_failed" ||
+							runningTask.currentAskType === "mistake_limit_reached" ||
+							runningTask.currentAskType === "plan_mode_response")
+
+					if (isWaitingInteractiveUser) {
+						status = "needs_attention"
+					} else {
+						status = "running"
+					}
+				}
+			} else if (item.status === "failed") {
+				status = "failed"
+			} else {
+				status = "completed"
+			}
+
+			const isChatActive = String(item.id) === this.activeTaskId
+			const hasUnread = isChatActive ? false : Boolean(item.hasUnread)
 
 			const list = result[ws] ?? []
 			list.push({
 				id: String(item.id),
 				title: typeof item.task === "string" && item.task.trim() ? item.task.trim() : "Untitled Task",
 				ts: typeof item.ts === "number" ? item.ts : Date.now(),
+				status,
+				hasUnread,
+				lastReadTs: typeof item.lastReadTs === "number" ? item.lastReadTs : undefined,
 			})
 			result[ws] = list
 		}
@@ -469,17 +684,21 @@ export class DesktopAgentHost extends EventEmitter {
 
 	public async showTaskWithId(taskId: string): Promise<void> {
 		if (!taskId || typeof taskId !== "string") return
+		this.activeTaskId = taskId
+		await this.markChatRead(taskId)
 		if (this.provider && typeof this.provider.showTaskWithId === "function") {
 			try {
 				await this.provider.showTaskWithId(taskId)
 			} catch (err) {
 				console.warn("[DesktopAgentHost] provider.showTaskWithId error:", err)
 			}
+		} else {
+			this.sendToExtension({ type: "showTaskWithId", text: taskId } as any)
 		}
-		this.sendToExtension({ type: "showTaskWithId", text: taskId } as any)
 	}
 
 	public async clearTask(): Promise<void> {
+		this.activeTaskId = null
 		if (this.terminalLogs.length > 0) {
 			this.archivedTerminalLogs.push({
 				workspace: this.currentWorkspace,
@@ -490,10 +709,7 @@ export class DesktopAgentHost extends EventEmitter {
 				this.archivedTerminalLogs.shift()
 			}
 		}
-		if (this.currentWorkspace) {
-			this.diffFilesByWorkspace.delete(this.currentWorkspace)
-			this.terminalLogsByWorkspace.delete(this.currentWorkspace)
-		}
+		// Reset active display logs for completed/cleared view, but keep workspace maps intact
 		this.terminalLogs = []
 		this.diffFiles.clear()
 		this.emit("terminalLogsCleared")
@@ -504,8 +720,9 @@ export class DesktopAgentHost extends EventEmitter {
 			} catch (err) {
 				console.warn("[DesktopAgentHost] provider.clearTask error:", err)
 			}
+		} else {
+			this.sendToExtension({ type: "clearTask" } as any)
 		}
-		this.sendToExtension({ type: "clearTask" } as any)
 	}
 
 	public sendToExtension(message: WebviewMessage): void {
@@ -708,9 +925,22 @@ export class DesktopAgentHost extends EventEmitter {
 			} else if (raw.say === "completion_result") {
 				this.setStatus("idle")
 				this.finishRunningTerminalLogs()
+				const currentId = this.provider?.getCurrentTask?.()?.taskId || this.activeTaskId
+				if (currentId) {
+					this.handleTaskCompleted(currentId).catch(() => {})
+				}
 			}
 		} else if (raw.type === "ask") {
 			this.setStatus("waiting_approval")
+		} else if (raw.type === "state" && raw.state?.currentTaskId) {
+			if (!this.activeTaskId) {
+				this.activeTaskId = raw.state.currentTaskId
+			}
+		} else if (raw.type === "showTaskWithId" && raw.text) {
+			this.activeTaskId = raw.text
+			this.markChatRead(raw.text).catch(() => {})
+		} else if (raw.type === "clearTask") {
+			this.activeTaskId = null
 		}
 
 		if (

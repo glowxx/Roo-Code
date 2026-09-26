@@ -148,6 +148,7 @@
 	const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn")
 	const sidebarProjectsListEl = document.getElementById("sidebar-projects-list")
 	const sidebarProjectsCountEl = document.getElementById("sidebar-projects-count")
+	const sidebarAddProjectBtn = document.getElementById("sidebar-add-project-btn")
 	const sidebarHeaderTitleEl = document.getElementById("sidebar-header-title")
 	const sidebarProjectsLabelEl = document.getElementById("sidebar-projects-label")
 	const sidebarHintTextEl = document.getElementById("sidebar-hint-text")
@@ -240,6 +241,7 @@
 			// Sidebar
 			workspaces: "Workspaces",
 			projectsSection: "PROJECTS",
+			addProject: "Add project",
 			noConversations: "No conversations",
 			newChat: "New Chat",
 			toggleSidebar: "Toggle Sidebar (Ctrl+B)",
@@ -248,6 +250,10 @@
 			newChatInProject: "New chat in this project",
 			openWorkspaceFolder: "Open Folder",
 			toggleSidebarHint: "toggle sidebar",
+			chatStatusRunning: "Task running in background",
+			chatStatusNeedsAttention: "Action required from user",
+			chatStatusCompletedUnread: "Completed with unread response",
+			chatStatusCompleted: "Completed",
 		},
 		pl: {
 			// Loading & Error States
@@ -324,6 +330,7 @@
 			// Sidebar
 			workspaces: "Obszary robocze",
 			projectsSection: "PROJEKTY",
+			addProject: "Dodaj projekt",
 			noConversations: "Brak konwersacji",
 			newChat: "Nowy czat",
 			toggleSidebar: "Zwiń/Rozwiń panel (Ctrl+B)",
@@ -332,6 +339,10 @@
 			newChatInProject: "Nowy czat w tym projekcie",
 			openWorkspaceFolder: "Otwórz folder",
 			toggleSidebarHint: "zwiń/rozwiń panel",
+			chatStatusRunning: "Zadanie działa w tle",
+			chatStatusNeedsAttention: "Wymagana reakcja użytkownika",
+			chatStatusCompletedUnread: "Zakończono z nieprzeczytaną odpowiedzią",
+			chatStatusCompleted: "Zakończono",
 		},
 	}
 
@@ -433,6 +444,10 @@
 		// 7. Sidebar elements
 		if (sidebarHeaderTitleEl) sidebarHeaderTitleEl.textContent = tDesktop("workspaces")
 		if (sidebarProjectsLabelEl) sidebarProjectsLabelEl.textContent = tDesktop("projectsSection")
+		if (sidebarAddProjectBtn) {
+			sidebarAddProjectBtn.title = tDesktop("addProject")
+			sidebarAddProjectBtn.setAttribute("aria-label", tDesktop("addProject"))
+		}
 		if (sidebarHintTextEl) sidebarHintTextEl.textContent = tDesktop("toggleSidebarHint")
 		if (sidebarToggleBtn) sidebarToggleBtn.title = tDesktop("toggleSidebar")
 	}
@@ -569,7 +584,7 @@
 
 	sidebarToggleBtn?.addEventListener("click", () => toggleSidebar())
 
-	// Global shortcuts: Ctrl+B / Cmd+B (toggle sidebar), Ctrl+N / Cmd+N (new chat)
+	// Global shortcuts: Ctrl+B / Cmd+B (toggle sidebar), Ctrl+N / Cmd+N (new chat), Ctrl+O / Cmd+O (add / open project)
 	window.addEventListener("keydown", (e) => {
 		if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && !e.shiftKey && !e.altKey) {
 			e.preventDefault()
@@ -579,6 +594,14 @@
 			e.preventDefault()
 			startNewChat()
 		}
+		if ((e.ctrlKey || e.metaKey) && (e.key === "o" || e.key === "O") && !e.shiftKey && !e.altKey) {
+			e.preventDefault()
+			openFolderDialog()
+		}
+	})
+
+	sidebarAddProjectBtn?.addEventListener("click", () => {
+		openFolderDialog()
 	})
 
 	async function openFolderDialog() {
@@ -586,6 +609,13 @@
 			try {
 				const newPath = await window.__desktopAPI.selectFolder()
 				if (newPath) {
+					const normNew = pathNormalize(newPath)
+					const curWsNorm = pathNormalize(sidebarData.currentWorkspace || currentWorkspace?.path || "")
+					if (normNew === curWsNorm) {
+						projectExpansions.add(newPath)
+						renderSidebar()
+						return
+					}
 					await selectWorkspaceFolder(newPath)
 					fetchSidebarData()
 				}
@@ -596,6 +626,13 @@
 			const newPath = prompt("Enter full path of folder to open:", currentWorkspace?.path || "")
 			if (newPath && newPath.trim()) {
 				const trimmed = newPath.trim()
+				const normNew = pathNormalize(trimmed)
+				const curWsNorm = pathNormalize(sidebarData.currentWorkspace || currentWorkspace?.path || "")
+				if (normNew === curWsNorm) {
+					projectExpansions.add(trimmed)
+					renderSidebar()
+					return
+				}
 				await selectWorkspaceFolder(trimmed)
 				fetchSidebarData()
 			}
@@ -662,9 +699,13 @@
 
 	function updateSidebarData(data) {
 		if (!data) return
+		if (data.activeTaskId && !activeTaskId) {
+			activeTaskId = data.activeTaskId
+		}
 		sidebarData = {
 			recentWorkspaces: Array.isArray(data.recentWorkspaces) ? data.recentWorkspaces : [],
 			currentWorkspace: data.currentWorkspace || currentWorkspace?.path || "",
+			activeTaskId: data.activeTaskId ?? activeTaskId,
 			chats: data.chats || {},
 		}
 
@@ -680,11 +721,22 @@
 		if (!taskId) return
 		if (taskId === activeTaskId) return
 		activeTaskId = taskId
+
+		// Optimistically clear unread badge for the opened chat
+		for (const chatList of Object.values(sidebarData.chats)) {
+			const found = chatList.find((c) => c.id === taskId)
+			if (found && found.hasUnread) {
+				found.hasUnread = false
+				break
+			}
+		}
+
 		renderSidebar()
 
 		switchDesktopTab("chat", "user")
 
 		forwardToWebview({ type: "showTaskWithId", text: taskId })
+		sendToServer({ type: "markChatRead", taskId })
 
 		try {
 			const resp = await fetch("/api/chat/switch", {
@@ -789,13 +841,39 @@
 			if (chats.length > 0) {
 				chats.forEach((chat) => {
 					const isChatActive = activeTaskId === chat.id
+
+					// Status precedence: RUNNING (spinner) > NEEDS_ATTENTION (!) > COMPLETED_UNREAD (blue dot) > COMPLETED_READ (empty)
+					let statusSlotHtml = ""
+					let statusAria = tDesktop("chatStatusCompleted")
+
+					if (chat.status === "running") {
+						statusSlotHtml = `<span class="chat-spinner" role="status" aria-label="${escapeHtml(tDesktop("chatStatusRunning"))}"></span>`
+						statusAria = tDesktop("chatStatusRunning")
+					} else if (chat.status === "needs_attention") {
+						statusSlotHtml = `<span class="chat-status-badge needs-attention" role="status" aria-label="${escapeHtml(tDesktop("chatStatusNeedsAttention"))}">!</span>`
+						statusAria = tDesktop("chatStatusNeedsAttention")
+					} else if (chat.hasUnread) {
+						statusSlotHtml = `<span class="chat-unread-dot" role="status" aria-label="${escapeHtml(tDesktop("chatStatusCompletedUnread"))}"></span>`
+						statusAria = tDesktop("chatStatusCompletedUnread")
+					}
+
+					const itemAriaLabel = `${chat.title} - ${statusAria}`
+
 					chatsHtml += `
-						<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" data-task-id="${escapeHtml(chat.id)}" data-workspace="${escapeHtml(ws)}">
+						<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" 
+						     data-task-id="${escapeHtml(chat.id)}" 
+						     data-workspace="${escapeHtml(ws)}"
+						     role="button"
+						     tabindex="0"
+						     aria-label="${escapeHtml(itemAriaLabel)}">
 							<svg class="chat-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 								<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
 							</svg>
 							<div class="chat-meta">
-								<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
+								<div class="chat-title-row">
+									<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
+									<span class="chat-status-slot" title="${escapeHtml(statusAria)}">${statusSlotHtml}</span>
+								</div>
 								<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
 							</div>
 						</div>
@@ -858,10 +936,17 @@
 
 		// Attach event delegations for dynamically generated items
 		sidebarProjectsListEl.querySelectorAll(".sidebar-chat-item").forEach((el) => {
-			el.addEventListener("click", () => {
+			const onActivate = () => {
 				const taskId = el.getAttribute("data-task-id")
 				const ws = el.getAttribute("data-workspace")
 				if (taskId) switchChat(taskId, ws)
+			}
+			el.addEventListener("click", onActivate)
+			el.addEventListener("keydown", (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault()
+					onActivate()
+				}
 			})
 		})
 
