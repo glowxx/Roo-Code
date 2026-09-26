@@ -9,6 +9,9 @@ export type StreamPhase = "waiting_first_chunk" | "reasoning" | "post_reasoning_
 
 export interface StreamAuditData {
 	requestId: string
+	logicalRequestId: string
+	attemptId: string
+	attemptNumber: number
 	provider: string
 	model: string
 	streamPhase: StreamPhase
@@ -64,27 +67,38 @@ export class StreamAuditTracker {
 		this.lastEventTime = performance.now()
 
 		let requestId: string
+		let logicalRequestId: string
+		let attemptId: string
 		let prov: string
 		let mod: string
 		let idleMs: number
 		let retryAttempt: number
 
 		if (typeof paramsOrTaskId === "object") {
-			requestId = paramsOrTaskId.requestId
+			logicalRequestId = paramsOrTaskId.requestId
 			prov = paramsOrTaskId.provider
 			mod = paramsOrTaskId.model
 			idleMs = paramsOrTaskId.idleTimeoutMs
 			retryAttempt = paramsOrTaskId.autoRetryAttempt
+			attemptId = `${logicalRequestId}.a${retryAttempt}.${now.toString(36).slice(-4)}`
+			requestId = logicalRequestId.startsWith("req-")
+				? logicalRequestId
+				: `${logicalRequestId}.a${retryAttempt}`
 		} else {
-			requestId = instanceId ? `${paramsOrTaskId}.${instanceId}` : paramsOrTaskId
+			logicalRequestId = instanceId ? `${paramsOrTaskId}.${instanceId}` : paramsOrTaskId
 			prov = provider || "unknown"
 			mod = model || "unknown"
 			retryAttempt = autoRetryAttempt ?? 0
 			idleMs = idleTimeoutMs ?? 45_000
+			attemptId = `${logicalRequestId}.a${retryAttempt}.${now.toString(36).slice(-4)}`
+			requestId = instanceId ? `${logicalRequestId}.a${retryAttempt}` : paramsOrTaskId
 		}
 
 		this.data = {
 			requestId,
+			logicalRequestId,
+			attemptId,
+			attemptNumber: retryAttempt,
 			provider: prov,
 			model: mod,
 			streamStartedAt: now,

@@ -307,6 +307,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private readonly globalStoragePath: string
 	abort: boolean = false
 	currentRequestAbortController?: AbortController
+	currentStreamWatchdogTimer?: NodeJS.Timeout
 	skipPrevResponseIdOnce: boolean = false
 
 	// TaskStatus
@@ -396,7 +397,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	public auditLifecycleState(event: string): void {
 		const provider = this.providerRef.deref()
-		const isProviderActive = provider?.getCurrentTask()?.taskId === this.taskId
+		const isProviderActive = typeof provider?.getCurrentTask === "function" ? provider.getCurrentTask()?.taskId === this.taskId : false
 		const finalMsg = this.clineMessages.at(-1)
 		const finalMessagePartial = finalMsg?.partial ?? false
 		console.log(
@@ -703,7 +704,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this._taskMode = defaultModeSlug
 			// Use the provider's log method for better error visibility
 			const errorMessage = `Failed to initialize task mode: ${error instanceof Error ? error.message : String(error)}`
-			provider.log(errorMessage)
+			if (typeof provider?.log === "function") {
+				provider.log(errorMessage)
+			} else {
+				console.log(errorMessage)
+			}
 		}
 	}
 
@@ -744,7 +749,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 			// Use the provider's log method for better error visibility
 			const errorMessage = `Failed to initialize task API config name: ${error instanceof Error ? error.message : String(error)}`
-			provider.log(errorMessage)
+			if (typeof provider?.log === "function") {
+				provider.log(errorMessage)
+			} else {
+				console.log(errorMessage)
+			}
 		}
 	}
 
@@ -1602,6 +1611,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		if (this.abort) {
 			throw new Error(`[RooCode#ask] task ${this.taskId}.${this.instanceId} aborted`)
 		}
+
+		this.clearStreamWatchdog()
 
 		let askTs: number
 
@@ -3313,10 +3324,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	/**
+	 * Clears any active stream watchdog timer to prevent stale timeouts during prompts or retry waits.
+	 */
+	public clearStreamWatchdog(): void {
+		if (this.currentStreamWatchdogTimer) {
+			clearTimeout(this.currentStreamWatchdogTimer)
+			this.currentStreamWatchdogTimer = undefined
+		}
+	}
+
+	/**
 	 * Cancels the current HTTP request if one is in progress.
 	 * This immediately aborts the underlying stream rather than waiting for the next chunk.
 	 */
 	public cancelCurrentRequest(): void {
+		this.clearStreamWatchdog()
 		if (this.currentRequestAbortController) {
 			console.log(`[Task#${this.taskId}.${this.instanceId}] Aborting current HTTP request`)
 			this.currentRequestAbortController.abort()
@@ -3344,6 +3366,30 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		this.abort = true
+		this.isStreaming = false
+		this.isWaitingForFirstChunk = false
+		this.clearStreamWatchdog()
+
+		// Defensively finalize partial messages and api_req_started
+		for (let i = this.clineMessages.length - 1; i >= 0; i--) {
+			if (this.clineMessages[i].partial) {
+				this.clineMessages[i].partial = false
+			}
+		}
+		const lastApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
+		if (lastApiReqIndex !== -1) {
+			const lastMsg = this.clineMessages[lastApiReqIndex]
+			try {
+				const info = JSON.parse(lastMsg.text || "{}")
+				if (info.cost === undefined && info.cancelReason === undefined) {
+					info.cancelReason = this.abortReason || "user_cancelled"
+					info.cost = 0
+					info.costSource = "local-estimate"
+					info.precision = "estimated"
+					lastMsg.text = JSON.stringify(info)
+				}
+			} catch {}
+		}
 
 		// Immediately abort any in-progress context compaction
 		this.compactionAbortController?.abort()
@@ -3387,6 +3433,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.cancelCurrentRequest()
 		} catch (error) {
 			console.error("Error cancelling current request:", error)
+		}
+
+		// Abort any active terminal process
+		try {
+			if (this.terminalProcess) {
+				this.terminalProcess.abort()
+				this.terminalProcess = undefined
+			}
+		} catch (error) {
+			console.error("Error aborting terminal process during dispose:", error)
 		}
 
 		// Remove provider profile change listener
@@ -3686,7 +3742,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				showRooIgnoredFiles,
 				includeDiagnosticMessages,
 				maxDiagnosticMessages,
-				skillsManager: provider?.getSkillsManager(),
+				skillsManager: typeof provider?.getSkillsManager === "function" ? provider.getSkillsManager() : undefined,
 				currentMode,
 			})
 
@@ -3875,19 +3931,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						await this.diffViewProvider.revertChanges() // closes diff view
 					}
 
-					// if last message is a partial we need to update and save it
-					const lastMessage = this.clineMessages.at(-1)
-
-					if (lastMessage && lastMessage.partial) {
-						// lastMessage.ts = Date.now() DO NOT update ts since it is used as a key for virtuoso list
-						lastMessage.partial = false
-						// instead of streaming partialMessage events, we do a save and post like normal to persist to disk
+					// Defensively finalize any partial messages
+					for (let i = this.clineMessages.length - 1; i >= 0; i--) {
+						if (this.clineMessages[i].partial) {
+							this.clineMessages[i].partial = false
+						}
 					}
+
+					this.isStreaming = false
+					this.isWaitingForFirstChunk = false
 
 					// Update `api_req_started` to have cancelled and cost, so that
 					// we can display the cost of the partial stream and the cancellation reason
 					updateApiReqMsg(cancelReason, streamingFailedMessage)
 					await this.saveClineMessages()
+					await this.providerRef.deref()?.postStateToWebviewWithoutTaskHistory()
 
 					console.log(
 						`[StreamAudit] Task ${this.taskId}.${this.instanceId} stream aborted. Reason: ${cancelReason}, message: ${streamingFailedMessage ?? "none"}`,
@@ -4002,6 +4060,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				// allow the user to retry the request (most likely due to rate
 				// limit error, which gets thrown on the first chunk).
 				const stream = this.attemptApiRequest(currentItem.retryAttempt ?? 0, { skipProviderRateLimit: true })
+				let streamIterator: AsyncIterator<any> | undefined
 				let assistantMessage = ""
 				let reasoningMessage = ""
 				let pendingGroundingSources: GroundingSource[] = []
@@ -4012,6 +4071,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 				try {
 					const iterator = stream[Symbol.asyncIterator]()
+					streamIterator = iterator
 
 					// Helper to race iterator.next() with abort signal and adaptive stream idle watchdog
 					const nextChunkWithAbort = async (timeoutMs?: number, phase?: StreamPhase) => {
@@ -4044,6 +4104,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 										streamAudit.recordIdleTimeout(true)
 										reject(new Error(getPhaseTimeoutErrorMessage(activePhase, timeoutMs)))
 									}, timeoutMs)
+									this.currentStreamWatchdogTimer = idleTimer
 							  })
 							: null
 
@@ -4056,7 +4117,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							lastChunkTime = performance.now()
 							return res
 						} finally {
-							if (idleTimer) clearTimeout(idleTimer)
+							if (idleTimer) {
+								clearTimeout(idleTimer)
+								if (this.currentStreamWatchdogTimer === idleTimer) {
+									this.currentStreamWatchdogTimer = undefined
+								}
+							}
 							if (abortCleanup) abortCleanup()
 						}
 					}
@@ -4087,6 +4153,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								// Transport activity without assistant content (SSE comment, keepalive ping, role-only frame).
 								// Watchdog was reset by chunk arrival, but no message content is created.
 								streamAudit.recordChunk("heartbeat")
+								if (hadReasoning) {
+									currentStreamPhase = "post_reasoning_wait"
+								}
 								if (
 									currentStreamPhase === "waiting_first_chunk" ||
 									currentStreamPhase === "reasoning" ||
@@ -4331,11 +4400,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						if (this.abort) {
 							console.log(`aborting stream, this.abandoned = ${this.abandoned}`)
 
-							if (!this.abandoned) {
-								// Only need to gracefully abort if this instance
-								// isn't abandoned (sometimes OpenRouter stream
-								// hangs, in which case this would affect future
-								// instances of Cline).
+							if (!this.didFinishAbortingStream) {
 								await abortStream("user_cancelled")
 							}
 
@@ -4515,6 +4580,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						})
 					}
 
+					const isUserCancelled =
+						this.abort ||
+						this.abortReason === "user_cancelled" ||
+						error?.name === "AbortError" ||
+						error?.message?.includes("Request cancelled by user") ||
+						error?.message?.includes("cancelled by user")
+
+					if (isUserCancelled) {
+						this.abort = true
+						this.abortReason = "user_cancelled"
+						if (!this.didFinishAbortingStream) {
+							await abortStream("user_cancelled")
+						}
+						await this.abortTask()
+						break
+					}
+
 					// Abandoned happens when extension is no longer waiting for the
 					// Cline instance to finish aborting (error is thrown here when
 					// any function in the for loop throws due to this.abort).
@@ -4528,10 +4610,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							this.userMessageContent.length === 0 &&
 							!this.currentStreamingDidCheckpoint
 
-						// Safe automatic recovery: retry exactly 1 time for stream idle stalls if no side-effects executed
-						if (isStreamIdle && isSafeToAutoRetry && currentRetry < classification.maxRetries && !this.abort) {
+						const state = await this.providerRef.deref()?.getState()
+						const autoApproval = !!state?.autoApprovalEnabled
+						const maxStreamIdleRetries = autoApproval
+							? Math.max(3, classification.maxRetries)
+							: Math.max(2, classification.maxRetries)
+
+						// Safe automatic recovery: retry for stream idle stalls if no side-effects executed
+						if (isStreamIdle && isSafeToAutoRetry && currentRetry < maxStreamIdleRetries && !this.abort) {
 							console.warn(
-								`[Task#${this.taskId}.${this.instanceId}] Transient stream idle timeout detected. Attempting automatic recovery (retry ${currentRetry + 1}/${classification.maxRetries})`,
+								`[Task#${this.taskId}.${this.instanceId}] Transient stream idle timeout detected. Attempting automatic recovery (retry ${currentRetry + 1}/${maxStreamIdleRetries})`,
 							)
 							streamAudit.recordOutcome(false, rawErrorMessage, true)
 							streamAudit.log()
@@ -4563,16 +4651,45 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							// Subtle retry notification UX instead of scary red error box
 							await this.say("api_req_retry_delayed", t("common:interruption.connectionStalledRetrying"))
 
-							// Short backoff (2000ms + jitter)
-							const jitterMs = Math.floor(Math.random() * 500)
-							const waitMs = (classification.retryAfterSeconds ?? 2) * 1000 + jitterMs
-							await new Promise((resolve) => setTimeout(resolve, waitMs))
+							// Exponential backoff with jitter (e.g. 3s, 6s, 12s) - abortable on TaskAborted/abort
+							const baseSeconds = classification.retryAfterSeconds ?? 3
+							const backoffMs = baseSeconds * Math.pow(2, currentRetry) * 1000
+							const jitterMs = Math.floor(Math.random() * 1000)
+							const waitMs = backoffMs + jitterMs
+							await new Promise<void>((resolve) => {
+								let timer: NodeJS.Timeout | undefined
+								const onAbort = () => {
+									if (timer) clearTimeout(timer)
+									this.off(RooCodeEventName.TaskAborted, onAbort)
+									resolve()
+								}
+								if (this.abort) {
+									resolve()
+									return
+								}
+								this.once(RooCodeEventName.TaskAborted, onAbort)
+								timer = setTimeout(() => {
+									this.off(RooCodeEventName.TaskAborted, onAbort)
+									resolve()
+								}, waitMs)
+							})
 
 							if (this.abort) {
 								this.abortReason = "user_cancelled"
 								await this.abortTask()
 								break
 							}
+
+							// Clean up in-flight request, socket, and watchdog before next attempt
+							this.clearStreamWatchdog()
+							this.cancelCurrentRequest()
+							try {
+								await stream.return(undefined)
+								await streamIterator?.return?.(undefined)
+							} catch (e) {
+								// Ignore errors during iterator cancellation
+							}
+							this.currentRequestAbortController = undefined
 
 							stack.push({
 								userContent: currentUserContent,
@@ -4605,12 +4722,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								? "tool-call"
 								: "content"
 
+						const effectiveMaxRetries = isStreamIdle
+							? maxStreamIdleRetries
+							: classification.maxRetries
+
 						const streamingFailedDetails = isStreamIdle
 							? [
 									`Error type: Stream idle timeout`,
 									`Phase: ${phaseDisplay}`,
 									`Timeout: ${Math.round(currentWatchdogTimeout / 1000)}s`,
-									`Auto retries: ${currentRetry}/${classification.maxRetries}`,
+									`Auto retries: ${currentRetry}/${effectiveMaxRetries}`,
 									`Last valid event: ${streamAudit.data.lastEventType}`,
 									`Request ID: ${streamAudit.data.requestId}`,
 							  ].join("\n")
@@ -4623,12 +4744,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							: `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}`
 
 						// Clean up partial state
-						await abortStream(cancelReason, streamingFailedMessage)
+						if (!this.didFinishAbortingStream) {
+							await abortStream(cancelReason, streamingFailedMessage)
+						}
 
 						if (this.abort) {
 							// User cancelled - abort the entire task
 							this.abortReason = cancelReason
 							await this.abortTask()
+							break
 						} else {
 							// Stream failed - log the error and retry with the same content
 							// The existing rate limiting will prevent rapid retries
@@ -4652,6 +4776,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								} else {
 									reasonText = `Max stream retries (${maxAllowedRetries}) exceeded: ${streamingFailedMessage}`
 								}
+								this.clearStreamWatchdog()
+								this.cancelCurrentRequest()
+								try {
+									await stream.return(undefined)
+									await streamIterator?.return?.(undefined)
+								} catch (e) {
+									// ignore
+								}
+								this.currentRequestAbortController = undefined
 								const { response } = await this.ask("api_req_failed", reasonText)
 								if (response !== "yesButtonClicked") {
 									this.abortReason = "streaming_failed"
@@ -4659,6 +4792,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 									break
 								}
 								await this.say("api_req_retried")
+								this.clearStreamWatchdog()
+								this.cancelCurrentRequest()
+								try {
+									await stream.return(undefined)
+									await streamIterator?.return?.(undefined)
+								} catch (e) {
+									// ignore
+								}
+								this.currentRequestAbortController = undefined
 								stack.push({
 									userContent: currentUserContent,
 									includeFileDetails: false,
@@ -5684,10 +5826,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		const shouldIncludeTools = allTools.length > 0
 
+		// Create an AbortController to allow cancelling the request mid-stream
+		this.currentRequestAbortController = new AbortController()
+		const abortSignal = this.currentRequestAbortController.signal
+		// Reset the flag after using it
+		this.skipPrevResponseIdOnce = false
+
 		const metadata: ApiHandlerCreateMessageMetadata = {
 			mode: mode,
 			taskId: this.taskId,
 			suppressPreviousResponseId: this.skipPrevResponseIdOnce,
+			signal: abortSignal,
 			// Include tools whenever they are present.
 			...(shouldIncludeTools
 				? {
@@ -5700,12 +5849,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					}
 				: {}),
 		}
-
-		// Create an AbortController to allow cancelling the request mid-stream
-		this.currentRequestAbortController = new AbortController()
-		const abortSignal = this.currentRequestAbortController.signal
-		// Reset the flag after using it
-		this.skipPrevResponseIdOnce = false
 
 		// Prepare token audit telemetry if enabled
 		const requestStartTime = performance.now()
@@ -5798,6 +5941,19 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						requestDurationMs,
 					})
 				}
+
+				const isUserCancelled =
+					this.abort ||
+					this.abortReason === "user_cancelled" ||
+					error?.name === "AbortError" ||
+					error?.message?.includes("Request cancelled by user") ||
+					error?.message?.includes("cancelled by user")
+
+				if (isUserCancelled) {
+					this.abortReason = "user_cancelled"
+					throw error
+				}
+
 				const isContextWindowExceededError = checkContextWindowExceededError(error)
 
 				// If it's a context window error and we haven't exceeded max retries for this error type
@@ -5837,6 +5993,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						console.error(
 							`[Task#attemptApiRequest] ${reasonText} for task ${this.taskId}.${this.instanceId}. Error: ${error?.message}`,
 						)
+						this.clearStreamWatchdog()
 						const { response } = await this.ask("api_req_failed", reasonText)
 						if (response !== "yesButtonClicked") {
 							throw new Error(`API request failed: ${reasonText}`)
@@ -5866,6 +6023,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 					return
 				} else {
+					this.clearStreamWatchdog()
 					const { response } = await this.ask(
 						"api_req_failed",
 						error?.message ?? JSON.stringify(serializeError(error), null, 2),
@@ -5920,6 +6078,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Shared exponential backoff for retries (first-chunk and mid-stream)
 	private async backoffAndAnnounce(retryAttempt: number, error: any, overrideDelaySeconds?: number): Promise<void> {
+		this.clearStreamWatchdog()
 		try {
 			const state = await this.providerRef.deref()?.getState()
 			const baseDelay = state?.requestDelaySeconds || 5
@@ -6270,11 +6429,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	 * @param context - Context string for logging (e.g., the calling tool name)
 	 */
 	public processQueuedMessages(): void {
+		if (this.abort || this.abandoned || this.abortReason === "user_cancelled") {
+			return
+		}
 		try {
 			if (!this.messageQueueService.isEmpty()) {
 				const queued = this.messageQueueService.dequeueMessage()
 				if (queued) {
 					setTimeout(() => {
+						if (this.abort || this.abandoned || this.abortReason === "user_cancelled") {
+							return
+						}
 						this.submitUserMessage(queued.text, queued.images).catch((err) =>
 							console.error(`[Task] Failed to submit queued message:`, err),
 						)

@@ -277,8 +277,8 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 
 		expect(classification.category).toBe("stream_idle")
 		expect(classification.retryable).toBe(true)
-		expect(classification.maxRetries).toBe(1)
-		expect(classification.retryAfterSeconds).toBe(2)
+		expect(classification.maxRetries).toBe(2)
+		expect(classification.retryAfterSeconds).toBe(3)
 	})
 
 	// Scenario 4: idle timeout before any side effect -> 1 automatic retry
@@ -306,15 +306,15 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 		expect(tracker.formatLog()).toContain("retrySucceeded=true")
 	})
 
-	// Scenario 6: auto retry fails again -> user-visible failure
-	it("Scenario 6: auto retry fails again -> retry count bounded to 1, escalates to user", () => {
-		const tracker = new StreamAuditTracker("task-123", "inst-1", "xkiro", "qwen/qwen3.8-max:free", 1)
+	// Scenario 6: auto retry fails again -> retry count bounded to 2, escalates to user on attempt 2
+	it("Scenario 6: auto retry fails again -> retry count bounded to 2, escalates to user", () => {
+		const tracker = new StreamAuditTracker("task-123", "inst-1", "xkiro", "qwen/qwen3.8-max:free", 2)
 		tracker.recordIdleTimeout(true)
 		tracker.recordOutcome(false, "Stream idle timeout: no data received from provider for 45 seconds", false)
 
 		const classification = classifyApiError(new Error("Stream idle timeout: no data received from provider for 45 seconds"))
-		const currentRetry = 1
-		const canAutoRetry = currentRetry < classification.maxRetries // 1 < 1 is false
+		const currentRetry = 2
+		const canAutoRetry = currentRetry < classification.maxRetries // 2 < 2 is false
 
 		expect(canAutoRetry).toBe(false)
 		expect(tracker.data.retrySucceeded).toBe(false)
@@ -358,16 +358,16 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 		const classificationIdle = classifyApiError(idleError)
 
 		expect(classificationIdle.category).toBe("stream_idle")
-		expect(classificationIdle.maxRetries).toBe(1)
+		expect(classificationIdle.maxRetries).toBe(2)
 		expect(classificationIdle.category).not.toBe(classification503.category)
 	})
 
-	// Scenario 10: retry count bounded to 1
-	it("Scenario 10: retry count for stream idle is strictly bounded to 1", () => {
+	// Scenario 10: retry count bounded to 2
+	it("Scenario 10: retry count for stream idle is strictly bounded to 2", () => {
 		const idleError = new Error("Stream idle timeout: no data received from provider for 45 seconds")
 		const classification = classifyApiError(idleError)
 
-		expect(classification.maxRetries).toBe(1)
+		expect(classification.maxRetries).toBe(2)
 	})
 
 	// Scenario 11: cache read/token amplification accounted for
@@ -390,7 +390,7 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 
 		expect(classification.category).toBe("stream_idle")
 		expect(classification.retryable).toBe(true)
-		expect(classification.maxRetries).toBe(1)
+		expect(classification.maxRetries).toBe(2)
 	})
 
 	// Scenario 13: openai/gpt-6-sol is recognized as reasoning model and receives 90s first chunk base timeout
@@ -463,7 +463,7 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 			const classification = classifyApiError(new Error(msg))
 			expect(classification.category).toBe("stream_idle")
 			expect(classification.retryable).toBe(true)
-			expect(classification.maxRetries).toBe(1)
+			expect(classification.maxRetries).toBe(2)
 		}
 	})
 
@@ -498,8 +498,8 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 	// Scenario 19: structured diagnostics format
 	it("Scenario 19: error details diagnostics format contains provider, phase, timeout and request metadata", () => {
 		const currentWatchdogTimeout = 135_000
-		const currentRetry = 1
-		const maxRetries = 1
+		const currentRetry = 2
+		const maxRetries = 2
 		const phaseDisplay = "first-chunk"
 		const lastEventType = "none"
 		const requestId = "req-test-123"
@@ -516,30 +516,262 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 		expect(streamingFailedDetails).toContain("Error type: Stream idle timeout")
 		expect(streamingFailedDetails).toContain("Phase: first-chunk")
 		expect(streamingFailedDetails).toContain("Timeout: 135s")
-		expect(streamingFailedDetails).toContain("Auto retries: 1/1")
+		expect(streamingFailedDetails).toContain("Auto retries: 2/2")
 		expect(streamingFailedDetails).toContain("Request ID: req-test-123")
 	})
 
 	// Scenario 20: bounded retry prevents runaway retry storms
-	it("Scenario 20: bounded retry strictly halts after 1 retry attempt", () => {
+	it("Scenario 20: bounded retry strictly halts after 2 retry attempts", () => {
 		const error = new Error("First chunk timeout: no data received from provider for 90 seconds")
 		const classification = classifyApiError(error)
 
-		expect(classification.maxRetries).toBe(1)
+		expect(classification.maxRetries).toBe(2)
 
 		let attempt = 0
 		let retried = false
 
 		// Simulate retry decision
-		if (attempt < classification.maxRetries) {
+		while (attempt < classification.maxRetries) {
 			attempt++
 			retried = true
 		}
 		expect(retried).toBe(true)
-		expect(attempt).toBe(1)
+		expect(attempt).toBe(2)
 
 		// Next attempt must NOT retry
 		const canRetryAgain = attempt < classification.maxRetries
 		expect(canRetryAgain).toBe(false)
+	})
+
+	// Scenario 21: User cancellation error classification
+	it("Scenario 21: classifyApiError classifies user cancellation as non-retryable 'cancelled'", () => {
+		const cancelErrors = [
+			new Error("Request cancelled by user"),
+			new Error("User cancelled request"),
+			new Error("Operation aborted"),
+			new DOMException("The user aborted a request.", "AbortError"),
+		]
+
+		for (const err of cancelErrors) {
+			const classification = classifyApiError(err)
+			expect(classification.category).toBe("cancelled")
+			expect(classification.retryable).toBe(false)
+			expect(classification.maxRetries).toBe(0)
+		}
+	})
+
+	// Scenario 22: Distinct Request IDs per retry attempt (fixes Request ID collision in Incident A & B)
+	it("Scenario 22: StreamAuditTracker produces unique request IDs differentiating retry attempts", () => {
+		const trackerAttempt0 = new StreamAuditTracker("task-abc", "inst-xyz", "xkiro", "qwen3.8-max", 0, 90_000)
+		const trackerAttempt1 = new StreamAuditTracker("task-abc", "inst-xyz", "xkiro", "qwen3.8-max", 1, 90_000)
+
+		expect(trackerAttempt0.data.requestId).toBe("task-abc.inst-xyz.a0")
+		expect(trackerAttempt1.data.requestId).toBe("task-abc.inst-xyz.a1")
+		expect(trackerAttempt0.data.requestId).not.toBe(trackerAttempt1.data.requestId)
+		expect(trackerAttempt0.data.logicalRequestId).toBe("task-abc.inst-xyz")
+		expect(trackerAttempt1.data.logicalRequestId).toBe("task-abc.inst-xyz")
+	})
+
+	const createMockProvider = () =>
+		({
+			context: {
+				globalStorageUri: { fsPath: "/mock/global/storage" },
+				workspaceState: { get: vi.fn(), update: vi.fn() },
+			},
+			log: vi.fn(),
+			getState: vi.fn().mockResolvedValue({}),
+			getCurrentTask: vi.fn().mockReturnValue(undefined),
+			getSkillsManager: vi.fn().mockReturnValue(undefined),
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+			postStateToWebviewWithoutTaskHistory: vi.fn().mockResolvedValue(undefined),
+		}) as any
+
+	// Scenario 23: Aborting task defensively clears partial flags and sets isStreaming false
+	it("Scenario 23: task.abortTask clears isStreaming, isWaitingForFirstChunk and partial flags", async () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		// Simulate in-flight streaming state with a partial message
+		task.isStreaming = true
+		task.isWaitingForFirstChunk = true
+		task.clineMessages = [
+			{
+				ts: Date.now(),
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ request: "test" }),
+			},
+			{
+				ts: Date.now() + 1,
+				type: "say",
+				say: "text",
+				text: "Partial response...",
+				partial: true,
+			},
+		]
+
+		await task.abortTask()
+
+		expect(task.isStreaming).toBe(false)
+		expect(task.isWaitingForFirstChunk).toBe(false)
+		expect(task.abort).toBe(true)
+
+		// Partial flag on message must be resolved to false
+		const lastMsg = task.clineMessages[task.clineMessages.length - 1]
+		expect(lastMsg.partial).toBe(false)
+
+		// api_req_started must have cancelReason finalized so UI doesn't spin forever
+		const firstMsg = task.clineMessages[0]
+		const apiReqInfo = JSON.parse(firstMsg.text || "{}")
+		expect(apiReqInfo.cancelReason).toBe("user_cancelled")
+	})
+
+	// Scenario 24: processQueuedMessages is suppressed on aborted tasks
+	it("Scenario 24: processQueuedMessages does not dispatch messages when task is aborted", () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		task.abort = true
+		task.abortReason = "user_cancelled"
+
+		const submitSpy = vi.spyOn(task, "submitUserMessage")
+		task.processQueuedMessages()
+
+		expect(submitSpy).not.toHaveBeenCalled()
+	})
+
+	// Scenario 25: Terminal child process is aborted on dispose
+	it("Scenario 25: task.dispose aborts active terminalProcess to prevent orphan OS processes", () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		const mockTerminalProcess = {
+			abort: vi.fn(),
+			continue: vi.fn(),
+		}
+		task.terminalProcess = mockTerminalProcess as any
+
+		task.dispose()
+
+		expect(mockTerminalProcess.abort).toHaveBeenCalledTimes(1)
+		expect(task.terminalProcess).toBeUndefined()
+	})
+
+	// Scenario 26: Stale Timer Elimination - clearStreamWatchdog disarms active watchdog timer
+	it("Scenario 26: task.clearStreamWatchdog cancels active watchdog timer to prevent phantom timeouts", () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		let timerFired = false
+		task.currentStreamWatchdogTimer = setTimeout(() => {
+			timerFired = true
+		}, 50)
+
+		expect(task.currentStreamWatchdogTimer).toBeDefined()
+
+		task.clearStreamWatchdog()
+
+		expect(task.currentStreamWatchdogTimer).toBeUndefined()
+
+		// Wait to verify timer never fires
+		return new Promise<void>((resolve) => {
+			setTimeout(() => {
+				expect(timerFired).toBe(false)
+				resolve()
+			}, 70)
+		})
+	})
+
+	// Scenario 27: cancelCurrentRequest aborts controller and disarms watchdog
+	it("Scenario 27: task.cancelCurrentRequest aborts in-flight AbortController and disarms watchdog", () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		const controller = new AbortController()
+		task.currentRequestAbortController = controller
+		task.currentStreamWatchdogTimer = setTimeout(() => {}, 10_000)
+
+		expect(controller.signal.aborted).toBe(false)
+		expect(task.currentStreamWatchdogTimer).toBeDefined()
+
+		task.cancelCurrentRequest()
+
+		expect(controller.signal.aborted).toBe(true)
+		expect(task.currentRequestAbortController).toBeUndefined()
+		expect(task.currentStreamWatchdogTimer).toBeUndefined()
+	})
+
+	// Scenario 28: AUTO mode allows up to 3 automatic retries for stream idle stalls
+	it("Scenario 28: AUTO mode permits up to 3 bounded retries for stream idle stalls", () => {
+		const classification = classifyApiError(new Error("Reasoning stream timeout: no reasoning data received for 75 seconds"))
+		const autoApproval = true
+		const maxStreamIdleRetries = autoApproval
+			? Math.max(3, classification.maxRetries)
+			: Math.max(2, classification.maxRetries)
+
+		expect(maxStreamIdleRetries).toBe(3)
+
+		// Attempt 0 -> can retry (0 < 3)
+		expect(0 < maxStreamIdleRetries).toBe(true)
+		// Attempt 1 -> can retry (1 < 3) - fixes the 1/1 stall in the incident!
+		expect(1 < maxStreamIdleRetries).toBe(true)
+		// Attempt 2 -> can retry (2 < 3)
+		expect(2 < maxStreamIdleRetries).toBe(true)
+		// Attempt 3 -> strictly halts and prompts user
+		expect(3 < maxStreamIdleRetries).toBe(false)
+	})
+
+	// Scenario 29: Capacity error classification ("This model is temporarily at capacity...")
+	it("Scenario 29: classifyApiError classifies capacity error as retryable gateway_error with 2 retries", () => {
+		const capacityError = new Error(
+			"xKiro completion error: This model is temporarily at capacity. Please try again shortly or use a different model.",
+		)
+		const classification = classifyApiError(capacityError)
+
+		expect(classification.category).toBe("gateway_error")
+		expect(classification.retryable).toBe(true)
+		expect(classification.maxRetries).toBe(2)
+		expect(classification.isDeterministic).toBe(false)
+	})
+
+	// Scenario 30: Heartbeat chunk after reasoning transitions stream phase to post_reasoning_wait
+	it("Scenario 30: StreamAuditTracker records phase transition to post_reasoning_wait", () => {
+		const tracker = new StreamAuditTracker("task-123", "inst-1", "xkiro", "qwen/qwen3.8-max:free", 0)
+		tracker.recordPhase("waiting_first_chunk")
+		expect(tracker.data.streamPhase).toBe("waiting_first_chunk")
+
+		tracker.recordPhase("reasoning")
+		expect(tracker.data.streamPhase).toBe("reasoning")
+
+		tracker.recordPhase("post_reasoning_wait")
+		expect(tracker.data.streamPhase).toBe("post_reasoning_wait")
+
+		tracker.recordPhase("content")
+		expect(tracker.data.streamPhase).toBe("content")
 	})
 })

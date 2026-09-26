@@ -8,6 +8,7 @@
  */
 
 export type ApiErrorCategory =
+	| "cancelled"
 	| "client_error"
 	| "auth_error"
 	| "not_found"
@@ -151,6 +152,22 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 	const code = anyErr.code || anyErr.error?.code || ""
 	const type = anyErr.type || anyErr.error?.type || ""
 
+	// 0. User Cancellation / AbortError (Deterministic - do not retry, do not treat as provider error)
+	if (
+		anyErr.name === "AbortError" ||
+		code === "ABORT_ERR" ||
+		/cancelled by user|aborted by user|request was aborted|the user aborted|operation aborted|user cancelled/i.test(message)
+	) {
+		return {
+			category: "cancelled",
+			retryable: false,
+			maxRetries: 0,
+			status: undefined,
+			userMessage: "Request cancelled by user",
+			isDeterministic: true,
+		}
+	}
+
 	// 1. Context length / context window errors (handled specially by Roo auto-compaction)
 	if (
 		/context window|context length|prompt is too long|maximum context|token limit/i.test(message) ||
@@ -251,7 +268,9 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		status === 503 ||
 		status === 504 ||
 		code === "service_unavailable" ||
-		/bad gateway|service unavailable|gateway timeout|upstream connect error/i.test(message)
+		/bad gateway|service unavailable|gateway timeout|upstream connect error|temporarily at capacity|at capacity|overloaded|server is overloaded/i.test(
+			message,
+		)
 	) {
 		return {
 			category: "gateway_error",
@@ -276,7 +295,7 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		}
 	}
 
-	// 8. Stream Idle Timeout / Stalls (Transient - bounded recovery retry of 1 attempt)
+	// 8. Stream Idle Timeout / Stalls (Transient - bounded recovery retry of up to 2 attempts)
 	if (
 		/stream idle timeout|no data received from provider|first chunk timeout|first-chunk timeout|reasoning stream timeout|stream no-progress timeout|heartbeat\/keep-alive frames but no content/i.test(
 			message,
@@ -285,8 +304,8 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		return {
 			category: "stream_idle",
 			retryable: true,
-			maxRetries: 1,
-			retryAfterSeconds: 2,
+			maxRetries: 2,
+			retryAfterSeconds: 3,
 			status: undefined,
 			userMessage: message,
 			isDeterministic: false,

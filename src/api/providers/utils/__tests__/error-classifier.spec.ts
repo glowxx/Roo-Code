@@ -151,26 +151,36 @@ describe("error-classifier", () => {
 			expect(res.isDeterministic).toBe(false)
 		})
 
-		it("classifies stream idle timeout as stream_idle with bounded 1 retry", () => {
+		it("classifies stream idle timeout as stream_idle with bounded 2 retries", () => {
 			const res = classifyApiError(new Error("Stream idle timeout: no data received from provider for 45 seconds"))
 			expect(res.category).toBe("stream_idle")
 			expect(res.retryable).toBe(true)
-			expect(res.maxRetries).toBe(1)
+			expect(res.maxRetries).toBe(2)
+			expect(res.retryAfterSeconds).toBe(3)
 			expect(res.isDeterministic).toBe(false)
 		})
 
-		it("classifies first chunk timeout as stream_idle with bounded 1 retry", () => {
+		it("classifies first chunk timeout as stream_idle with bounded 2 retries", () => {
 			const res = classifyApiError(new Error("First chunk timeout: no data received from provider for 90 seconds"))
 			expect(res.category).toBe("stream_idle")
 			expect(res.retryable).toBe(true)
-			expect(res.maxRetries).toBe(1)
+			expect(res.maxRetries).toBe(2)
 		})
 
-		it("classifies reasoning stream timeout as stream_idle with bounded 1 retry", () => {
+		it("classifies reasoning stream timeout as stream_idle with bounded 2 retries", () => {
 			const res = classifyApiError(new Error("Reasoning stream timeout: no reasoning tokens received from provider for 90 seconds"))
 			expect(res.category).toBe("stream_idle")
 			expect(res.retryable).toBe(true)
-			expect(res.maxRetries).toBe(1)
+			expect(res.maxRetries).toBe(2)
+		})
+
+		it("classifies 'temporarily at capacity' as retryable gateway_error with max 2 retries", () => {
+			const res = classifyApiError(
+				new Error("xKiro completion error: This model is temporarily at capacity. Please try again shortly or use a different model."),
+			)
+			expect(res.category).toBe("gateway_error")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(2)
 		})
 
 		it("preserves 503 Service Unavailable as gateway_error distinctly separate from stream_idle", () => {
@@ -182,7 +192,7 @@ describe("error-classifier", () => {
 			const resIdle = classifyApiError(new Error("no data received from provider for 75 seconds"))
 			expect(resIdle.category).toBe("stream_idle")
 			expect(resIdle.category).not.toBe("gateway_error")
-			expect(resIdle.maxRetries).toBe(1)
+			expect(resIdle.maxRetries).toBe(2)
 		})
 
 		it("classifies context length exceeded as non-retryable context_length", () => {
