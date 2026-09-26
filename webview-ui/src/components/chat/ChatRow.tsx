@@ -380,13 +380,48 @@ export const ChatRowContent = ({
 							: t("chat:mcp.wantsToAccessResource", { serverName: mcpServerUse.serverName })}
 					</span>,
 				]
-			case "completion_result":
+			case "completion_result": {
+				const isEvaluating = message.approvalState === "EVALUATING"
+				const isDenied = message.approvalState === "DENIED"
+				const isUserDecision = message.approvalState === "USER_DECISION_REQUIRED"
+
+				if (isEvaluating) {
+					return [
+						<ProgressIndicator />,
+						<span style={{ color: normalColor, fontWeight: "bold" }}>
+							{t("chat:verifyingCompletion", { defaultValue: "Verifying Task Completion..." })}
+						</span>,
+					]
+				}
+				if (isDenied) {
+					return [
+						<span
+							className="codicon codicon-info"
+							style={{ color: normalColor, marginBottom: "-1.5px" }}></span>,
+						<span style={{ color: normalColor, fontWeight: "bold" }}>
+							{t("chat:completionReviewContinued", {
+								defaultValue: "Completion Review: Continued Work Required",
+							})}
+						</span>,
+					]
+				}
+				if (isUserDecision) {
+					return [
+						<span
+							className="codicon codicon-question"
+							style={{ color: normalColor, marginBottom: "-1.5px" }}></span>,
+						<span style={{ color: normalColor, fontWeight: "bold" }}>
+							{t("chat:candidateCompletion", { defaultValue: "Proposed Task Completion" })}
+						</span>,
+					]
+				}
 				return [
 					<span
 						className="codicon codicon-check"
 						style={{ color: successColor, marginBottom: "-1.5px" }}></span>,
 					<span style={{ color: successColor, fontWeight: "bold" }}>{t("chat:taskCompleted")}</span>,
 				]
+			}
 			case "api_req_rate_limit_wait":
 				return []
 			case "api_req_retry_delayed":
@@ -1401,7 +1436,13 @@ export const ChatRowContent = ({
 					return (
 						<ErrorRow type="error" message={message.text || t("chat:error")} errorDetails={message.text} />
 					)
-				case "completion_result":
+				case "completion_result": {
+					const borderColor =
+						message.approvalState === "DENIED"
+							? "border-amber-500/40"
+							: message.approvalState === "EVALUATING"
+								? "border-blue-500/40"
+								: "border-emerald-500/40"
 					return (
 						<div className="group">
 							<div style={headerStyle}>
@@ -1410,11 +1451,12 @@ export const ChatRowContent = ({
 								<div style={{ flexGrow: 1 }} />
 								<OpenMarkdownPreviewButton markdown={message.text} />
 							</div>
-							<div className="border-l-2 border-emerald-500/40 ml-2 pl-3 pb-1">
+							<div className={`border-l-2 ${borderColor} ml-2 pl-3 pb-1`}>
 								<Markdown markdown={message.text} />
 							</div>
 						</div>
 					)
+				}
 				case "shell_integration_warning":
 					return <CommandExecutionError />
 				case "checkpoint_saved":
@@ -1746,6 +1788,12 @@ export const ChatRowContent = ({
 					)
 				case "completion_result":
 					if (message.text) {
+						const borderColor =
+							message.approvalState === "DENIED"
+								? "border-amber-500/40"
+								: message.approvalState === "EVALUATING"
+									? "border-blue-500/40"
+									: "border-emerald-500/40"
 						return (
 							<div className="group">
 								<div style={headerStyle}>
@@ -1754,7 +1802,7 @@ export const ChatRowContent = ({
 									<div style={{ flexGrow: 1 }} />
 									<OpenMarkdownPreviewButton markdown={message.text} />
 								</div>
-								<div className="border-l-2 border-emerald-500/40 ml-2 pl-3 pb-1">
+								<div className={`border-l-2 ${borderColor} ml-2 pl-3 pb-1`}>
 									<Markdown markdown={message.text} partial={message.partial} />
 								</div>
 							</div>

@@ -73,6 +73,7 @@ describe("attemptCompletionTool", () => {
 			api: { getModel: vi.fn().mockReturnValue({ id: "test-model", info: {} }) } as any,
 			markTaskCompleted: vi.fn(),
 			flushPendingToolResultsToHistory: vi.fn().mockResolvedValue(true),
+			updateClineMessage: vi.fn().mockResolvedValue(undefined),
 		}
 	})
 
@@ -568,6 +569,120 @@ describe("attemptCompletionTool", () => {
 
 				expect(mockHandleError).toHaveBeenCalledWith("completing task", testError)
 				expect(mockHandleError).not.toHaveBeenCalledWith("inspecting site", expect.anything())
+			})
+
+			it("does not execute completion and returns early if task is already completed", async () => {
+				const block: AttemptCompletionToolUse = {
+					type: "tool_use",
+					name: "attempt_completion",
+					params: { result: "Done again" },
+					nativeArgs: { result: "Done again" },
+					partial: false,
+				}
+
+				mockTask.isTaskCompleted = true
+
+				const callbacks: AttemptCompletionCallbacks = {
+					askApproval: mockAskApproval,
+					handleError: mockHandleError,
+					pushToolResult: mockPushToolResult,
+					askFinishSubTaskApproval: mockAskFinishSubTaskApproval,
+					toolDescription: mockToolDescription,
+				}
+
+				await attemptCompletionTool.handle(mockTask as Task, block, callbacks)
+
+				expect(mockTask.say).not.toHaveBeenCalled()
+				expect(mockTask.ask).not.toHaveBeenCalled()
+				expect(mockPushToolResult).toHaveBeenCalledWith(
+					expect.stringContaining("Task is already completed."),
+				)
+			})
+
+			it("marks candidate completion message as EVALUATING then AUTO_APPROVED upon acceptance", async () => {
+				const block: AttemptCompletionToolUse = {
+					type: "tool_use",
+					name: "attempt_completion",
+					params: { result: "Candidate report" },
+					nativeArgs: { result: "Candidate report" },
+					partial: false,
+				}
+
+				const message: any = {
+					ts: 1,
+					type: "say",
+					say: "completion_result",
+					text: "Candidate report",
+				}
+				mockTask.clineMessages = [message]
+				mockTask.updateClineMessage = vi.fn()
+
+				const callbacks: AttemptCompletionCallbacks = {
+					askApproval: mockAskApproval,
+					handleError: mockHandleError,
+					pushToolResult: mockPushToolResult,
+					askFinishSubTaskApproval: mockAskFinishSubTaskApproval,
+					toolDescription: mockToolDescription,
+				}
+
+				await attemptCompletionTool.handle(mockTask as Task, block, callbacks)
+
+				expect(message.approvalState).toBe("AUTO_APPROVED")
+				expect(mockTask.markTaskCompleted).toHaveBeenCalled()
+				expect(mockPushToolResult).toHaveBeenCalledWith(
+					expect.stringContaining("Task completed successfully."),
+				)
+			})
+
+			it("marks candidate completion message as DENIED and notifies user with explanation when autonomous CONTINUE_WORK is received", async () => {
+				const block: AttemptCompletionToolUse = {
+					type: "tool_use",
+					name: "attempt_completion",
+					params: { result: "Candidate report with missing items" },
+					nativeArgs: { result: "Candidate report with missing items" },
+					partial: false,
+				}
+
+				const message: any = {
+					ts: 1,
+					type: "say",
+					say: "completion_result",
+					text: "Candidate report with missing items",
+				}
+				mockTask.clineMessages = [message]
+				mockTask.updateClineMessage = vi.fn()
+
+				const continuePayload = JSON.stringify({
+					status: "continue_work",
+					decision: "CONTINUE_WORK",
+					reason: "Verification checks 9 and 10 were not performed.",
+				})
+
+				mockTask.ask = vi.fn().mockResolvedValue({
+					response: "noButtonClicked",
+					text: continuePayload,
+					images: [],
+				})
+
+				const callbacks: AttemptCompletionCallbacks = {
+					askApproval: mockAskApproval,
+					handleError: mockHandleError,
+					pushToolResult: mockPushToolResult,
+					askFinishSubTaskApproval: mockAskFinishSubTaskApproval,
+					toolDescription: mockToolDescription,
+				}
+
+				await attemptCompletionTool.handle(mockTask as Task, block, callbacks)
+
+				expect(message.approvalState).toBe("DENIED")
+				expect(mockTask.markTaskCompleted).not.toHaveBeenCalled()
+				expect(mockTask.say).toHaveBeenCalledWith(
+					"text",
+					expect.stringContaining("Verification checks 9 and 10 were not performed."),
+				)
+				expect(mockPushToolResult).toHaveBeenCalledWith(
+					expect.stringContaining("CONTINUE_WORK"),
+				)
 			})
 		})
 	})

@@ -170,6 +170,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const [primaryButtonText, setPrimaryButtonText] = useState<string | undefined>(undefined)
 	const [secondaryButtonText, setSecondaryButtonText] = useState<string | undefined>(undefined)
 	const [_didClickCancel, setDidClickCancel] = useState(false)
+	const [isStopping, setIsStopping] = useState(false)
 	const virtuosoRef = useRef<VirtuosoHandle>(null)
 	const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({})
 	const prevExpandedRowsRef = useRef<Record<number, boolean>>()
@@ -576,16 +577,71 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				lastApiReqStarted.text !== undefined &&
 				lastApiReqStarted.say === "api_req_started"
 			) {
-				const cost = JSON.parse(lastApiReqStarted.text).cost
+				try {
+					const parsed = JSON.parse(lastApiReqStarted.text)
+					if (parsed.cancelReason !== undefined) {
+						return false
+					}
+					const cost = parsed.cost
 
-				if (cost === undefined) {
-					return true // API request has not finished yet.
-				}
+					if (cost === undefined) {
+						return true // API request has not finished yet.
+					}
+				} catch {}
 			}
 		}
 
 		return false
 	}, [modifiedMessages, clineAsk, enableButtons, primaryButtonText])
+
+	useEffect(() => {
+		if (isStopping) {
+			const isTaskStopped =
+				!isStreaming &&
+				(clineAsk === "resume_task" ||
+					clineAsk === "resume_completed_task" ||
+					clineAsk === "completion_result" ||
+					modifiedMessages.at(-1)?.partial !== true)
+			if (isTaskStopped) {
+				setIsStopping(false)
+			}
+		}
+	}, [isStopping, isStreaming, clineAsk, modifiedMessages])
+
+	useEffect(() => {
+		setIsStopping(false)
+	}, [currentTaskItem?.id])
+
+	const isTaskActive = useMemo(() => {
+		if (!currentTaskItem) {
+			return false
+		}
+		if (isStopping) {
+			return true
+		}
+		if (isStreaming) {
+			return true
+		}
+		if (
+			clineAsk === "resume_task" ||
+			clineAsk === "resume_completed_task" ||
+			clineAsk === "completion_result" ||
+			clineAsk === "api_req_failed"
+		) {
+			return false
+		}
+		if (clineAsk !== undefined && enableButtons && primaryButtonText !== undefined) {
+			return false
+		}
+		const lastMsg = modifiedMessages.at(-1)
+		if (
+			(lastMsg?.say === "completion_result" && lastMsg.approvalState !== "DENIED") ||
+			lastMsg?.ask === "completion_result"
+		) {
+			return false
+		}
+		return modifiedMessages.length > 0
+	}, [currentTaskItem, isStopping, isStreaming, clineAsk, enableButtons, primaryButtonText, modifiedMessages])
 
 	const markFollowUpAsAnswered = useCallback(() => {
 		const lastFollowUpMessage = messagesRef.current.findLast((msg: ClineMessage) => msg.ask === "followup")
@@ -744,10 +800,12 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		vscode.postMessage({ type: "clearTask" })
 	}, [])
 
-	// Handle stop button click from textarea
+	// Handle stop button click from textarea or header
 	const handleStopTask = useCallback(() => {
+		setIsStopping(true)
 		vscode.postMessage({ type: "cancelTask", taskId: currentTaskItem?.id })
 		setDidClickCancel(true)
+		setTimeout(() => setIsStopping(false), 5000)
 	}, [setDidClickCancel, currentTaskItem?.id])
 
 	// Handle enqueue button click from textarea
@@ -808,7 +866,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					const isCompletedSubtaskForClick =
 						currentTaskItem?.parentTaskId &&
 						messagesRef.current.some(
-							(msg) => msg.ask === "completion_result" || msg.say === "completion_result",
+							(msg) =>
+								(msg.ask === "completion_result" || msg.say === "completion_result") &&
+								msg.approvalState !== "DENIED",
 						)
 					if (isCompletedSubtaskForClick) {
 						startNewTask()
@@ -1734,6 +1794,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						isCondensing={isCondensing}
 						handleCondenseContext={handleCondenseContext}
 						todos={latestTodos}
+						isTaskActive={isTaskActive}
+						isStopping={isStopping}
+						onStop={handleStopTask}
 					/>
 
 					{checkpointWarning && (
@@ -1934,6 +1997,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				setMode={setMode}
 				modeShortcutText={modeShortcutText}
 				isStreaming={isStreaming}
+				isTaskActive={isTaskActive}
+				isStopping={isStopping}
 				onStop={handleStopTask}
 				onEnqueueMessage={handleEnqueueCurrentMessage}
 				contextTokens={apiMetrics.contextTokens}

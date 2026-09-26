@@ -329,6 +329,9 @@
 		"hasQuestion": "Roo has a question"
 	},
 	"taskCompleted": "Task Completed",
+	"verifyingCompletion": "Verifying Task Completion...",
+	"completionReviewContinued": "Completion Review: Continued Work Required",
+	"candidateCompletion": "Proposed Task Completion",
 	"error": "Error",
 	"modelResponseIncomplete": "Model Response Incomplete",
 	"modelResponseErrors": {

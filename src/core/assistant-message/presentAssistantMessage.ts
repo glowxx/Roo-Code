@@ -61,6 +61,12 @@ export async function presentAssistantMessage(cline: Task) {
 		throw new Error(`[Task#presentAssistantMessage] task ${cline.taskId}.${cline.instanceId} aborted`)
 	}
 
+	if (cline.isTaskCompleted) {
+		cline.presentAssistantMessageLocked = false
+		cline.userMessageContentReady = true
+		return
+	}
+
 	if (cline.presentAssistantMessageLocked) {
 		cline.presentAssistantMessageHasPendingUpdates = true
 		return
@@ -819,6 +825,11 @@ export async function presentAssistantMessage(cline: Task) {
 						block as ToolUse<"attempt_completion">,
 						completionCallbacks,
 					)
+					if (cline.isTaskCompleted) {
+						cline.presentAssistantMessageLocked = false
+						cline.userMessageContentReady = true
+						return
+					}
 					break
 				}
 				case "run_slash_command":
@@ -932,6 +943,11 @@ export async function presentAssistantMessage(cline: Task) {
 	// set to message length and it sets userMessageContentReady to true itself
 	// (instead of preemptively doing it in iterator).
 	if (!block.partial || cline.didRejectTool || cline.didAlreadyUseTool) {
+		if (cline.isTaskCompleted) {
+			cline.userMessageContentReady = true
+			return
+		}
+
 		// Block is finished streaming and executing.
 		if (cline.currentStreamingContentIndex === cline.assistantMessageContent.length - 1) {
 			// It's okay that we increment if !didCompleteReadingStream, it'll

@@ -5,6 +5,7 @@ import * as vscode from "vscode"
 import type { GlobalState, ProviderSettings } from "@roo-code/types"
 
 import { Task } from "../Task"
+import { presentAssistantMessage } from "../../assistant-message/presentAssistantMessage"
 import { ClineProvider } from "../../webview/ClineProvider"
 import { ContextProxy } from "../../config/ContextProxy"
 import { formatResponse } from "../../prompts/responses"
@@ -409,5 +410,61 @@ describe("Task completion loop and termination", () => {
 		// Turn 1 + exactly 1 continuation turn were executed
 		expect(loopExecutions).toBe(2)
 		expect(task.isTaskCompleted).toBe(false)
+	})
+
+	it("presentAssistantMessage suppresses execution and sets userMessageContentReady when task is completed", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "test task",
+			startTask: false,
+		})
+
+		task.markTaskCompleted()
+		;(task.assistantMessageContent as any) = [{ type: "text", content: "Some text", partial: false }]
+
+		await presentAssistantMessage(task)
+
+		expect(task.userMessageContentReady).toBe(true)
+		expect(task.presentAssistantMessageLocked).toBe(false)
+	})
+
+	it("recursivelyMakeClineRequests suppresses api_req_started and terminates immediately when task is completed", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "test task",
+			startTask: false,
+		})
+
+		task.markTaskCompleted()
+		const saySpy = vi.spyOn(task, "say")
+
+		const result = await task.recursivelyMakeClineRequests([{ type: "text", text: "test" }])
+
+		expect(result).toBe(true)
+		expect(saySpy).not.toHaveBeenCalledWith("api_req_started", expect.anything())
+	})
+
+	it("attemptApiRequest suppresses createMessage and releases ticket if isTaskCompleted is true", async () => {
+		const task = new Task({
+			provider: mockProvider,
+			apiConfiguration: mockApiConfig,
+			task: "test task",
+			startTask: false,
+		})
+
+		const createMessageSpy = vi.fn()
+		task.api.createMessage = createMessageSpy as any
+
+		task.markTaskCompleted()
+
+		const chunks = []
+		for await (const chunk of task.attemptApiRequest(0)) {
+			chunks.push(chunk)
+		}
+
+		expect(chunks.length).toBe(0)
+		expect(createMessageSpy).not.toHaveBeenCalled()
 	})
 })

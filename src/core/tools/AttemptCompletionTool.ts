@@ -8,6 +8,7 @@ import { Package } from "../../shared/package"
 import type { ToolUse } from "../../shared/tools"
 import { t } from "../../i18n"
 
+import { findLast } from "../../shared/array"
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
 interface AttemptCompletionParams {
@@ -38,6 +39,12 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 	async execute(params: AttemptCompletionParams, task: Task, callbacks: AttemptCompletionCallbacks): Promise<void> {
 		const { result } = params
 		const { handleError, pushToolResult, askFinishSubTaskApproval } = callbacks
+
+		// Terminal state guard: If task is already completed, do not allow subsequent completion attempts
+		if (task.isTaskCompleted) {
+			pushToolResult(formatResponse.toolResult("Task is already completed."))
+			return
+		}
 
 		// Prevent attempt_completion if any tool failed in the current turn
 		if (task.didToolFailInCurrentTurn) {
@@ -79,6 +86,15 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 
 			await task.say("completion_result", result, undefined, false)
 
+			// Mark candidate completion message as EVALUATING while approval is pending
+			const completionSayMsg = task.clineMessages
+				? findLast(task.clineMessages, (m) => m.say === "completion_result")
+				: undefined
+			if (completionSayMsg) {
+				completionSayMsg.approvalState = "EVALUATING"
+				task.updateClineMessage?.(completionSayMsg)
+			}
+
 			// Check for subtask using parentTaskId (metadata-driven delegation)
 			if (task.parentTaskId) {
 				// Check if this subtask has already completed and returned to parent
@@ -104,6 +120,10 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 								pushToolResult,
 							)
 							if (delegation === "delegated") {
+								if (completionSayMsg) {
+									completionSayMsg.approvalState = "AUTO_APPROVED"
+									task.updateClineMessage?.(completionSayMsg)
+								}
 								task.markTaskCompleted?.()
 								this.emitTaskCompleted(task)
 							}
@@ -133,6 +153,10 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 			const { response, text, images } = await task.ask("completion_result", "", false)
 
 			if (response === "yesButtonClicked") {
+				if (completionSayMsg) {
+					completionSayMsg.approvalState = "AUTO_APPROVED"
+					task.updateClineMessage?.(completionSayMsg)
+				}
 				task.markTaskCompleted?.()
 				this.emitTaskCompleted(task)
 				pushToolResult(formatResponse.toolResult("Task completed successfully."))
@@ -158,17 +182,29 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 				return
 			}
 
+			if (completionSayMsg) {
+				completionSayMsg.approvalState = "DENIED"
+				task.updateClineMessage?.(completionSayMsg)
+			}
+
 			// User provided feedback or autonomous CONTINUE_WORK feedback
 			if (text) {
 				let isAutonomousContinueWork = false
+				let reasonText = ""
 				try {
 					const parsed = JSON.parse(text)
 					if (parsed.status === "continue_work" || parsed.decision === "CONTINUE_WORK") {
 						isAutonomousContinueWork = true
+						reasonText = parsed.reason || ""
 					}
 				} catch {}
 
 				if (isAutonomousContinueWork) {
+					// Inform the user why completion was rejected and why autonomous work continues
+					const explanation = reasonText
+						? `🔍 **Completion Review:** Work continuation requested.\n\n**Reason:** ${reasonText}`
+						: `🔍 **Completion Review:** Work continuation requested by completion verification.`
+					await task.say("text", explanation)
 					// Return structured continuation directly to worker model without fake user speech bubble
 					pushToolResult(formatResponse.toolResult(text, images))
 				} else {

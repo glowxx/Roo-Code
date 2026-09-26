@@ -75,7 +75,7 @@ import { ProviderRequestCoordinator } from "../../api/coordination/ProviderReque
 import { RequestPriority } from "../../api/coordination/types"
 
 // shared
-import { findLastIndex } from "../../shared/array"
+import { findLast, findLastIndex } from "../../shared/array"
 import { combineApiRequests } from "../../shared/combineApiRequests"
 import { combineCommandSequences } from "../../shared/combineCommandSequences"
 import { t } from "../../i18n"
@@ -1302,7 +1302,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		await this.saveClineMessages()
 	}
 
-	private async updateClineMessage(message: ClineMessage) {
+	public async updateClineMessage(message: ClineMessage) {
 		const provider = this.providerRef.deref()
 		const isForeground =
 			!provider ||
@@ -1368,6 +1368,66 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		return undefined
 	}
 
+	private extractExplicitConstraints(): string[] {
+		const constraints: string[] = []
+		const initialGoal = this.metadata?.task || ""
+
+		// Negative modification directives
+		const noModifyRegex = /(?:nie\s+modyfikuj(?:\s+kodu|\s+source)?|do\s+not\s+modify(?:\s+code|\s+source)?|don't\s+modify|read-only|tylko\s+do\s+odczytu)/i
+		// Negative commit directives
+		const noCommitRegex = /(?:nie\s+commituj|do\s+not\s+commit|don't\s+commit|no\s+commits?)/i
+		// Negative build directives
+		const noBuildRegex = /(?:nie\s+buduj(?:\s+candidate)?|do\s+not\s+build)/i
+		// Negative sign directives
+		const noSignRegex = /(?:nie\s+podpisuj(?:\s+release)?|do\s+not\s+sign)/i
+		// Negative production activation directives
+		const noActivateRegex = /(?:nie\s+wykonuj\s+production\s+activation|do\s+not\s+activate)/i
+		// Negative promotion directives
+		const noPromoteRegex = /(?:nie\s+promuj|do\s+not\s+promote)/i
+
+		// Check initial prompt
+		let hasNoModify = noModifyRegex.test(initialGoal)
+		let hasNoCommit = noCommitRegex.test(initialGoal)
+		let hasNoBuild = noBuildRegex.test(initialGoal)
+		let hasNoSign = noSignRegex.test(initialGoal)
+		let hasNoActivate = noActivateRegex.test(initialGoal)
+		let hasNoPromote = noPromoteRegex.test(initialGoal)
+
+		// Check subsequent user instructions in conversation history
+		for (const msg of this.clineMessages) {
+			if (msg.type === "say" && msg.say === "user_feedback" && msg.text) {
+				const text = msg.text
+
+				// Positive override checking (e.g. user says: "Możesz jednak zmodyfikować kod" or "Now fix blockers")
+				if (/(?:możesz(?:\s+jednak)?\s+modyfikować|you\s+can\s+modify|you\s+may\s+modify|now\s+fix|napraw\s+blockery)/i.test(text)) {
+					hasNoModify = false
+				} else if (noModifyRegex.test(text)) {
+					hasNoModify = true
+				}
+
+				if (/(?:możesz(?:\s+jednak)?\s+commitować|you\s+can\s+commit|you\s+may\s+commit|stwórz\s+commity)/i.test(text)) {
+					hasNoCommit = false
+				} else if (noCommitRegex.test(text)) {
+					hasNoCommit = true
+				}
+
+				if (noBuildRegex.test(text)) hasNoBuild = true
+				if (noSignRegex.test(text)) hasNoSign = true
+				if (noActivateRegex.test(text)) hasNoActivate = true
+				if (noPromoteRegex.test(text)) hasNoPromote = true
+			}
+		}
+
+		if (hasNoModify) constraints.push("DO NOT modify code (READ-ONLY review)")
+		if (hasNoCommit) constraints.push("DO NOT commit changes (NIE commituj)")
+		if (hasNoBuild) constraints.push("DO NOT build release candidate (NIE buduj candidate)")
+		if (hasNoSign) constraints.push("DO NOT sign release (NIE podpisuj release)")
+		if (hasNoActivate) constraints.push("DO NOT perform production activation (NIE wykonuj production activation)")
+		if (hasNoPromote) constraints.push("DO NOT promote build (NIE promuj)")
+
+		return constraints
+	}
+
 	private buildApprovalRequest({
 		askType,
 		text,
@@ -1379,10 +1439,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		isProtected?: boolean
 		askTs: number
 	}): UnifiedApprovalRequest {
-		const latestUserFeedback = [...this.clineMessages]
-			.reverse()
-			.find((m) => m.type === "say" && m.say === "user_feedback" && m.text)
-		const latestUserInstruction = latestUserFeedback?.text || this.metadata?.task || ""
+		const userMessages = this.clineMessages
+			.filter((m) => m.type === "say" && m.say === "user_feedback" && m.text && m.text.trim().length > 0)
+			.map((m) => m.text!.trim())
+
+		const trivialPattern = /^(?:continue|ok|proceed|idź dalej|dalej|tak|yes|go)\.?$/i
+		const latestSubstantive = [...userMessages].reverse().find((txt) => !trivialPattern.test(txt))
+		const latestUserInstruction = userMessages.length > 0 ? userMessages[userMessages.length - 1] : (this.metadata?.task || "")
+		const activeGoal = latestSubstantive || this.metadata?.task || ""
+		const explicitConstraints = this.extractExplicitConstraints()
 
 		let activeStep: string | undefined = undefined
 		if (this.todoList && this.todoList.length > 0) {
@@ -1518,12 +1583,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			taskContext: {
 				userTask: this.metadata?.task || "",
 				latestUserInstruction,
-				activeGoal: this.metadata?.task || "",
+				activeGoal,
 				currentStep: activeStep,
 				workerReason,
 				workspacePath: this.workspacePath || this.cwd,
 				isWithinWorkspace,
 				recentActionSignatures: [...(this.deniedActionHistory || [])],
+				explicitConstraints,
 			},
 		}
 	}
@@ -1725,12 +1791,19 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					timeouts.push(this.autoApprovalTimeoutRef)
 				}
 			} else {
+				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
 				const askMsg = this.clineMessages.find((m) => m.ts === askTs)
 				if (askMsg) {
 					askMsg.approvalState = "EVALUATING"
 					this.updateClineMessage(askMsg)
 				}
-				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
+				if (request.actionType === "attempt_completion") {
+					const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+					if (completionSayMsg) {
+						completionSayMsg.approvalState = "EVALUATING"
+						this.updateClineMessage(completionSayMsg)
+					}
+				}
 				let decisionResult: ApprovalDecisionResult
 				try {
 					decisionResult = await this.approvalOrchestrator.evaluate(request, state)
@@ -1764,6 +1837,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								askMsg.approvalState = "USER_DECISION_REQUIRED"
 								this.updateClineMessage(askMsg)
 							}
+							const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+							if (completionSayMsg) {
+								completionSayMsg.approvalState = "USER_DECISION_REQUIRED"
+								this.updateClineMessage(completionSayMsg)
+							}
 							const warningPayload: SafetyEvaluationResult = {
 								isSafe: false,
 								riskLevel: "medium",
@@ -1775,6 +1853,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							if (askMsg) {
 								askMsg.approvalState = "AUTO_APPROVED"
 								this.updateClineMessage(askMsg)
+							}
+							const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+							if (completionSayMsg) {
+								completionSayMsg.approvalState = "AUTO_APPROVED"
+								this.updateClineMessage(completionSayMsg)
 							}
 							approval = { decision: "approve" }
 							this.approveAsk()
@@ -1790,7 +1873,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						approval = { decision: "approve" }
 						this.approveAsk()
 						this.consecutiveReplanCount = 0
-						this.unresolvedDenialState = null
+						const isPassiveCheck =
+							request.actionType === "execute_command" &&
+							/^(?:git\s+(?:status|diff|log)|ls|dir|pwd|echo)\b/i.test(request.target.command || "")
+						if (!isPassiveCheck) {
+							this.unresolvedDenialState = null
+						}
 					}
 				} else if (decisionResult.decision === "CONTINUE_WORK") {
 					this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
@@ -1801,6 +1889,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						if (askMsg) {
 							askMsg.approvalState = "USER_DECISION_REQUIRED"
 							this.updateClineMessage(askMsg)
+						}
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "USER_DECISION_REQUIRED"
+							this.updateClineMessage(completionSayMsg)
 						}
 						const warningPayload: SafetyEvaluationResult = {
 							isSafe: false,
@@ -1813,6 +1906,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						if (askMsg) {
 							askMsg.approvalState = "DENIED"
 							this.updateClineMessage(askMsg)
+						}
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "DENIED"
+							this.updateClineMessage(completionSayMsg)
 						}
 						approval = { decision: "deny" }
 						const payload = formatResponse.continueWork({
@@ -1841,33 +1939,82 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					this.consecutiveReplanCount = (this.consecutiveReplanCount || 0) + 1
 					this.totalReplanCount = (this.totalReplanCount || 0) + 1
 
-					// Loop / thrashing protection: repeated rejected action or consecutive limit > 3 or total > 10
-					const isThrashing = isRepeated || this.consecutiveReplanCount > 3 || this.totalReplanCount > 10
+					const isHardConstraintOrBoundary =
+						decisionResult.decision === "HARD_BLOCK" ||
+						decisionResult.hardBoundaryViolation === true ||
+						decisionResult.isUserConstraintViolation === true ||
+						/nie\s+modyfikuj|do\s+not\s+modify|read-only|nie\s+commituj|do\s+not\s+commit|user\s+constraint/i.test(decisionResult.reason)
 
-					if (isThrashing) {
-						approval = { decision: "ask" }
-						if (askMsg) {
-							askMsg.approvalState = "USER_DECISION_REQUIRED"
-							this.updateClineMessage(askMsg)
-						}
-						const warningPayload: SafetyEvaluationResult = {
-							isSafe: false,
-							riskLevel: decisionResult.risk || "high",
-							reason: `Safety replan limit reached or action repeated (${decisionResult.reason}). Manual approval required.`,
-						}
-						await this.say("command_safety_warning", JSON.stringify(warningPayload))
-						this.lastMessageTs = askTs
-					} else {
+					if (isHardConstraintOrBoundary) {
+						// HARD CONSTRAINT OR BOUNDARY VIOLATION:
+						// RUN MUST NEVER BE OFFERED IN AUTO MODE!
 						if (askMsg) {
 							askMsg.approvalState = "DENIED"
 							this.updateClineMessage(askMsg)
 						}
 						approval = { decision: "deny" }
+
+						let guidance = decisionResult.replanGuidance || "Execute a safe compliant alternative."
+						if (isRepeated || this.consecutiveReplanCount > 1) {
+							const constraintLabel = decisionResult.violatedConstraint || "Explicit user constraint"
+							guidance = `[EXPLICIT CONSTRAINT ENFORCEMENT - ATTEMPT ${this.consecutiveReplanCount}]
+This proposed action is STRICTLY FORBIDDEN by active user constraints: "${constraintLabel}".
+Reason: ${decisionResult.reason}
+THE NEXT ACTION MUST NOT:
+- edit or modify any files
+- stage or commit changes
+- repeat the forbidden action
+You MUST continue the task using strictly compliant, read-only inspection or alternative compliant tools.`
+						}
+
 						const payload =
 							decisionResult.decision === "HARD_BLOCK"
-								? formatResponse.toolHardBlocked(decisionResult.reason, decisionResult.replanGuidance)
-								: formatResponse.toolDeniedAndReplan(decisionResult.reason, decisionResult.replanGuidance)
+								? formatResponse.toolHardBlocked(decisionResult.reason, guidance)
+								: formatResponse.toolDeniedAndReplan(decisionResult.reason, guidance)
 						this.denyAsk({ text: payload })
+					} else {
+						// Loop / thrashing protection: repeated rejected action or consecutive limit > 3 or total > 10
+						const isThrashing = isRepeated || this.consecutiveReplanCount > 3 || this.totalReplanCount > 10
+
+						if (isThrashing) {
+							approval = { decision: "ask" }
+							if (askMsg) {
+								askMsg.approvalState = "USER_DECISION_REQUIRED"
+								this.updateClineMessage(askMsg)
+							}
+							if (request.actionType === "attempt_completion") {
+								const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+								if (completionSayMsg) {
+									completionSayMsg.approvalState = "USER_DECISION_REQUIRED"
+									this.updateClineMessage(completionSayMsg)
+								}
+							}
+							const warningPayload: SafetyEvaluationResult = {
+								isSafe: false,
+								riskLevel: decisionResult.risk || "high",
+								reason: `Safety replan limit reached or action repeated (${decisionResult.reason}). Manual approval required.`,
+							}
+							await this.say("command_safety_warning", JSON.stringify(warningPayload))
+							this.lastMessageTs = askTs
+						} else {
+							if (askMsg) {
+								askMsg.approvalState = "DENIED"
+								this.updateClineMessage(askMsg)
+							}
+							if (request.actionType === "attempt_completion") {
+								const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+								if (completionSayMsg) {
+									completionSayMsg.approvalState = "DENIED"
+									this.updateClineMessage(completionSayMsg)
+								}
+							}
+							approval = { decision: "deny" }
+							const payload =
+								decisionResult.decision === "HARD_BLOCK"
+									? formatResponse.toolHardBlocked(decisionResult.reason, decisionResult.replanGuidance)
+									: formatResponse.toolDeniedAndReplan(decisionResult.reason, decisionResult.replanGuidance)
+							this.denyAsk({ text: payload })
+						}
 					}
 				} else {
 					// MANUAL_APPROVAL (or fail-closed)
@@ -1875,6 +2022,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					if (askMsg) {
 						askMsg.approvalState = "USER_DECISION_REQUIRED"
 						this.updateClineMessage(askMsg)
+					}
+					if (request.actionType === "attempt_completion") {
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "USER_DECISION_REQUIRED"
+							this.updateClineMessage(completionSayMsg)
+						}
 					}
 					const warningPayload: SafetyEvaluationResult = {
 						isSafe: false,
@@ -3718,6 +3872,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// provider rate-limit window.
 			await this.maybeWaitForProviderRateLimit(currentItem.retryAttempt ?? 0)
 			Task.lastGlobalApiRequestTime = performance.now()
+
+			if (this.isTaskCompleted) {
+				return true
+			}
 
 			await this.say(
 				"api_req_started",
@@ -5887,6 +6045,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			priority,
 			abortSignal,
 		})
+
+		if (this.isTaskCompleted) {
+			console.warn(`[TerminalStateGuard] Suppressing createMessage on completed task ${this.taskId}`)
+			ticket.release()
+			return
+		}
 
 		try {
 			// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
