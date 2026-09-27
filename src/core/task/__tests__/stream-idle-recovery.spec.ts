@@ -381,10 +381,10 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 
 	// Scenario 12: no-op/heartbeat spam -> watchdog times out
 	it("Scenario 12: no-op/heartbeat spam -> MAX_NO_PROGRESS_TIMEOUT_MS constant protects against endless zombie pings", () => {
-		expect(MAX_NO_PROGRESS_TIMEOUT_MS).toBe(90_000)
+		expect(MAX_NO_PROGRESS_TIMEOUT_MS).toBe(240_000)
 
 		const noProgressError = new Error(
-			"Stream no-progress timeout: received heartbeat/keep-alive frames but no content for 90 seconds",
+			"Stream no-progress timeout: received heartbeat/keep-alive frames but no content for 240 seconds",
 		)
 		const classification = classifyApiError(noProgressError)
 
@@ -774,4 +774,39 @@ describe("Stream Idle Watchdog & Recovery Architecture (20 Scenarios)", () => {
 		tracker.recordPhase("content")
 		expect(tracker.data.streamPhase).toBe("content")
 	})
+
+	// Scenario 31: MAX_NO_PROGRESS_TIMEOUT_MS must accommodate long post-reasoning tool-generation latency with keepalives (at least 240s)
+	it("Scenario 31: MAX_NO_PROGRESS_TIMEOUT_MS accommodates prolonged tool generation latency with keepalives", () => {
+		expect(MAX_NO_PROGRESS_TIMEOUT_MS).toBeGreaterThanOrEqual(240_000)
+	})
+
+	// Scenario 32: didFinishAbortingStream is reset on task request reset and retry
+	it("Scenario 32: didFinishAbortingStream is not latched true across retries or turns", () => {
+		const task = new Task({
+			task: "test task",
+			startTask: false,
+			enableCheckpoints: false,
+			provider: createMockProvider(),
+			apiConfiguration: { apiProvider: "openai" } as any,
+		})
+
+		// Simulate an abort that sets the latch
+		task.didFinishAbortingStream = true
+
+		// Reset state as done at top of recursivelyMakeRooRequests or on retry
+		task.resetStreamingState()
+		expect(task.didFinishAbortingStream).toBe(false)
+	})
+
+	// Scenario 33: ProviderRequestCoordinator supports reportTransientStall with temporary cooldown
+	it("Scenario 33: ProviderRequestCoordinator.reportTransientStall establishes bounded cooldown", async () => {
+		const { ProviderRequestCoordinator } = await import("../../../api/coordination/ProviderRequestCoordinator")
+		const coordinator = ProviderRequestCoordinator.getInstance()
+		const providerKey = "xkiro:testkey"
+
+		coordinator.reportTransientStall(providerKey, 5)
+		const stats = coordinator.getStats(providerKey)
+		expect(stats.blockedUntil).toBeGreaterThan(Date.now())
+	})
 })
+

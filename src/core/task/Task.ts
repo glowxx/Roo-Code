@@ -167,7 +167,7 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000 // 45 seconds of silence be
 export const REASONING_STREAM_IDLE_TIMEOUT_MS = 75_000 // 75 seconds for reasoning streams (P95 is 34s, covers P99 gap tolerance)
 export const FIRST_CHUNK_TIMEOUT_MS = 60_000 // 60 seconds base time to first chunk
 export const REASONING_FIRST_CHUNK_TIMEOUT_MS = 90_000 // 90 seconds for large prompts / reasoning models (P99 is 87.5s)
-export const MAX_NO_PROGRESS_TIMEOUT_MS = 90_000 // 90 seconds maximum silence without meaningful progress (guards against infinite no-op spam)
+export const MAX_NO_PROGRESS_TIMEOUT_MS = 240_000 // 240 seconds (4 minutes) maximum silence without meaningful progress (guards against infinite no-op spam while accommodating high-latency tool generation on free clusters)
 
 export interface TaskOptions extends CreateTaskOptions {
 	provider: ClineProvider
@@ -3612,6 +3612,30 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 	}
 
 	/**
+	 * Resets all ephemeral streaming state flags between API turns, auto-recovery retries,
+	 * and manual user retries. Crucially unlatches `didFinishAbortingStream` so that future
+	 * stream aborts in the same task lifecycle are never skipped.
+	 */
+	public resetStreamingState(): void {
+		this.didFinishAbortingStream = false
+		this.currentStreamingContentIndex = 0
+		this.currentStreamingDidCheckpoint = false
+		this.assistantMessageContent = []
+		this.didCompleteReadingStream = false
+		this.userMessageContent = []
+		this.userMessageContentReady = false
+		this.didRejectTool = false
+		this.didAlreadyUseTool = false
+		this.assistantMessageSavedToHistory = false
+		this.didToolFailInCurrentTurn = false
+		this.presentAssistantMessageLocked = false
+		this.presentAssistantMessageHasPendingUpdates = false
+		this.streamingToolCallIndices.clear()
+		NativeToolCallParser.clearAllStreamingToolCalls()
+		NativeToolCallParser.clearRawChunkState()
+	}
+
+	/**
 	 * Force emit a final token usage update, ignoring throttle.
 	 * Called before task completion or abort to ensure final stats are captured.
 	 * Triggers the debounce with current values and immediately flushes to ensure emit.
@@ -4226,26 +4250,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				}
 
 				// Reset streaming state for each new API request
-				this.currentStreamingContentIndex = 0
-				this.currentStreamingDidCheckpoint = false
-				this.assistantMessageContent = []
-				this.didCompleteReadingStream = false
-				this.userMessageContent = []
-				this.userMessageContentReady = false
-				this.didRejectTool = false
-				this.didAlreadyUseTool = false
-				this.assistantMessageSavedToHistory = false
-				// Reset tool failure flag for each new assistant turn - this ensures that tool failures
-				// only prevent attempt_completion within the same assistant message, not across turns
-				// (e.g., if a tool fails, then user sends a message saying "just complete anyway")
-				this.didToolFailInCurrentTurn = false
-				this.presentAssistantMessageLocked = false
-				this.presentAssistantMessageHasPendingUpdates = false
-				// No legacy text-stream tool parser.
-				this.streamingToolCallIndices.clear()
-				// Clear any leftover streaming tool call state from previous interrupted streams
-				NativeToolCallParser.clearAllStreamingToolCalls()
-				NativeToolCallParser.clearRawChunkState()
+				this.resetStreamingState()
 
 				await this.diffViewProvider.reset()
 
@@ -4882,7 +4887,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 						const state = await this.providerRef.deref()?.getState()
 						const autoApproval = !!state?.autoApprovalEnabled
 						const maxStreamIdleRetries = autoApproval
-							? Math.max(3, classification.maxRetries)
+							? Math.max(4, classification.maxRetries)
 							: Math.max(2, classification.maxRetries)
 
 						// Safe automatic recovery: retry for stream idle stalls if no side-effects executed
@@ -4920,11 +4925,26 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							// Subtle retry notification UX instead of scary red error box
 							await this.say("api_req_retry_delayed", t("common:interruption.connectionStalledRetrying"))
 
-							// Exponential backoff with jitter (e.g. 3s, 6s, 12s) - abortable on TaskAborted/abort
-							const baseSeconds = classification.retryAfterSeconds ?? 3
-							const backoffMs = baseSeconds * Math.pow(2, currentRetry) * 1000
-							const jitterMs = Math.floor(Math.random() * 1000)
+							// Adaptive backoff with jitter - abortable on TaskAborted/abort
+							// For stream idle stalls, allow realistic upstream recovery intervals (e.g. 5s, 15s, 45s) rather than immediate rapid bursts
+							const baseSeconds = isStreamIdle ? 5 : (classification.retryAfterSeconds ?? 3)
+							const backoffMultiplier = isStreamIdle ? Math.pow(3, currentRetry) : Math.pow(2, currentRetry)
+							const backoffMs = Math.min(60_000, baseSeconds * backoffMultiplier * 1000)
+							const jitterMs = Math.floor(Math.random() * 1500)
 							const waitMs = backoffMs + jitterMs
+
+							// Coordinate provider-scoped cooldown so concurrent sibling chats don't hammer degraded gateway
+							try {
+								const providerKey = ProviderRequestCoordinator.getInstance().deriveProviderKey(
+									this.apiConfiguration?.apiProvider,
+									this.apiConfiguration?.apiKey,
+									state?.currentApiConfigName,
+								)
+								ProviderRequestCoordinator.getInstance().reportTransientStall(providerKey, Math.ceil(waitMs / 1000))
+							} catch (e) {
+								// Ignore coordination errors
+							}
+
 							await new Promise<void>((resolve) => {
 								let timer: NodeJS.Timeout | undefined
 								const onAbort = () => {
@@ -4934,7 +4954,6 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 								}
 								if (this.abort) {
 									resolve()
-									return
 								}
 								this.once(RooCodeEventName.TaskAborted, onAbort)
 								timer = setTimeout(() => {
@@ -4950,6 +4969,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							}
 
 							// Clean up in-flight request, socket, and watchdog before next attempt
+							this.resetStreamingState()
 							this.clearStreamWatchdog()
 							this.cancelCurrentRequest()
 							try {
@@ -5037,9 +5057,9 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 								)
 								let reasonText: string
 								if (isStreamIdle) {
-									reasonText = `${providerDisplayName} stream stalled\n\nThe provider did not send stream data for ${Math.round(
+									reasonText = `${providerDisplayName} connection temporarily unavailable\n\nThe provider did not send stream data for ${Math.round(
 										currentWatchdogTimeout / 1000,
-									)} seconds.\nAutomatic recovery was attempted ${currentRetry} time(s).\n\nModel:\n${formattedModelName}`
+									)} seconds.\nAutomatic recovery was attempted ${currentRetry} time(s).\n\nTask progress has been preserved.\nYou can click "Retry" to continue this task, or change the model in settings/header and retry.\n\nModel:\n${formattedModelName}`
 								} else if (!classification.retryable) {
 									reasonText = `Deterministic stream failure (${classification.category}): ${streamingFailedMessage}`
 								} else {
@@ -5061,6 +5081,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 									break
 								}
 								await this.say("api_req_retried")
+								this.resetStreamingState()
 								this.clearStreamWatchdog()
 								this.cancelCurrentRequest()
 								try {
