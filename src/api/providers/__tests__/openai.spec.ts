@@ -116,6 +116,7 @@ describe("OpenAiHandler", () => {
 					"User-Agent": `RooCode/${Package.version}`,
 				},
 				timeout: expect.any(Number),
+				fetch: expect.any(Function),
 			})
 		})
 	})
@@ -1596,7 +1597,32 @@ describe("getOpenAiModels", () => {
 				for await (const chunk of stream) {
 					// reading stream
 				}
-			}).rejects.toThrow(/OpenAI completion error: A server error occurred/)
+			}).rejects.toThrow(/(OpenAI|xKiro) completion error: A server error occurred/)
+		})
+
+		it("should transform SSE comment keepalives into synthetic data chunks", async () => {
+			const { createKeepaliveTransformStream } = await import("../openai")
+			const textEncoder = new TextEncoder()
+			const textDecoder = new TextDecoder()
+
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(textEncoder.encode(": keep-alive\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"test\"}}]}\n\n"))
+					controller.close()
+				},
+			})
+
+			const transformed = stream.pipeThrough(createKeepaliveTransformStream())
+			const reader = transformed.getReader()
+			let output = ""
+			while (true) {
+				const { done, value } = await reader.read()
+				if (done) break
+				output += textDecoder.decode(value)
+			}
+
+			expect(output).toContain('data: {"choices":[{"index":0,"delta":{}}]}')
+			expect(output).toContain('data: {"choices":[{"delta":{"content":"test"}}]}')
 		})
 	})
 })

@@ -29,6 +29,63 @@ import type { SingleCompletionHandler, ApiHandlerCreateMessageMetadata } from ".
 import { getApiRequestTimeout } from "./utils/timeout-config"
 import { handleOpenAIError } from "./utils/openai-error-handler"
 
+/**
+ * Transforms an SSE byte stream so that comment lines (e.g. `: keep-alive\n\n` or `: ping\n\n`)
+ * emitted by upstream proxies (like xKiro or Cloudflare) to prevent TCP idle timeouts
+ * are translated into synthetic empty choices chunks.
+ *
+ * The official OpenAI SDK parser discards comment lines starting with `:` by default.
+ * Converting them into empty choices chunks allows OpenAiHandler's chunk processing
+ * loop (lines 262-266) to detect upstream transport activity and yield a { type: "heartbeat" }
+ * event, which prevents Roo Code's streaming watchdog from falsely timing out healthy connections.
+ */
+export function createKeepaliveTransformStream(): TransformStream<Uint8Array, Uint8Array> {
+	const textDecoder = new TextDecoder()
+	const textEncoder = new TextEncoder()
+	let buffer = ""
+
+	return new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			buffer += textDecoder.decode(chunk, { stream: true })
+			const lines = buffer.split(/\r?\n/)
+			buffer = lines.pop() || ""
+
+			for (const line of lines) {
+				if (line.startsWith(":")) {
+					controller.enqueue(textEncoder.encode('data: {"choices":[{"index":0,"delta":{}}]}\n\n'))
+				} else {
+					controller.enqueue(textEncoder.encode(line + "\n"))
+				}
+			}
+		},
+		flush(controller) {
+			if (buffer) {
+				if (buffer.startsWith(":")) {
+					controller.enqueue(textEncoder.encode('data: {"choices":[{"index":0,"delta":{}}]}\n\n'))
+				} else {
+					controller.enqueue(textEncoder.encode(buffer))
+				}
+			}
+		},
+	})
+}
+
+export function createKeepalivePreservingFetch(): typeof fetch {
+	return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+		const response = await fetch(input, init)
+		const contentType = response.headers.get("content-type") || ""
+		if (contentType.includes("text/event-stream") && response.body) {
+			const transformedBody = response.body.pipeThrough(createKeepaliveTransformStream())
+			return new Response(transformedBody, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			})
+		}
+		return response
+	}
+}
+
 // TODO: Rename this to OpenAICompatibleHandler. Also, I think the
 // `OpenAINativeHandler` can subclass from this, since it's obviously
 // compatible with the OpenAI API. We can also rename it to `OpenAIHandler`.
@@ -79,6 +136,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 		}
 
 		const timeout = getApiRequestTimeout()
+		const customFetch = createKeepalivePreservingFetch()
 
 		if (isAzureAiInference) {
 			// Azure AI Inference Service (e.g., for DeepSeek) uses a different path structure
@@ -88,6 +146,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 				defaultHeaders: headers,
 				defaultQuery: { "api-version": this.options.azureApiVersion || "2024-05-01-preview" },
 				timeout,
+				fetch: customFetch,
 			})
 		} else if (isAzureOpenAi) {
 			// Azure API shape slightly differs from the core API shape:
@@ -98,6 +157,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 				apiVersion: this.options.azureApiVersion || azureOpenAiDefaultApiVersion,
 				defaultHeaders: headers,
 				timeout,
+				fetch: customFetch,
 			})
 		} else {
 			this.client = new OpenAI({
@@ -105,6 +165,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 				apiKey,
 				defaultHeaders: headers,
 				timeout,
+				fetch: customFetch,
 			})
 		}
 	}

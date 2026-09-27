@@ -151,6 +151,26 @@ export class ProviderRequestCoordinator {
 		}, durationMs + 20)
 	}
 
+	/**
+	 * Reports a transient stream idle stall or connection interruption for a provider.
+	 * Establishes a bounded cooldown (e.g. 5-10 seconds) on the providerKey to prevent
+	 * concurrent sibling chats from generating retry storms against an already degraded upstream gateway.
+	 */
+	public reportTransientStall(providerKey: string, cooldownSeconds: number = 5): void {
+		const state = this.getOrCreateProviderState(providerKey)
+		const durationMs = Math.max(1, Math.ceil(cooldownSeconds)) * 1000
+		const newBlockedUntil = Date.now() + durationMs
+		state.blockedUntil = Math.max(state.blockedUntil, newBlockedUntil)
+
+		// Schedule wake timer when cooldown expires
+		if (state.wakeTimer) {
+			clearTimeout(state.wakeTimer)
+		}
+		state.wakeTimer = setTimeout(() => {
+			this.pumpQueue(providerKey)
+		}, durationMs + 20)
+	}
+
 	public reportSuccess(providerKey: string): void {
 		const state = this.getOrCreateProviderState(providerKey)
 		state.consecutiveSuccesses++
