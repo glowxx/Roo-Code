@@ -955,6 +955,51 @@ body.light-theme .header-action-btn:hover {
 	display: flex;
 }
 
+/* Sidebar Chat List Truncation Toggle Button */
+.sidebar-chat-toggle-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	margin: 2px 0 4px 0;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	color: var(--text-muted);
+	font-size: 11px;
+	cursor: pointer;
+	text-align: left;
+	transition: background 0.15s ease, color 0.15s ease;
+	user-select: none;
+	outline: none;
+}
+
+.sidebar-chat-toggle-btn:hover {
+	background: var(--bg-hover);
+	color: var(--text-secondary);
+}
+
+.sidebar-chat-toggle-btn:focus-visible {
+	border-color: rgba(59, 130, 246, 0.5);
+	box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.chat-toggle-chevron {
+	transition: transform 0.15s ease;
+	flex-shrink: 0;
+}
+
+.chat-toggle-chevron.expanded {
+	transform: rotate(0deg);
+}
+
+.chat-toggle-indicators {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
+}
+
 .sidebar-chat-item {
 	display: flex;
 	align-items: center;

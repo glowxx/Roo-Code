@@ -414,6 +414,80 @@ describe("Desktop Shell & Agent Host Integration Bridge", () => {
 			expect(realInstanceChat?.status).toBe("needs_attention")
 		})
 
+		it("should resolve status='running' (spinner) during active autonomous execution, tools, commands, and approval AI evaluation", async () => {
+			const mockRunningTasks = new Map<string, any>()
+			const fakeProvider = {
+				runningTasks: mockRunningTasks,
+				taskHistoryStore: {
+					getAll: () => [
+						{ id: "task-auto-cmd", task: "Running command", ts: 1000, workspace: tempDir },
+						{ id: "task-evaluating", task: "Safety evaluating", ts: 2000, workspace: tempDir },
+						{ id: "task-hist-poison", task: "Past decision now running", ts: 3000, workspace: tempDir },
+						{ id: "task-active-status", task: "Task status running", ts: 4000, workspace: tempDir },
+					],
+				},
+			}
+
+			// Task 1: Command executing autonomously after auto-approval
+			mockRunningTasks.set("task-auto-cmd", {
+				taskId: "task-auto-cmd",
+				isStreaming: false,
+				isTaskCompleted: false,
+				taskStatus: "running",
+				clineMessages: [
+					{ ts: 1000, type: "ask", ask: "command", approvalState: "AUTO_APPROVED" },
+				],
+			})
+
+			// Task 2: Approval AI currently evaluating safety
+			mockRunningTasks.set("task-evaluating", {
+				taskId: "task-evaluating",
+				isStreaming: false,
+				isTaskCompleted: false,
+				clineMessages: [
+					{ ts: 2000, type: "ask", ask: "command", approvalState: "EVALUATING" },
+				],
+			})
+
+			// Task 3: Past turn had USER_DECISION_REQUIRED (user answered), now task is running subsequent work
+			mockRunningTasks.set("task-hist-poison", {
+				taskId: "task-hist-poison",
+				isStreaming: false,
+				isTaskCompleted: false,
+				taskStatus: "running",
+				clineMessages: [
+					{ ts: 1000, type: "ask", ask: "tool", approvalState: "USER_DECISION_REQUIRED" },
+					{ ts: 1100, type: "say", say: "user_feedback", text: "Approved" },
+					{ ts: 2000, type: "ask", ask: "command", approvalState: "AUTO_APPROVED" },
+				],
+			})
+
+			// Task 4: Task engine explicitly reports taskStatus === "running"
+			mockRunningTasks.set("task-active-status", {
+				taskId: "task-active-status",
+				isStreaming: false,
+				isTaskCompleted: false,
+				taskStatus: "running",
+				clineMessages: [
+					{ ts: 4000, type: "say", say: "reasoning", text: "Thinking..." },
+				],
+			})
+
+			host.registerWebviewProvider("test-view", fakeProvider)
+			const chatsByWs = host.getChatsByWorkspace()
+			const chats = chatsByWs[path.normalize(path.resolve(tempDir))]!
+
+			const autoCmdChat = chats.find((c) => c.id === "task-auto-cmd")
+			const evaluatingChat = chats.find((c) => c.id === "task-evaluating")
+			const histPoisonChat = chats.find((c) => c.id === "task-hist-poison")
+			const activeStatusChat = chats.find((c) => c.id === "task-active-status")
+
+			expect(autoCmdChat?.status).toBe("running")
+			expect(evaluatingChat?.status).toBe("running")
+			expect(histPoisonChat?.status).toBe("running")
+			expect(activeStatusChat?.status).toBe("running")
+		})
+
 		it("should flag background task completion as hasUnread=true and foreground completion as hasUnread=false", async () => {
 			const storeItems = new Map<string, any>([
 				["bg-task", { id: "bg-task", task: "Background Work", ts: 1000, workspace: tempDir }],
@@ -545,6 +619,84 @@ describe("Desktop Shell & Agent Host Integration Bridge", () => {
 
 			// Precedence 4: Completed and read is empty
 			expect(computeIndicator({ status: "completed", hasUnread: false })).toBe("EMPTY")
+		})
+
+		it("should deduplicate consecutive terminal logs for identical command within 2000ms", async () => {
+			const host = new DesktopAgentHost({
+				workspacePath: tempDir,
+				extensionPath: tempDir,
+				storageDir: path.join(tempDir, "host-term"),
+			})
+			// Simulate tool execution followed by say command
+			const msg1 = {
+				type: "say",
+				say: "tool",
+				text: JSON.stringify({ tool: "execute_command", command: "npm test" }),
+			}
+			const msg2 = {
+				type: "say",
+				say: "command",
+				text: "npm test",
+			}
+
+			// Send both messages to agent host
+			;(host as any).processExtensionMessage(msg1)
+			;(host as any).processExtensionMessage(msg2)
+
+			const logs = host.getTerminalLogs()
+			expect(logs.length).toBe(1)
+			expect(logs[0]!.command).toBe("npm test")
+			expect(logs[0]!.status).toBe("running")
+
+			// When output arrives, update it
+			const outputMsg = {
+				type: "say",
+				say: "command_output",
+				text: "Tests passed: 10/10",
+			}
+			;(host as any).processExtensionMessage(outputMsg)
+
+			const logsAfterOutput = host.getTerminalLogs()
+			expect(logsAfterOutput.length).toBe(1)
+			expect(logsAfterOutput[0]!.output).toBe("Tests passed: 10/10")
+			expect(logsAfterOutput[0]!.status).toBe("completed")
+		})
+
+		it("should parse SEARCH/REPLACE blocks correctly in diff viewer without falling through to content not available", () => {
+			const searchReplaceDiff = `<<<<<<< SEARCH
+:start_line:10
+-------
+const a = 1
+const b = 2
+=======
+const a = 10
+const b = 20
+>>>>>>>`
+
+			const lines = searchReplaceDiff.split("\n")
+			let deletions = 0
+			let additions = 0
+			let mode = "outside"
+
+			for (const line of lines) {
+				if (line.startsWith("<<<<<<< SEARCH")) {
+					mode = "search"
+					continue
+				} else if (line.startsWith("=======")) {
+					mode = "replace"
+					continue
+				} else if (line.startsWith(">>>>>>>")) {
+					mode = "outside"
+					continue
+				} else if (mode === "search" && (line.startsWith(":start_line:") || line === "-------")) {
+					continue
+				}
+				if (mode === "search") deletions++
+				else if (mode === "replace") additions++
+			}
+
+			expect(deletions).toBe(2)
+			expect(additions).toBe(2)
 		})
 	})
 })

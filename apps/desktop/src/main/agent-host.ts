@@ -53,6 +53,10 @@ export class DesktopAgentHost extends EventEmitter {
 		return this.currentWorkspace
 	}
 
+	public getStorageDir(): string | undefined {
+		return this.storageDir
+	}
+
 	public async setWorkspace(newWorkspace?: string): Promise<void> {
 		this.currentWorkspaceEpoch++
 		const epoch = this.currentWorkspaceEpoch
@@ -633,13 +637,21 @@ export class DesktopAgentHost extends EventEmitter {
 					(runningTask.askResponse === undefined && !runningTask.isStreaming ? lastAsk?.ask : undefined)
 
 				const isUserDecisionRequired =
-					lastAsk?.approvalState === "USER_DECISION_REQUIRED" ||
-					Boolean(runningTask.clineMessages?.some?.((m: any) => m.approvalState === "USER_DECISION_REQUIRED"))
+					lastAsk?.approvalState === "USER_DECISION_REQUIRED"
+
+				const isEvaluating =
+					lastAsk?.approvalState === "EVALUATING"
+
+				const isAutoApproved =
+					lastAsk?.approvalState === "AUTO_APPROVED"
+
+				const isTaskRunning =
+					runningTask.taskStatus === "running"
 
 				const isCompleted =
 					runningTask.isTaskCompleted === true ||
 					pendingAskType === "resume_completed_task" ||
-					(!runningTask.isStreaming && !isUserDecisionRequired && runningTask.taskStatus === "idle")
+					(!runningTask.isStreaming && !isUserDecisionRequired && !isEvaluating && runningTask.taskStatus === "idle")
 
 				const isAborted = runningTask.abort === true || runningTask.abandoned === true
 
@@ -652,24 +664,33 @@ export class DesktopAgentHost extends EventEmitter {
 						!runningTask.isStreaming &&
 						!runningTask.isWaitingForFirstChunk &&
 						!runningTask.autoApprovalTimeoutRef &&
+						!isEvaluating &&
+						!isAutoApproved &&
 						(isUserDecisionRequired ||
+							runningTask.taskStatus === "interactive" ||
 							pendingAskType === "followup" ||
-							pendingAskType === "command" ||
-							pendingAskType === "tool" ||
-							pendingAskType === "use_mcp_server" ||
-							pendingAskType === "api_req_failed" ||
+							pendingAskType === "plan_mode_response" ||
 							pendingAskType === "mistake_limit_reached" ||
 							pendingAskType === "auto_approval_max_req_reached" ||
-							pendingAskType === "plan_mode_response" ||
-							(pendingAskType === "completion_result" && isUserDecisionRequired) ||
-							runningTask.taskStatus === "interactive")
+							((pendingAskType === "command" ||
+								pendingAskType === "tool" ||
+								pendingAskType === "use_mcp_server" ||
+								pendingAskType === "api_req_failed") &&
+								(isUserDecisionRequired || runningTask.taskStatus === "interactive" || (runningTask.taskStatus === undefined && !isAutoApproved && !isEvaluating))))
 
 					if (isWaitingInteractiveUser) {
 						status = "needs_attention"
-					} else if (runningTask.isStreaming || runningTask.isWaitingForFirstChunk || runningTask.autoApprovalTimeoutRef) {
+					} else if (
+						runningTask.isStreaming ||
+						runningTask.isWaitingForFirstChunk ||
+						runningTask.autoApprovalTimeoutRef ||
+						isEvaluating ||
+						isAutoApproved ||
+						isTaskRunning
+					) {
 						status = "running"
 					} else {
-						status = isUserDecisionRequired ? "needs_attention" : "completed"
+						status = isUserDecisionRequired ? "needs_attention" : (runningTask.taskStatus === "idle" ? "completed" : "running")
 					}
 				}
 			} else if (item.status === "failed") {
@@ -975,12 +996,26 @@ export class DesktopAgentHost extends EventEmitter {
 		this.emit("messageToUI", msg)
 	}
 
-	private recordTerminalLog(command: string): void {
+	private recordTerminalLog(command: string, taskId?: string): void {
+		if (!command || !command.trim()) return
+
+		const now = Date.now()
+		// Deduplicate: If the last log is for the same command within 2000ms and still running, don't duplicate
+		const lastEntry = this.terminalLogs[this.terminalLogs.length - 1]
+		if (lastEntry && lastEntry.command.trim() === command.trim() && now - lastEntry.timestamp < 2000) {
+			if (taskId && !lastEntry.taskId) {
+				lastEntry.taskId = taskId
+			}
+			return
+		}
+
+		const currentTaskId = taskId || this.provider?.getCurrentTask?.()?.taskId || this.activeTaskId || undefined
 		const entry: TerminalLogEntry = {
-			id: `cmd-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-			timestamp: Date.now(),
+			id: `cmd-${now}-${Math.random().toString(36).substring(2, 7)}`,
+			timestamp: now,
 			command,
 			cwd: this.currentWorkspace,
+			taskId: currentTaskId,
 			output: "Running command in workspace...",
 			status: "running",
 		}
@@ -995,15 +1030,29 @@ export class DesktopAgentHost extends EventEmitter {
 		this.emit("terminalLog", entry)
 	}
 
-	private updateLatestTerminalOutput(output: string): void {
-		if (this.terminalLogs.length > 0) {
-			const latest = this.terminalLogs[this.terminalLogs.length - 1]
-			if (latest) {
-				latest.output = output || "(Command completed with no output)"
-				latest.status = "completed"
-				this.emit("terminalOutput", { id: latest.id, data: output })
-				this.emit("terminalLog", latest)
+	private updateLatestTerminalOutput(output: string, taskId?: string): void {
+		const currentTaskId = taskId || this.provider?.getCurrentTask?.()?.taskId || this.activeTaskId
+		let targetEntry: TerminalLogEntry | undefined
+		for (let i = this.terminalLogs.length - 1; i >= 0; i--) {
+			const entry = this.terminalLogs[i]
+			if (entry && entry.status === "running") {
+				if (!targetEntry) targetEntry = entry
+				if (currentTaskId && entry.taskId === currentTaskId) {
+					targetEntry = entry
+					break
+				}
 			}
+		}
+
+		if (!targetEntry && this.terminalLogs.length > 0) {
+			targetEntry = this.terminalLogs[this.terminalLogs.length - 1]
+		}
+
+		if (targetEntry) {
+			targetEntry.output = output || "(Command completed with no output)"
+			targetEntry.status = "completed"
+			this.emit("terminalOutput", { id: targetEntry.id, data: output })
+			this.emit("terminalLog", targetEntry)
 		}
 	}
 
