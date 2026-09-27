@@ -823,7 +823,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 		const handleKeyUp = useCallback(
 			(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-				if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+				if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key)) {
 					updateCursorPosition()
 				}
 			},
@@ -1071,6 +1071,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									"z-10",
 									"forced-color-adjust-none",
 									"rounded-lg",
+									"max-h-[min(200px,38vh)]",
 								)}
 								style={{
 									fontFamily: "var(--vscode-font-family)",
@@ -1079,6 +1080,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									letterSpacing: "normal",
 									border: "1px solid transparent",
 									color: "transparent",
+									maxHeight: "min(200px, 38vh)",
 								}}
 							/>
 							<DynamicTextArea
@@ -1110,6 +1112,12 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								onPaste={handlePaste}
 								onSelect={updateCursorPosition}
 								onMouseUp={updateCursorPosition}
+								onWheel={(e) => {
+									const el = e.currentTarget
+									if (el.scrollHeight > el.clientHeight) {
+										e.stopPropagation()
+									}
+								}}
 								onHeightChange={(height) => {
 									if (textAreaBaseHeight === undefined || height < textAreaBaseHeight) {
 										setTextAreaBaseHeight(height)
@@ -1119,7 +1127,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								}}
 								placeholder={placeholderText}
 								minRows={3}
-								maxRows={15}
+								maxRows={8}
 								autoFocus={!isEditMode}
 								className={cn(
 									"w-full",
@@ -1141,19 +1149,19 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									"transition-background-color duration-150 ease-in-out",
 									"will-change-background-color",
 									"min-h-[94px]",
+									"max-h-[min(200px,38vh)]",
 									"box-border",
 									"m-0",
 									"rounded-lg",
 									"resize-none",
 									"overflow-x-hidden",
 									"overflow-y-auto",
+									"overscroll-contain",
 									"whitespace-pre-wrap",
 									"break-words",
 									isEditMode ? "pr-20" : "pr-24",
 									"flex-none flex-grow",
 									"z-[2]",
-									"scrollbar-none",
-									"scrollbar-hide",
 								)}
 								style={{
 									fontFamily: "var(--vscode-font-family)",
