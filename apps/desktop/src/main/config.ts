@@ -55,7 +55,7 @@ export function loadDesktopConfig(): DesktopConfig {
 			if (parsed.lastWorkspacePath) {
 				parsed.lastWorkspacePath = canonicalizePath(parsed.lastWorkspacePath)
 			}
-			if (parsed.lastWorkspacePath && (!parsed.recentWorkspaces || !Array.isArray(parsed.recentWorkspaces) || parsed.recentWorkspaces.length === 0)) {
+			if (parsed.lastWorkspacePath && parsed.recentWorkspaces === undefined) {
 				parsed.recentWorkspaces = [parsed.lastWorkspacePath]
 			}
 			if (Array.isArray(parsed.recentWorkspaces)) {
@@ -151,10 +151,12 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 		const configPath = getConfigFilePath()
 		const current = loadDesktopConfig()
 
-		// Zero-State Guard: Never overwrite an existing valid lastWorkspacePath with an empty, whitespace, or undefined value
-		let finalWorkspacePath = current.lastWorkspacePath
-		if (typeof updates.lastWorkspacePath === "string" && updates.lastWorkspacePath.trim().length > 0) {
-			finalWorkspacePath = canonicalizePath(updates.lastWorkspacePath)
+		// Allow explicit reset to empty workspace or update with new valid path
+		let finalWorkspacePath = current.lastWorkspacePath || ""
+		if (typeof updates.lastWorkspacePath === "string") {
+			finalWorkspacePath = updates.lastWorkspacePath.trim().length > 0
+				? canonicalizePath(updates.lastWorkspacePath)
+				: ""
 		}
 
 		// Manage recentWorkspaces list (up to 25 items, no duplicates)
@@ -167,8 +169,8 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 			recent = [finalWorkspacePath]
 		}
 
-		// If a new lastWorkspacePath was explicitly updated, ensure it's at the front of recentWorkspaces
-		if (updates.lastWorkspacePath && finalWorkspacePath) {
+		// If a new non-empty lastWorkspacePath was explicitly updated, ensure it's at the front of recentWorkspaces
+		if (updates.lastWorkspacePath && finalWorkspacePath && Array.isArray(updates.recentWorkspaces) === false) {
 			recent = [finalWorkspacePath, ...recent.filter((p) => !arePathsEqual(p, finalWorkspacePath!))]
 		}
 

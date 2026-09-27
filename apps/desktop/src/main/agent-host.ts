@@ -956,6 +956,176 @@ export class DesktopAgentHost extends EventEmitter {
 		return { success: true }
 	}
 
+	public getRunningTasksForWorkspace(workspacePath: string): string[] {
+		const normWs = canonicalizePath(workspacePath)
+		const running: string[] = []
+		if (this.provider?.runningTasks) {
+			for (const [taskId, task] of this.provider.runningTasks.entries()) {
+				if (this.deletedTaskIds.has(taskId)) continue
+				const taskWs = task.cwd ? canonicalizePath(task.cwd) : ""
+				if (arePathsEqual(taskWs, normWs) && this.isTaskRunning(taskId)) {
+					running.push(taskId)
+				}
+			}
+		}
+		const curTask = this.provider?.getCurrentTask?.()
+		if (curTask && !this.deletedTaskIds.has(curTask.taskId)) {
+			const taskWs = curTask.cwd ? canonicalizePath(curTask.cwd) : ""
+			if (
+				arePathsEqual(taskWs, normWs) &&
+				this.isTaskRunning(curTask.taskId) &&
+				!running.includes(curTask.taskId)
+			) {
+				running.push(curTask.taskId)
+			}
+		}
+		return running
+	}
+
+	public async removeProject(
+		workspacePath: string,
+		forceStop: boolean = false
+	): Promise<{ success: boolean; error?: string; requiresStop?: boolean; reason?: string; runningCount?: number; activeTasksCount?: number }> {
+		if (!workspacePath || typeof workspacePath !== "string" || !workspacePath.trim()) {
+			return { success: false, error: "Invalid workspace path" }
+		}
+
+		const normWs = canonicalizePath(workspacePath)
+		const activeTaskIds = this.getRunningTasksForWorkspace(normWs)
+
+		if (activeTaskIds.length > 0) {
+			if (!forceStop) {
+				return {
+					success: false,
+					requiresStop: true,
+					reason: "requires_force_stop",
+					runningCount: activeTaskIds.length,
+					activeTasksCount: activeTaskIds.length,
+					error: `This project has ${activeTaskIds.length} active task(s).`,
+				}
+			}
+			for (const tId of activeTaskIds) {
+				const stopped = await this.stopTask(tId)
+				if (!stopped) {
+					return { success: false, error: `Failed to stop active task ${tId}` }
+				}
+			}
+		}
+
+		// 1. HARD SAFETY CHECK: NEVER DELETE THE PHYSICAL PROJECT FOLDER ON DISK!
+		// Verify that we only delete Roo-local conversation data in global-storage.
+
+		// 2. Collect all task IDs belonging to this workspace
+		const chatsByWs = this.getChatsByWorkspace()
+		let projectChats: Array<{ id: string }> = []
+		for (const [wsKey, chatList] of Object.entries(chatsByWs)) {
+			if (arePathsEqual(wsKey, normWs)) {
+				projectChats = chatList
+				break
+			}
+		}
+
+		const allTaskIds = new Set<string>(projectChats.map((c) => c.id))
+		for (const tId of activeTaskIds) {
+			allTaskIds.add(tId)
+		}
+
+		if (this.storageDir) {
+			try {
+				const indexPath = path.join(this.storageDir, "global-storage", "tasks", "_index.json")
+				if (fs.existsSync(indexPath)) {
+					const content = fs.readFileSync(indexPath, "utf-8")
+					const parsed = JSON.parse(content)
+					if (Array.isArray(parsed?.entries)) {
+						for (const entry of parsed.entries) {
+							if (entry?.workspace && arePathsEqual(canonicalizePath(entry.workspace), normWs)) {
+								allTaskIds.add(String(entry.id))
+							}
+						}
+					}
+				}
+			} catch {}
+		}
+
+		// 3. Tombstone and delete each chat belonging to this project
+		for (const taskId of allTaskIds) {
+			this.deletedTaskIds.add(taskId)
+			if (this.activeTaskId === taskId) {
+				this.activeTaskId = null
+			}
+			if (this.provider?.runningTasks?.has(taskId)) {
+				this.provider.runningTasks.delete(taskId)
+			}
+			if (this.provider && typeof this.provider.deleteTaskWithId === "function") {
+				try {
+					await this.provider.deleteTaskWithId(taskId)
+				} catch {}
+			}
+			if (this.storageDir) {
+				try {
+					const candidateDirs = [
+						path.join(this.storageDir, "global-storage", "tasks", taskId),
+						path.join(this.storageDir, "tasks", taskId),
+						path.join(this.storageDir, "Roo-Code", "tasks", taskId),
+					]
+					for (const d of candidateDirs) {
+						if (fs.existsSync(d)) {
+							fs.rmSync(d, { recursive: true, force: true })
+						}
+					}
+				} catch {}
+			}
+		}
+
+		if (this.provider?.taskHistoryStore && typeof this.provider.taskHistoryStore.deleteMany === "function") {
+			try {
+				await this.provider.taskHistoryStore.deleteMany(Array.from(allTaskIds))
+			} catch {}
+		}
+
+		if (this.storageDir && allTaskIds.size > 0) {
+			try {
+				const indexPath = path.join(this.storageDir, "global-storage", "tasks", "_index.json")
+				if (fs.existsSync(indexPath)) {
+					const content = fs.readFileSync(indexPath, "utf-8")
+					const parsed = JSON.parse(content)
+					if (Array.isArray(parsed?.entries)) {
+						parsed.entries = parsed.entries.filter((e: any) => !allTaskIds.has(String(e.id)))
+						fs.writeFileSync(indexPath, JSON.stringify(parsed, null, 2), "utf-8")
+					}
+				}
+			} catch {}
+		}
+
+		// 4. Clean up workspace-associated caches
+		this.terminalLogsByWorkspace.delete(normWs)
+		this.diffFilesByWorkspace.delete(normWs)
+
+		// 5. Update configuration: remove from recentWorkspaces
+		const curCfg = loadDesktopConfig()
+		const updatedWorkspaces = (curCfg.recentWorkspaces || []).filter((p) => !arePathsEqual(p, normWs))
+		let nextWorkspace = curCfg.lastWorkspacePath
+		if (arePathsEqual(curCfg.lastWorkspacePath || "", normWs)) {
+			nextWorkspace = updatedWorkspaces.length > 0 ? updatedWorkspaces[0] : ""
+		}
+		saveDesktopConfig({
+			recentWorkspaces: updatedWorkspaces,
+			lastWorkspacePath: nextWorkspace,
+		})
+
+		// 6. If currently active workspace is the removed one, switch to next or empty
+		if (arePathsEqual(this.currentWorkspace, normWs)) {
+			if (updatedWorkspaces.length > 0) {
+				await this.setWorkspace(updatedWorkspaces[0])
+			} else {
+				await this.setWorkspace("")
+			}
+		}
+
+		this.emit("taskHistoryChanged")
+		return { success: true }
+	}
+
 	public sendToExtension(message: WebviewMessage): void {
 		this.emit("webviewMessage", message)
 	}

@@ -695,6 +695,39 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			return
 		}
 
+		if (pathname === "/api/project/remove") {
+			if (req.method === "POST") {
+				let body = ""
+				req.on("data", (chunk) => {
+					body += chunk
+				})
+				req.on("end", async () => {
+					try {
+						const data = JSON.parse(body || "{}")
+						const projectPath = data.path
+						if (!projectPath || typeof projectPath !== "string") {
+							res.writeHead(400, { "Content-Type": "application/json" })
+							res.end(JSON.stringify({ error: "Missing or invalid project path" }))
+							return
+						}
+						const forceStop = Boolean(data.forceStop)
+						const result = await agentHost.removeProject(projectPath, forceStop)
+						if (result.success) {
+							broadcastSidebarData()
+						}
+						res.writeHead(result.success ? 200 : 400, { "Content-Type": "application/json" })
+						res.end(JSON.stringify(result))
+					} catch (e) {
+						res.writeHead(500, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: String(e) }))
+					}
+				})
+				return
+			}
+			res.writeHead(405, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ error: "Method not allowed" }))
+			return
+		}
 
 		if (pathname === "/api/files") {
 			let scan = { files: [] as string[], directories: [] as string[] }
@@ -1917,6 +1950,45 @@ window.addEventListener("keydown", function(e) {
 					})
 					if (result.success) {
 						broadcastSidebarData()
+					}
+				} else if (clientMsg.type === "removeProject") {
+					const projectPath = clientMsg.path
+					const forceStop = Boolean(clientMsg.forceStop)
+					const result = await agentHost.removeProject(projectPath, forceStop)
+					safeSend(ws, {
+						type: "projectRemoved",
+						path: projectPath,
+						success: result.success,
+						error: result.error,
+						requiresStop: result.requiresStop,
+						activeTasksCount: result.activeTasksCount,
+					})
+					if (result.success) {
+						broadcastSidebarData()
+					}
+				} else if (clientMsg.type === "openProjectFolder") {
+					const p = clientMsg.path
+					if (p && typeof p === "string" && fs.existsSync(p)) {
+						const norm = path.normalize(path.resolve(p))
+						try {
+							if (process.versions?.electron) {
+								try {
+									const electron = await import("electron")
+									const shell = electron.shell || (electron as any).default?.shell
+									if (shell) {
+										await shell.openPath(norm)
+									}
+								} catch {
+									if (process.platform === "win32") {
+										spawn("explorer.exe", [norm], { shell: false })
+									}
+								}
+							} else if (process.platform === "win32") {
+								spawn("explorer.exe", [norm], { shell: false })
+							}
+						} catch (e) {
+							safeSend(ws, { type: "error", message: `Failed to open folder: ${String(e)}` })
+						}
 					}
 				}
 			} catch (err) {

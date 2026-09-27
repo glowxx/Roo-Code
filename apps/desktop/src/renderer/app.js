@@ -1008,6 +1008,57 @@
 		openSidebarContextMenu({ x, y, items, triggerEl: trigger })
 	}
 
+	function openProjectContextMenu(eventOrX, yOrWs, wsOrTrigger, triggerEl) {
+		let x, y, ws, trigger
+		if (eventOrX && typeof eventOrX === "object" && ("clientX" in eventOrX || "target" in eventOrX)) {
+			const e = eventOrX
+			ws = yOrWs
+			trigger = wsOrTrigger || e.currentTarget || e.target
+			if (e.clientX !== undefined && e.clientY !== undefined && e.clientX > 0 && e.clientY > 0) {
+				x = e.clientX
+				y = e.clientY
+			} else if (trigger?.getBoundingClientRect) {
+				const rect = trigger.getBoundingClientRect()
+				x = rect.left
+				y = rect.bottom + 4
+			} else {
+				x = 100
+				y = 100
+			}
+		} else {
+			x = eventOrX
+			y = yOrWs
+			ws = wsOrTrigger
+			trigger = triggerEl
+		}
+
+		const items = [
+			{
+				label: tDesktop("newChatInProject"),
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+				action: () => startNewChat(ws),
+			},
+			{
+				label: tDesktop("openProjectFolder"),
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+				action: () => handleOpenProjectFolder(ws),
+			},
+			{
+				label: tDesktop("copyProjectPath"),
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`,
+				action: () => handleCopyProjectPath(ws),
+			},
+			{ type: "divider" },
+			{
+				label: tDesktop("removeProject"),
+				danger: true,
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+				action: () => handleRemoveProject(ws),
+			},
+		]
+		openSidebarContextMenu({ x, y, items, triggerEl: trigger })
+	}
+
 	function handleDeleteChat(taskId, ws) {
 		const chatList = sidebarData.chats[ws] || []
 		const chat = chatList.find((c) => c.id === taskId)
@@ -1063,12 +1114,94 @@
 		})
 	}
 
-	function removeRecentWorkspace(wsPath) {
+	function handleRemoveProject(ws) {
+		const wsNorm = pathNormalize(ws)
+		let chats = []
+		for (const [chatWs, chatList] of Object.entries(sidebarData.chats)) {
+			if (pathNormalize(chatWs) === wsNorm) {
+				chats = chatList
+				break
+			}
+		}
+		const runningCount = chats.filter((c) => c.status === "running").length
+		const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+
+		if (runningCount > 0) {
+			showConfirmationModal({
+				title: tDesktop("removeProjectTitle"),
+				subtitle: wsName,
+				icon: "⚠️",
+				message: tDesktop("removeProjectConfirmRunning", wsName, runningCount),
+				confirmText: tDesktop("stopTasksAndRemove"),
+				confirmClass: "btn-danger",
+				onConfirm: () => {
+					executeRemoveProject(ws, true)
+				},
+			})
+		} else {
+			showConfirmationModal({
+				title: tDesktop("removeProjectTitle"),
+				subtitle: wsName,
+				icon: "📁",
+				message: tDesktop("removeProjectConfirmIdle", wsName),
+				confirmText: tDesktop("confirmRemoveProject"),
+				confirmClass: "btn-danger",
+				onConfirm: () => {
+					executeRemoveProject(ws, false)
+				},
+			})
+		}
+	}
+
+	function executeRemoveProject(ws, forceStop) {
+		const wsNorm = pathNormalize(ws)
 		sidebarData.recentWorkspaces = sidebarData.recentWorkspaces.filter(
-			(p) => pathNormalize(p) !== pathNormalize(wsPath)
+			(p) => pathNormalize(p) !== wsNorm
 		)
+		for (const chatWs of Object.keys(sidebarData.chats)) {
+			if (pathNormalize(chatWs) === wsNorm) {
+				delete sidebarData.chats[chatWs]
+			}
+		}
+
+		const isCurrentActive =
+			pathNormalize(sidebarData.currentWorkspace || "") === wsNorm ||
+			pathNormalize(currentWorkspace?.path || "") === wsNorm
+
+		if (isCurrentActive) {
+			if (sidebarData.recentWorkspaces.length > 0) {
+				selectWorkspaceFolder(sidebarData.recentWorkspaces[0])
+			} else {
+				sidebarData.currentWorkspace = ""
+				currentWorkspace = null
+				renderWorkspaceInfo({ path: "", name: "", files: [], directories: [] })
+			}
+		}
+
 		renderSidebar()
-		sendToServer({ type: "removeRecentWorkspace", path: wsPath })
+
+		sendToServer({
+			type: "removeProject",
+			path: ws,
+			forceStop,
+		})
+	}
+
+	function handleOpenProjectFolder(ws) {
+		if (window.__desktopAPI?.openPath) {
+			window.__desktopAPI.openPath(ws)
+		}
+		sendToServer({ type: "openProjectFolder", path: ws })
+	}
+
+	function handleCopyProjectPath(ws) {
+		if (navigator.clipboard?.writeText) {
+			navigator.clipboard.writeText(ws).catch(() => {})
+		}
+	}
+
+	function removeRecentWorkspace(wsPath) {
+		handleRemoveProject(wsPath)
 	}
 
 	function renderChatsList(ws, chats, isExpanded, activeTaskId) {
@@ -1291,16 +1424,13 @@
 									<line x1="5" y1="12" x2="19" y2="12"/>
 								</svg>
 							</button>
-							${
-								!isActive
-									? `<button class="project-action-btn project-remove-btn" data-action="remove-project" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("removeRecent"))}">
-										<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<line x1="18" y1="6" x2="6" y2="18"/>
-											<line x1="6" y1="6" x2="18" y2="18"/>
-										</svg>
-									</button>`
-									: ""
-							}
+							<button class="project-action-btn project-menu-btn" data-action="project-menu" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("projectMenu"))}" aria-label="${escapeHtml(tDesktop("projectMenu"))}">
+								<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+									<circle cx="12" cy="5" r="2"/>
+									<circle cx="12" cy="12" r="2"/>
+									<circle cx="12" cy="19" r="2"/>
+								</svg>
+							</button>
 						</div>
 					</div>
 					<div class="project-chats-list ${isExpanded ? "expanded" : ""}">
@@ -1353,11 +1483,25 @@
 			})
 		})
 
-		sidebarProjectsListEl.querySelectorAll("[data-action='remove-project']").forEach((btn) => {
+		sidebarProjectsListEl.querySelectorAll(".project-header").forEach((headerEl) => {
+			headerEl.addEventListener("contextmenu", (e) => {
+				e.preventDefault()
+				e.stopPropagation()
+				const ws = headerEl.getAttribute("data-workspace")
+				if (ws) {
+					openProjectContextMenu(e, ws, headerEl)
+				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='project-menu']").forEach((btn) => {
 			btn.addEventListener("click", (e) => {
+				e.preventDefault()
 				e.stopPropagation()
 				const ws = btn.getAttribute("data-workspace")
-				if (ws) removeRecentWorkspace(ws)
+				if (ws) {
+					openProjectContextMenu(e, ws, btn)
+				}
 			})
 		})
 

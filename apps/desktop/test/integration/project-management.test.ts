@@ -282,4 +282,237 @@ describe("Project Management & Sidebar Creation Flow (TDD)", () => {
 			expect(arePathsEqual(config.recentWorkspaces![0]!, firstProj)).toBe(true)
 		})
 	})
+
+	describe("7. Safe Project Removal from Roo (TDD & Safety Invariants)", () => {
+		it("refuses to remove project with running tasks without forceStop", async () => {
+			const projPath = path.join(tempDir, "ActiveProject")
+			fs.mkdirSync(projPath, { recursive: true })
+
+			const host = new DesktopAgentHost({
+				workspacePath: projPath,
+				extensionPath: tempDir,
+			})
+
+			const runningTask = {
+				taskId: "task-running-active",
+				cwd: projPath,
+				isStreaming: true,
+				abortTask: vi.fn(),
+			}
+
+			const runningTasksMap = new Map()
+			runningTasksMap.set("task-running-active", runningTask)
+
+			const mockProvider = {
+				runningTasks: runningTasksMap,
+				getCurrentTask: () => runningTask,
+				taskHistoryStore: {
+					deleteTaskWithId: vi.fn(),
+				},
+			}
+			host.registerWebviewProvider("mockView", mockProvider)
+
+			const result = await host.removeProject(projPath, false)
+			expect(result.success).toBe(false)
+			expect(result.reason).toBe("requires_force_stop")
+			expect(result.runningCount).toBe(1)
+			expect(runningTasksMap.has("task-running-active")).toBe(true)
+		})
+
+		it("stops running tasks and removes project from Roo when forceStop is true", async () => {
+			const projPath = path.join(tempDir, "ActiveProject")
+			fs.mkdirSync(projPath, { recursive: true })
+
+			saveDesktopConfig({
+				lastWorkspacePath: projPath,
+				recentWorkspaces: [projPath],
+			})
+
+			const host = new DesktopAgentHost({
+				workspacePath: projPath,
+				extensionPath: tempDir,
+			})
+
+			let aborted = false
+			const runningTask = {
+				taskId: "task-running-stop",
+				cwd: projPath,
+				isStreaming: true,
+				abortTask: vi.fn(() => {
+					aborted = true
+				}),
+			}
+
+			const runningTasksMap = new Map()
+			runningTasksMap.set("task-running-stop", runningTask)
+
+			const mockProvider = {
+				runningTasks: runningTasksMap,
+				getCurrentTask: () => runningTask,
+				cancelTask: vi.fn().mockImplementation(() => {
+					runningTasksMap.delete("task-running-stop")
+				}),
+				taskHistoryStore: {
+					deleteTaskWithId: vi.fn().mockResolvedValue(undefined),
+				},
+				postMessageToWebview: vi.fn(),
+			}
+			host.registerWebviewProvider("mockView", mockProvider)
+
+			const result = await host.removeProject(projPath, true)
+			expect(result.success).toBe(true)
+			expect(aborted || mockProvider.cancelTask).toBeTruthy()
+			expect(runningTasksMap.has("task-running-stop")).toBe(false)
+			expect(host.isTaskDeleted("task-running-stop")).toBe(true)
+
+			const config = loadDesktopConfig()
+			expect(config.recentWorkspaces).toHaveLength(0)
+		})
+
+		it("multi-project isolation: removing Project A does not affect Project B", async () => {
+			const projA = path.join(tempDir, "ProjectA")
+			const projB = path.join(tempDir, "ProjectB")
+			fs.mkdirSync(projA, { recursive: true })
+			fs.mkdirSync(projB, { recursive: true })
+
+			saveDesktopConfig({
+				lastWorkspacePath: projA,
+				recentWorkspaces: [projA, projB],
+			})
+
+			const host = new DesktopAgentHost({
+				workspacePath: projA,
+				extensionPath: tempDir,
+			})
+
+			const taskB = {
+				taskId: "task-b",
+				cwd: projB,
+				isStreaming: true,
+				abortTask: vi.fn(),
+			}
+
+			const runningTasksMap = new Map()
+			runningTasksMap.set("task-b", taskB)
+
+			const mockProvider = {
+				runningTasks: runningTasksMap,
+				getCurrentTask: () => null,
+				taskHistoryStore: {
+					deleteTaskWithId: vi.fn().mockResolvedValue(undefined),
+				},
+				postMessageToWebview: vi.fn(),
+			}
+			host.registerWebviewProvider("mockView", mockProvider)
+
+			const result = await host.removeProject(projA, false)
+			expect(result.success).toBe(true)
+
+			// Project B is still in config and its running task is completely untouched
+			const config = loadDesktopConfig()
+			expect(config.recentWorkspaces).toHaveLength(1)
+			expect(arePathsEqual(config.recentWorkspaces![0]!, projB)).toBe(true)
+			expect(runningTasksMap.has("task-b")).toBe(true)
+			expect(taskB.abortTask).not.toHaveBeenCalled()
+		})
+
+		it("active project removal switches to next workspace or zero-projects state", async () => {
+			const proj1 = path.join(tempDir, "Project1")
+			const proj2 = path.join(tempDir, "Project2")
+			fs.mkdirSync(proj1, { recursive: true })
+			fs.mkdirSync(proj2, { recursive: true })
+
+			saveDesktopConfig({
+				lastWorkspacePath: proj1,
+				recentWorkspaces: [proj1, proj2],
+			})
+
+			const host = new DesktopAgentHost({
+				workspacePath: proj1,
+				extensionPath: tempDir,
+			})
+
+			const mockProvider = {
+				runningTasks: new Map(),
+				getCurrentTask: () => null,
+				taskHistoryStore: {
+					deleteTaskWithId: vi.fn().mockResolvedValue(undefined),
+				},
+				postMessageToWebview: vi.fn(),
+			}
+			host.registerWebviewProvider("mockView", mockProvider)
+
+			// Remove active project (proj1)
+			await host.removeProject(proj1, false)
+
+			// Must switch to proj2
+			expect(arePathsEqual(host.getWorkspace(), proj2)).toBe(true)
+			let config = loadDesktopConfig()
+			expect(arePathsEqual(config.lastWorkspacePath!, proj2)).toBe(true)
+
+			// Now remove proj2 as well
+			await host.removeProject(proj2, false)
+			expect(host.getWorkspace()).toBe("")
+			config = loadDesktopConfig()
+			expect(config.lastWorkspacePath).toBe("")
+			expect(config.recentWorkspaces).toHaveLength(0)
+		})
+
+		it("HARD SAFETY SENTINEL TEST: removing project from Roo NEVER deletes workspace directory or files on disk", async () => {
+			const myCriticalApp = path.join(tempDir, "MyCriticalApp")
+			const sentinelFile = path.join(myCriticalApp, "DO_NOT_DELETE.txt")
+			const sourceFile = path.join(myCriticalApp, "src", "app.ts")
+			const gitHead = path.join(myCriticalApp, ".git", "HEAD")
+
+			fs.mkdirSync(path.join(myCriticalApp, "src"), { recursive: true })
+			fs.mkdirSync(path.join(myCriticalApp, ".git"), { recursive: true })
+
+			const sentinelContent = "USER IMPORTANT DATA - MUST NEVER BE DELETED BY ROO CODE"
+			const sourceContent = "console.log('App source code');"
+			const gitContent = "ref: refs/heads/main\n"
+
+			fs.writeFileSync(sentinelFile, sentinelContent, "utf-8")
+			fs.writeFileSync(sourceFile, sourceContent, "utf-8")
+			fs.writeFileSync(gitHead, gitContent, "utf-8")
+
+			saveDesktopConfig({
+				lastWorkspacePath: myCriticalApp,
+				recentWorkspaces: [myCriticalApp],
+			})
+
+			const host = new DesktopAgentHost({
+				workspacePath: myCriticalApp,
+				extensionPath: tempDir,
+			})
+
+			const mockProvider = {
+				runningTasks: new Map(),
+				getCurrentTask: () => null,
+				taskHistoryStore: {
+					deleteTaskWithId: vi.fn().mockResolvedValue(undefined),
+				},
+				postMessageToWebview: vi.fn(),
+			}
+			host.registerWebviewProvider("mockView", mockProvider)
+
+			// Execute removal of project from Roo Code
+			const result = await host.removeProject(myCriticalApp, true)
+			expect(result.success).toBe(true)
+
+			// VERIFY: Project was removed from Roo recent workspaces
+			const config = loadDesktopConfig()
+			expect(config.recentWorkspaces).toHaveLength(0)
+
+			// CRITICAL INVARIANT: The physical directory and every single file MUST REMAIN UNTOUCHED!
+			expect(fs.existsSync(myCriticalApp)).toBe(true)
+			expect(fs.existsSync(sentinelFile)).toBe(true)
+			expect(fs.readFileSync(sentinelFile, "utf-8")).toBe(sentinelContent)
+
+			expect(fs.existsSync(sourceFile)).toBe(true)
+			expect(fs.readFileSync(sourceFile, "utf-8")).toBe(sourceContent)
+
+			expect(fs.existsSync(gitHead)).toBe(true)
+			expect(fs.readFileSync(gitHead, "utf-8")).toBe(gitContent)
+		})
+	})
 })
