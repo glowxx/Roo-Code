@@ -310,6 +310,10 @@ Evaluate the proposed action in the context of the user's actual task and execut
    - Host process escapes or breakouts to Windows host binaries without explicit justification.
    - Tampering with OS credentials, private keys, certificates, or secrets.
 
+5. Explicit User Constraints (MUST RETURN DENY_AND_REPLAN or HARD_BLOCK):
+   - If explicitConstraints are defined in taskContext, actions violating user negative prohibitions (e.g. "NIE modyfikuj kodu" / "DO NOT modify code", "NIE commituj", "do not activate", read-only review constraints) MUST be denied autonomously.
+   - Set "decision": "DENY_AND_REPLAN", "isUserConstraintViolation": true, specify "violatedConstraint", and provide clear actionable replan guidance reminding the worker agent to adhere to the constraint without modifying code or executing forbidden actions.
+
 ### Decision Schema:
 - ALLOW_AUTO: Safe, scoped, and aligned with user intent. May execute automatically without human intervention.
 - DENY_AND_REPLAN: Action should not execute as proposed, but the autonomous task continues. Provide concise reason and actionable replan guidance so the worker agent can achieve the goal using a safer or deterministic alternative.
@@ -324,6 +328,8 @@ Respond ONLY with a valid JSON object matching this schema without markdown code
   "hostImpact": boolean,
   "reason": "<concise explanation>",
   "hardBoundaryViolation": boolean,
+  "isUserConstraintViolation": boolean,
+  "violatedConstraint": "<specific constraint text or null>",
   "replanGuidance": "<actionable replan guidance for worker, or null if allowed>"
 }`
 

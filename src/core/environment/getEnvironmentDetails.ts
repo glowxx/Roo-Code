@@ -65,15 +65,15 @@ export async function getEnvironmentDetails(cline: Task, includeFileDetails: boo
 		details += `\n${allowedOpenTabs}`
 	}
 
-	// Get task-specific and background terminals.
+	// Get task-specific and background terminals for this task's workspace.
 	const busyTerminals = [
 		...TerminalRegistry.getTerminals(true, cline.taskId),
-		...TerminalRegistry.getBackgroundTerminals(true),
+		...TerminalRegistry.getBackgroundTerminals(true, cline.cwd),
 	]
 
 	const inactiveTerminals = [
 		...TerminalRegistry.getTerminals(false, cline.taskId),
-		...TerminalRegistry.getBackgroundTerminals(false),
+		...TerminalRegistry.getBackgroundTerminals(false, cline.cwd),
 	]
 
 	if (busyTerminals.length > 0) {

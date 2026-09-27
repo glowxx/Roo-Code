@@ -647,6 +647,77 @@ describe("Task safety interceptor", () => {
 			task.handleWebviewAskResponse("yesButtonClicked")
 			await askPromise
 		})
+
+		it("deterministic denial and no Run button on hard user constraint violation in AUTO mode", async () => {
+			;(task as any).taskId = "task-readonly-1"
+			;(task as any).metadata = { task: "Wykonaj SECURITY REVIEW. NIE modyfikuj kodu. NIE commituj." }
+			;(task as any).consecutiveReplanCount = 0
+			;(task as any).deniedActionHistory = []
+			;(task as any).approvalOrchestrator = {
+				evaluate: vi.fn().mockResolvedValue({
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "The user explicitly instructed 'NIE modyfikuj kodu'. Modifying source code is forbidden.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: "NIE modyfikuj kodu",
+					replanGuidance: "The current task is explicitly read-only. Do not modify code.",
+				}),
+			}
+			const denySpy = vi.spyOn(task, "denyAsk")
+			const saySpy = vi.spyOn(task, "say")
+
+			defaultState.approvalMode = "auto"
+			mockProvider.getState.mockResolvedValue(defaultState)
+
+			const askPromise = task.ask("command", "node tests/one_shot_activation_workflow.test.js")
+			const result = await askPromise
+
+			// Must be automatically denied without offering Run
+			expect(result.response).toBe("noButtonClicked")
+			expect(result.text).toContain("The current task is explicitly read-only")
+			expect(denySpy).toHaveBeenCalledTimes(1)
+			expect(saySpy).not.toHaveBeenCalledWith("command_safety_warning", expect.anything())
+		})
+
+		it("repeated hard constraint violation receives stronger guidance and NEVER offers Run button even when thrashing threshold is reached", async () => {
+			;(task as any).taskId = "task-readonly-2"
+			;(task as any).metadata = { task: "Wykonaj SECURITY REVIEW. NIE modyfikuj kodu." }
+			;(task as any).consecutiveReplanCount = 2 // Already repeated twice
+			;(task as any).deniedActionHistory = ["execute_command:node tests/one_shot_activation_workflow.test.js"] // Already in history -> isRepeated = true
+			;(task as any).approvalOrchestrator = {
+				evaluate: vi.fn().mockResolvedValue({
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "The user explicitly instructed 'NIE modyfikuj kodu'. Proposed action modifies code.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: "NIE modyfikuj kodu",
+					replanGuidance: "Do not modify code during review phase.",
+				}),
+			}
+			const denySpy = vi.spyOn(task, "denyAsk")
+			const saySpy = vi.spyOn(task, "say")
+
+			defaultState.approvalMode = "auto"
+			mockProvider.getState.mockResolvedValue(defaultState)
+
+			const askPromise = task.ask("command", "node tests/one_shot_activation_workflow.test.js")
+			const result = await askPromise
+
+			// MUST NOT offer Run button, MUST call denyAsk with stronger guidance
+			expect(denySpy).toHaveBeenCalledTimes(1)
+			expect(result.response).toBe("noButtonClicked")
+			expect(result.text).toContain("EXPLICIT CONSTRAINT ENFORCEMENT")
+			expect(result.text).toContain("NIE modyfikuj kodu")
+			// No command_safety_warning offering manual Run
+			expect(saySpy).not.toHaveBeenCalledWith(
+				"command_safety_warning",
+				expect.stringContaining("Manual approval required")
+			)
+		})
 	})
 })
 

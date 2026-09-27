@@ -142,6 +142,23 @@ export class CommandSafetyJudge {
 			}
 		}
 
+		// Check command prefixed by simple directory change: `cd <dir> && <cmd>`
+		const cdMatch = trimmed.match(/^(?:cd\s+[^;&|<>]+\s*(?:&&|;)\s*)(.+)$/i)
+		if (cdMatch && cdMatch[1]) {
+			const subCmd = cdMatch[1].trim()
+			const subHasModifier =
+				subCmd.includes(">") ||
+				/\bsudo\b/i.test(subCmd) ||
+				/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(subCmd)
+			if (!subHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(subCmd))) {
+				return {
+					isSafe: true,
+					riskLevel: "safe",
+					reason: `Verified command (${subCmd}) via fast-path`,
+				}
+			}
+		}
+
 		// Check wrapped command (WSL / Docker / subshell) if boundary analysis confirms no host escape
 		try {
 			const boundary = ExecutionBoundaryAnalyzer.analyze(trimmed)

@@ -1685,12 +1685,20 @@ export const ChatRowContent = ({
 						isSafe: boolean
 						riskLevel: string
 						reason: string
+						infrastructureFailure?: boolean
 					}>(message.text || "{}")
 					if (!evaluation) return null
-					const riskLevel = evaluation.riskLevel || "unknown"
+					const isInfra =
+						evaluation.infrastructureFailure ||
+						evaluation.reason?.includes("Approval response schema validation") ||
+						evaluation.reason?.includes("Verification model unavailable") ||
+						evaluation.reason?.includes("Malformed JSON response from Approval Authority model")
+					const title = isInfra
+						? `🛡️ AI Command Safety Guardrail: VERIFICATION FAILED (Fail-Closed)`
+						: `🛡️ AI Command Safety Guardrail: ${(evaluation.riskLevel || "unknown").toUpperCase()} RISK DETECTED`
 					return (
 						<WarningRow
-							title={`🛡️ AI Command Safety Guardrail: ${riskLevel.toUpperCase()} RISK DETECTED`}
+							title={title}
 							message={evaluation.reason}
 							actionText="Configure Safety Guardrail"
 							onAction={() =>

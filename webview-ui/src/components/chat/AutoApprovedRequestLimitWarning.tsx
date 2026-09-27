@@ -55,7 +55,7 @@ export const AutoApprovedRequestLimitWarning = memo(({ message }: AutoApprovedRe
 					onClick={(e) => {
 						e.preventDefault()
 						setButtonClicked(true)
-						vscode.postMessage({ type: "askResponse", askResponse: "yesButtonClicked" })
+						vscode.postMessage({ type: "askResponse", askResponse: "yesButtonClicked", taskId: message.taskId })
 					}}>
 					<Trans i18nKey={buttonKey} ns="chat" />
 				</Button>

@@ -87,6 +87,10 @@ export interface ApiHandlerCreateMessageMetadata {
 	 * Only applies to providers that support function calling restrictions (e.g., Gemini).
 	 */
 	allowedFunctionNames?: string[]
+	/**
+	 * Optional abort signal to cancel underlying provider HTTP requests and sockets mid-stream.
+	 */
+	signal?: AbortSignal
 }
 
 export interface ApiHandler {

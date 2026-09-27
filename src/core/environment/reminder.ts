@@ -11,6 +11,8 @@ export function formatReminderSection(todoList?: TodoItem[]): string {
 		pending: "Pending",
 		in_progress: "In Progress",
 		completed: "Completed",
+		blocked: "Blocked",
+		cancelled: "Cancelled",
 	}
 	const lines: string[] = [
 		"====",

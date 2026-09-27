@@ -255,6 +255,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private deniedActionHistory: string[] = []
 	private unresolvedDenialState: { actionType: string; reason: string; replanGuidance?: string } | null = null
 	private consecutiveAttemptCompletionCount: number = 0
+	private lastCompletionFingerprint: string | null = null
+	private consecutiveIdenticalCompletionCount: number = 0
 	private lastCompletionResultText?: string
 	private approvalOrchestrator: ApprovalOrchestrator = new ApprovalOrchestrator()
 	private lastFailedRequestFingerprint?: string
@@ -1515,6 +1517,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				actionType = "new_task"
 				target.subtaskMode = tool.mode
 				target.subtaskMessage = tool.content
+			} else if (toolName === "updateTodoList" || toolName === "update_todo_list") {
+				actionType = "update_todo_list"
 			} else if (toolName === "finishTask") {
 				actionType = "attempt_completion"
 			} else {
@@ -1603,6 +1607,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			req.target.completionResult ||
 			""
 		return `${req.actionType}:${targetStr.trim()}`
+	}
+
+	private computeCompletionFingerprint(req: UnifiedApprovalRequest): string {
+		const openTodos = (req.target.todoListSnapshot || [])
+			.filter((t: any) => t.status === "in_progress" || t.status === "pending")
+			.map((t: any) => `${t.id || ""}:${t.status}:${(t.content || "").trim()}`)
+			.sort()
+			.join("|")
+
+		const constraints = (req.taskContext.explicitConstraints || []).slice().sort().join("|")
+		const denialReason = this.unresolvedDenialState?.reason || ""
+		const activeGoal = req.taskContext.activeGoal || ""
+		const criteria = (req.target.completionCriteria || []).slice().sort().join("|")
+
+		return `${openTodos}#${constraints}#${denialReason}#${activeGoal}#${criteria}`
 	}
 
 	public setLastCompletionResultText(text: string): void {
@@ -1869,22 +1888,40 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							askMsg.approvalState = "AUTO_APPROVED"
 							this.updateClineMessage(askMsg)
 						}
-						this.consecutiveAttemptCompletionCount = 0
 						approval = { decision: "approve" }
 						this.approveAsk()
 						this.consecutiveReplanCount = 0
 						const isPassiveCheck =
-							request.actionType === "execute_command" &&
-							/^(?:git\s+(?:status|diff|log)|ls|dir|pwd|echo)\b/i.test(request.target.command || "")
+							(request.actionType === "execute_command" &&
+								/^(?:git\s+(?:status|diff|log)|ls|dir|pwd|echo)\b/i.test(request.target.command || "")) ||
+							request.actionType === "read_file"
 						if (!isPassiveCheck) {
+							this.consecutiveAttemptCompletionCount = 0
+							this.consecutiveIdenticalCompletionCount = 0
+							this.lastCompletionFingerprint = null
 							this.unresolvedDenialState = null
 						}
 					}
 				} else if (decisionResult.decision === "CONTINUE_WORK") {
 					this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
+					const currentFingerprint = this.computeCompletionFingerprint(request)
+					const isIdenticalRetry =
+						this.lastCompletionFingerprint !== null &&
+						this.lastCompletionFingerprint === currentFingerprint
 
-					// Loop protection: 3 consecutive completion attempts without resolving work items
-					if (this.consecutiveAttemptCompletionCount >= 3) {
+					if (isIdenticalRetry) {
+						this.consecutiveIdenticalCompletionCount = (this.consecutiveIdenticalCompletionCount || 0) + 1
+					} else {
+						this.consecutiveIdenticalCompletionCount = 1
+						this.lastCompletionFingerprint = currentFingerprint
+					}
+
+					// Loop protection: 2 consecutive attempts with identical state (zero progress) OR 3 total consecutive completion attempts
+					const isLoopDetected =
+						this.consecutiveIdenticalCompletionCount >= 2 ||
+						this.consecutiveAttemptCompletionCount >= 3
+
+					if (isLoopDetected) {
 						approval = { decision: "ask" }
 						if (askMsg) {
 							askMsg.approvalState = "USER_DECISION_REQUIRED"
@@ -1895,13 +1932,22 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							completionSayMsg.approvalState = "USER_DECISION_REQUIRED"
 							this.updateClineMessage(completionSayMsg)
 						}
+						const loopReason =
+							this.consecutiveIdenticalCompletionCount >= 2
+								? `Completion loop guard triggered: Worker attempted completion repeatedly without resolving unfinished items or making progress (${decisionResult.reason}). Manual review required.`
+								: `Completion loop guard triggered: Worker attempted completion 3 times consecutively without resolving unfinished items (${decisionResult.reason}). Manual review required.`
+
 						const warningPayload: SafetyEvaluationResult = {
 							isSafe: false,
 							riskLevel: "medium",
-							reason: `Completion loop guard triggered: Worker attempted completion 3 times consecutively without resolving unfinished items (${decisionResult.reason}). Manual review required.`,
+							reason: loopReason,
 						}
 						await this.say("command_safety_warning", JSON.stringify(warningPayload))
 						this.lastMessageTs = askTs
+						this.interactiveAsk = askMsg
+						this.emit(RooCodeEventName.TaskInteractive, this.taskId)
+						const prov = this.providerRef.deref()
+						prov?.postMessageToWebview({ type: "interactionRequired" })
 					} else {
 						if (askMsg) {
 							askMsg.approvalState = "DENIED"
@@ -1915,7 +1961,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						approval = { decision: "deny" }
 						const payload = formatResponse.continueWork({
 							reason: decisionResult.reason,
-							unresolvedItems: decisionResult.unresolvedItems,
+							unresolvedItems: decisionResult.unresolvedItems?.map((item) => ({
+								type: item.type,
+								content: item.content,
+								guidance: item.guidance ?? undefined,
+							})),
 							missingCriteria: decisionResult.missingCriteria,
 							guidance: decisionResult.replanGuidance || undefined,
 						})
@@ -2030,10 +2080,11 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							this.updateClineMessage(completionSayMsg)
 						}
 					}
-					const warningPayload: SafetyEvaluationResult = {
+					const warningPayload: SafetyEvaluationResult & { infrastructureFailure?: boolean } = {
 						isSafe: false,
 						riskLevel: decisionResult.risk || "high",
 						reason: decisionResult.reason,
+						infrastructureFailure: decisionResult.infrastructureFailure,
 					}
 					await this.say("command_safety_warning", JSON.stringify(warningPayload))
 					this.lastMessageTs = askTs
@@ -6535,6 +6586,17 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 	public get taskAsk(): ClineMessage | undefined {
 		return this.idleAsk || this.resumableAsk || this.interactiveAsk
+	}
+
+	public get currentAskType(): ClineAsk | undefined {
+		if (this.askResponse !== undefined) {
+			return undefined
+		}
+		const lastAsk = findLast(this.clineMessages, (m) => m.type === "ask")
+		if (lastAsk && (this.lastMessageTs === lastAsk.ts || !this.isStreaming)) {
+			return lastAsk.ask
+		}
+		return this.taskAsk?.ask
 	}
 
 	public get queuedMessages(): QueuedMessage[] {

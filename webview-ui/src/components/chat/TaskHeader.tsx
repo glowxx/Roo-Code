@@ -1,6 +1,6 @@
 import { memo, useRef, useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft, Plus } from "lucide-react"
+import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft, Plus, Square, Loader2 } from "lucide-react"
 import prettyBytes from "pretty-bytes"
 
 import { type ClineMessage, type CostPrecision, type CostSource, getModelContextWindow } from "@roo-code/types"
@@ -42,6 +42,9 @@ export interface TaskHeaderProps {
 	isCondensing?: boolean
 	handleCondenseContext?: (taskId: string) => void
 	todos?: any[]
+	isTaskActive?: boolean
+	isStopping?: boolean
+	onStop?: () => void
 }
 
 const TaskHeader = ({
@@ -65,6 +68,9 @@ const TaskHeader = ({
 	isCondensing = false,
 	handleCondenseContext,
 	todos,
+	isTaskActive = false,
+	isStopping = false,
+	onStop,
 }: TaskHeaderProps) => {
 	const { t } = useTranslation()
 	const { apiConfiguration, currentTaskItem, clineMessages, openAiModelInfos } = useExtensionState()
@@ -248,6 +254,23 @@ const TaskHeader = ({
 							)}
 						</div>
 						<div className="flex items-center shrink-0 ml-2 gap-1" onClick={(e) => e.stopPropagation()}>
+							{(isTaskActive || isStopping) && onStop && (
+								<StandardTooltip
+									content={isStopping ? t("chat:stopping.title", "Stopping task...") : t("chat:stop.title")}>
+									<button
+										onClick={onStop}
+										disabled={isStopping}
+										data-testid="header-stop-btn"
+										className="shrink-0 min-h-[20px] min-w-[20px] p-[2px] cursor-pointer opacity-85 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground bg-transparent border-none rounded-md transition-colors text-red-400 hover:text-red-300"
+										aria-label={isStopping ? t("chat:stopping.title", "Stopping task...") : t("chat:stop.title")}>
+										{isStopping ? (
+											<Loader2 size={16} className="animate-spin" />
+										) : (
+											<Square size={14} className="fill-current" />
+										)}
+									</button>
+								</StandardTooltip>
+							)}
 							<StandardTooltip content={t("chat:startNewTask.title", "New Chat")}>
 								<button
 									onClick={() => vscode.postMessage({ type: "clearTask" })}

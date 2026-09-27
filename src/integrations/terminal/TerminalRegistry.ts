@@ -175,10 +175,10 @@ export class TerminalRegistry {
 			})
 		}
 
-		// Second priority: Find any available terminal with matching directory.
+		// Second priority: Find any available terminal with matching directory that is NOT assigned to another task.
 		if (!terminal) {
 			terminal = terminals.find((t) => {
-				if (t.busy || t.provider !== provider) {
+				if (t.busy || (t.taskId !== undefined && t.taskId !== taskId) || t.provider !== provider) {
 					return false
 				}
 
@@ -252,11 +252,18 @@ export class TerminalRegistry {
 	 * @param busy Whether to get busy or non-busy terminals
 	 * @returns Array of Terminal objects
 	 */
-	public static getBackgroundTerminals(busy?: boolean): RooTerminal[] {
+	public static getBackgroundTerminals(busy?: boolean, workspacePath?: string): RooTerminal[] {
 		return this.getAllTerminals().filter((t) => {
 			// Only get background terminals (taskId undefined).
 			if (t.taskId !== undefined) {
 				return false
+			}
+
+			if (workspacePath) {
+				const termCwd = t.getCurrentWorkingDirectory()
+				if (termCwd && !arePathsEqual(vscode.Uri.file(workspacePath).fsPath, termCwd)) {
+					return false
+				}
 			}
 
 			// If busy is undefined, return all background terminals.

@@ -104,7 +104,11 @@ export abstract class BaseOpenAiCompatibleProvider<ModelName extends string>
 		}
 
 		try {
-			return this.client.chat.completions.create(params, requestOptions)
+			const mergedRequestOptions: OpenAI.RequestOptions = {
+				...requestOptions,
+				...(metadata?.signal ? { signal: metadata.signal } : {}),
+			}
+			return this.client.chat.completions.create(params, mergedRequestOptions)
 		} catch (error) {
 			throw handleOpenAIError(error, this.providerName)
 		}

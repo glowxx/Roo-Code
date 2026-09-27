@@ -76,7 +76,7 @@ export type TaskProviderEvents = {
 	[RooCodeEventName.TaskTokenUsageUpdated]: [taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage]
 
 	[RooCodeEventName.ModeChanged]: [mode: string]
-	[RooCodeEventName.ProviderProfileChanged]: [config: { name: string; provider?: string }]
+	[RooCodeEventName.ProviderProfileChanged]: [config: { name: string; provider?: string; targetTaskId?: string }]
 }
 
 /**
@@ -85,6 +85,7 @@ export type TaskProviderEvents = {
 
 export interface CreateTaskOptions {
 	taskId?: string
+	workspacePath?: string
 	enableCheckpoints?: boolean
 	consecutiveMistakeLimit?: number
 	experiments?: Record<string, boolean>

@@ -444,7 +444,7 @@ ${result.content}`
 			const batchFiles = filesToApprove.map((fileResult) => {
 				const relPath = fileResult.path
 				const fullPath = path.resolve(task.cwd, relPath)
-				const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
+				const isOutsideWorkspace = isPathOutsideWorkspace(fullPath, task.cwd)
 				const readablePath = getReadablePath(task.cwd, relPath)
 
 				const lineSnippet = this.getLineSnippet(fileResult.entry!)
@@ -509,7 +509,7 @@ ${result.content}`
 			const fileResult = filesToApprove[0]
 			const relPath = fileResult.path
 			const fullPath = path.resolve(task.cwd, relPath)
-			const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
+			const isOutsideWorkspace = isPathOutsideWorkspace(fullPath, task.cwd)
 			const lineSnippet = this.getLineSnippet(fileResult.entry!)
 
 			const startLine = this.getStartLine(fileResult.entry!)
@@ -659,7 +659,7 @@ ${result.content}`
 		const sharedMessageProps: ClineSayTool = {
 			tool: "readFile",
 			path: getReadablePath(task.cwd, filePath),
-			isOutsideWorkspace: filePath ? isPathOutsideWorkspace(fullPath) : false,
+			isOutsideWorkspace: filePath ? isPathOutsideWorkspace(fullPath, task.cwd) : false,
 		}
 		const partialMessage = JSON.stringify({
 			...sharedMessageProps,
@@ -706,7 +706,7 @@ ${result.content}`
 			}
 
 			// Request approval for single file
-			const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
+			const isOutsideWorkspace = isPathOutsideWorkspace(fullPath, task.cwd)
 			let lineSnippet = ""
 			if (entry.lineRanges && entry.lineRanges.length > 0) {
 				const ranges = entry.lineRanges.map((range: LineRange) => `(lines ${range.start}-${range.end})`)

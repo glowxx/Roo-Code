@@ -50,13 +50,13 @@ export const formatResponse = {
 				"Continue the task and address all unresolved items before attempting completion again.",
 			message: `Completion rejected: ${payload.reason}.${
 				payload.unresolvedItems && payload.unresolvedItems.length > 0
-					? ` Unresolved: ${payload.unresolvedItems.map((i) => i.content).join("; ")}.`
+					? ` Unresolved: ${payload.unresolvedItems.map((i) => `${i.content}${i.guidance ? ` (${i.guidance})` : ""}`).join("; ")}.`
 					: ""
 			}${
 				payload.missingCriteria && payload.missingCriteria.length > 0
 					? ` Missing criteria: ${payload.missingCriteria.join("; ")}.`
 					: ""
-			} Address these items and verify task completion before calling attempt_completion again.`,
+			} Allowed next actions: (1) execute tools to complete unresolved work; (2) if an item cannot be completed due to constraints or blockers, use update_todo_list to classify it as [!] (blocked) or [c] (cancelled); (3) if user input is needed, call ask_followup_question. Do NOT call attempt_completion again with unchanged state.`,
 		}),
 
 	toolApprovedWithFeedback: (feedback?: string) =>

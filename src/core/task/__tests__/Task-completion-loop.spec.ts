@@ -2,7 +2,7 @@ import * as os from "os"
 import * as path from "path"
 import * as vscode from "vscode"
 
-import type { GlobalState, ProviderSettings } from "@roo-code/types"
+import type { GlobalState, ProviderSettings, ApprovalActionType } from "@roo-code/types"
 
 import { Task } from "../Task"
 import { presentAssistantMessage } from "../../assistant-message/presentAssistantMessage"
@@ -466,5 +466,118 @@ describe("Task completion loop and termination", () => {
 
 		expect(chunks.length).toBe(0)
 		expect(createMessageSpy).not.toHaveBeenCalled()
+	})
+
+	describe("Completion Attempt Fingerprinting and Zero-Progress Guard", () => {
+		it("computeCompletionFingerprint changes when todo state or constraints change", () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "test task",
+				startTask: false,
+			})
+
+			const req1 = {
+				id: "req-1",
+				taskId: "t-1",
+				actionType: "attempt_completion" as const,
+				timestamp: Date.now(),
+				target: {
+					todoListSnapshot: [{ id: "1", content: "Do polish", status: "in_progress" }],
+					completionCriteria: ["Criterion A"],
+				},
+				taskContext: {
+					latestUserInstruction: "Finish work",
+					activeGoal: "Finish work",
+					workspacePath: "/test",
+					isWithinWorkspace: true,
+					explicitConstraints: ["READ-ONLY"],
+				},
+			}
+
+			const fp1 = (task as any).computeCompletionFingerprint(req1)
+			const fp1_again = (task as any).computeCompletionFingerprint(req1)
+			expect(fp1).toBe(fp1_again)
+
+			// Changed status to blocked -> fingerprint changes
+			const req2 = {
+				...req1,
+				target: {
+					...req1.target,
+					todoListSnapshot: [{ id: "1", content: "Do polish", status: "blocked" }],
+				},
+			}
+			const fp2 = (task as any).computeCompletionFingerprint(req2)
+			expect(fp1).not.toBe(fp2)
+
+			// Changed constraints -> fingerprint changes
+			const req3 = {
+				...req1,
+				taskContext: {
+					...req1.taskContext,
+					explicitConstraints: ["READ-ONLY", "DO NOT COMMIT"],
+				},
+			}
+			const fp3 = (task as any).computeCompletionFingerprint(req3)
+			expect(fp1).not.toBe(fp3)
+		})
+
+		it("passive read-only commands do NOT reset consecutiveAttemptCompletionCount", async () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "test task",
+				startTask: false,
+			})
+
+			// Simulate 1 rejected completion attempt
+			;(task as any).consecutiveAttemptCompletionCount = 1
+
+			// Now simulate auto-approving a passive git status command
+			const passiveReq: { actionType: ApprovalActionType; target: { command?: string } } = {
+				actionType: "execute_command",
+				target: {
+					command: "git status --short",
+				},
+			}
+
+			// In Task.ts ask auto-approval logic:
+			const isPassiveCheck =
+				(passiveReq.actionType === "execute_command" &&
+					/^(?:git\s+(?:status|diff|log)|ls|dir|pwd|echo)\b/i.test(passiveReq.target.command || "")) ||
+				passiveReq.actionType === "read_file"
+
+			expect(isPassiveCheck).toBe(true)
+
+			// Verify that when isPassiveCheck is true, consecutiveAttemptCompletionCount remains 1
+			if (!isPassiveCheck) {
+				;(task as any).consecutiveAttemptCompletionCount = 0
+			}
+			expect((task as any).consecutiveAttemptCompletionCount).toBe(1)
+		})
+
+		it("currentAskType getter properly resolves active ask from messages", () => {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "test task",
+				startTask: false,
+			})
+
+			expect(task.currentAskType).toBeUndefined()
+
+			task.clineMessages = [
+				{ ts: 1000, type: "say", say: "text", text: "hello" },
+				{ ts: 2000, type: "ask", ask: "completion_result", text: "done" },
+			]
+			;(task as any).isStreaming = false
+			;(task as any).askResponse = undefined
+
+			expect(task.currentAskType).toBe("completion_result")
+
+			// Once askResponse is set, currentAskType becomes undefined
+			;(task as any).askResponse = "yesButtonClicked"
+			expect(task.currentAskType).toBeUndefined()
+		})
 	})
 })

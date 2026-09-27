@@ -928,7 +928,10 @@ export class ClineProvider
 							const hasActualSettings = !!fullProfile.apiProvider
 
 							if (hasActualSettings) {
-								await this.activateProviderProfile({ name: profile.name })
+								await this.activateProviderProfile(
+									{ name: profile.name },
+									{ persistModeConfig: false, persistTaskHistory: false, targetTaskId: historyItem.id },
+								)
 							} else {
 								// The task will continue with the current/default configuration.
 							}
@@ -959,7 +962,7 @@ export class ClineProvider
 				try {
 					await this.activateProviderProfile(
 						{ name: profile.name },
-						{ persistModeConfig: false, persistTaskHistory: false },
+						{ persistModeConfig: false, persistTaskHistory: false, targetTaskId: historyItem.id },
 					)
 				} catch (error) {
 					// Log the error but continue with task restoration.
@@ -1398,12 +1401,16 @@ export class ClineProvider
 	 * Always synchronizes task.apiConfiguration with latest provider settings.
 	 * @param providerSettings The new provider settings to apply
 	 * @param options.forceRebuild Force rebuilding the API handler regardless of provider/model equality
+	 * @param options.targetTaskId Specific task to update, defaults to foreground task
 	 */
 	public updateTaskApiHandlerIfNeeded(
 		providerSettings: ProviderSettings,
-		options: { forceRebuild?: boolean } = {},
+		options: { forceRebuild?: boolean; targetTaskId?: string } = {},
 	): void {
-		const task = this.getCurrentTask()
+		const targetTaskId = options.targetTaskId ?? this.foregroundTaskId
+		const task = targetTaskId
+			? (this.runningTasks.get(targetTaskId) ?? (this.foregroundTaskId === targetTaskId ? this.getCurrentTask() : undefined))
+			: this.getCurrentTask()
 		if (!task) return
 
 		const { forceRebuild = false } = options
@@ -1427,6 +1434,7 @@ export class ClineProvider
 			;(task as any).apiConfiguration = providerSettings
 		}
 	}
+
 
 	getProviderProfileEntries(): ProviderSettingsEntry[] {
 		return this.contextProxy.getValues().listApiConfigMeta || []
@@ -1548,12 +1556,13 @@ export class ClineProvider
 
 	async activateProviderProfile(
 		args: { name: string } | { id: string },
-		options?: { persistModeConfig?: boolean; persistTaskHistory?: boolean },
+		options?: { persistModeConfig?: boolean; persistTaskHistory?: boolean; targetTaskId?: string },
 	) {
 		const { name, id, ...providerSettings } = await this.providerSettingsManager.activateProfile(args)
 
 		const persistModeConfig = options?.persistModeConfig ?? true
 		const persistTaskHistory = options?.persistTaskHistory ?? true
+		const targetTaskId = options?.targetTaskId
 
 		// See `upsertProviderProfile` for a description of what this is doing.
 		await Promise.all([
@@ -1568,8 +1577,14 @@ export class ClineProvider
 			await this.providerSettingsManager.setModeConfig(mode, id)
 		}
 
-		// Change the provider for the current task.
-		this.updateTaskApiHandlerIfNeeded(providerSettings, { forceRebuild: true })
+		// Change the provider for the targeted or current foreground task only.
+		const effectiveTargetTaskId = targetTaskId ?? this.foregroundTaskId
+		if (effectiveTargetTaskId) {
+			this.updateTaskApiHandlerIfNeeded(providerSettings, {
+				forceRebuild: true,
+				targetTaskId: effectiveTargetTaskId,
+			})
+		}
 
 		// Update the current task's sticky provider profile, unless this activation is
 		// being used purely as a non-persisting restoration (e.g., reopening a task from history).
@@ -1580,7 +1595,11 @@ export class ClineProvider
 		await this.postStateToWebview()
 
 		if (providerSettings.apiProvider) {
-			this.emit(RooCodeEventName.ProviderProfileChanged, { name, provider: providerSettings.apiProvider })
+			this.emit(RooCodeEventName.ProviderProfileChanged, {
+				name,
+				provider: providerSettings.apiProvider,
+				targetTaskId: effectiveTargetTaskId,
+			})
 		}
 	}
 
@@ -1752,6 +1771,16 @@ export class ClineProvider
 			this.foregroundTaskId = id
 			const activeTask = this.runningTasks.get(id)!
 			activeTask.emit(RooCodeEventName.TaskFocused)
+
+			// Align UI state (mode, apiConfig) with the activated task
+			const taskMode = (activeTask as any).taskMode || (activeTask as any)._taskMode || (activeTask as any).mode
+			if (taskMode) {
+				await this.updateGlobalState("mode", taskMode)
+			}
+			if (activeTask.apiConfiguration) {
+				await this.contextProxy.setProviderSettings(activeTask.apiConfiguration)
+			}
+
 			await this.postStateToWebview()
 			await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
 			return
@@ -2615,15 +2644,14 @@ export class ClineProvider
 	 */
 
 	public getCurrentTask(): Task | undefined {
-		if (this.foregroundTaskId && this.runningTasks.has(this.foregroundTaskId)) {
-			return this.runningTasks.get(this.foregroundTaskId)
+		if (this.foregroundTaskId) {
+			return (
+				this.runningTasks.get(this.foregroundTaskId) ??
+				this.clineStack.find((t) => t.taskId === this.foregroundTaskId)
+			)
 		}
 
-		if (this.clineStack.length === 0) {
-			return undefined
-		}
-
-		return this.clineStack[this.clineStack.length - 1]
+		return undefined
 	}
 
 	public getRecentTasks(): string[] {
@@ -2748,9 +2776,10 @@ export class ClineProvider
 			task: text,
 			images,
 			experiments,
-			rootTask: this.clineStack.length > 0 ? this.clineStack[0] : undefined,
+			rootTask: parentTask ? (parentTask.rootTask || parentTask) : undefined,
 			parentTask,
 			taskNumber: this.clineStack.length + 1,
+			workspacePath: options.workspacePath || this.currentWorkspacePath || this.cwd,
 			onCreated: this.taskCreationCallback,
 			initialTodos: options.initialTodos,
 			// Ensure this task is present in clineStack before startTask() emits
@@ -2780,10 +2809,6 @@ export class ClineProvider
 
 		console.log(`[cancelTask] cancelling task ${task.taskId}.${task.instanceId}`)
 		const wasForeground = !this.foregroundTaskId || this.foregroundTaskId === task.taskId
-		this.runningTasks.delete(task.taskId)
-		if (this.foregroundTaskId === task.taskId) {
-			this.foregroundTaskId = this.clineStack.find((t) => t.taskId !== task.taskId)?.taskId
-		}
 
 		let historyItem: HistoryItem | undefined
 		try {
@@ -2806,6 +2831,7 @@ export class ClineProvider
 
 		// Mark this as a user-initiated cancellation so provider-only rehydration can occur
 		task.abortReason = "user_cancelled"
+		task.abort = true
 
 		// Capture the current instance to detect if rehydrate already occurred elsewhere
 		const originalInstanceId = task.instanceId
@@ -2818,24 +2844,22 @@ export class ClineProvider
 		// Begin abort (non-blocking)
 		task.abortTask()
 
-		// Immediately mark the original instance as abandoned to prevent any residual activity
-		task.abandoned = true
-
 		await pWaitFor(
 			() =>
-				this.getCurrentTask()! === undefined ||
-				this.getCurrentTask()!.isStreaming === false ||
-				this.getCurrentTask()!.didFinishAbortingStream ||
-				// If only the first chunk is processed, then there's no
-				// need to wait for graceful abort (closes edits, browser,
-				// etc).
-				this.getCurrentTask()!.isWaitingForFirstChunk,
+				task.isStreaming === false ||
+				task.didFinishAbortingStream ||
+				task.isWaitingForFirstChunk === false ||
+				task.abandoned === true,
 			{
 				timeout: 3_000,
 			},
 		).catch(() => {
-			console.error("Failed to abort task")
+			console.error(`[cancelTask] Failed to gracefully abort task ${task.taskId}`)
 		})
+
+		// Now mark the original instance as abandoned to prevent any residual activity
+		task.abandoned = true
+		this.runningTasks.delete(task.taskId)
 
 		// Defensive safeguard: if current instance already changed, skip rehydrate
 		const current = this.getCurrentTask()
@@ -2858,10 +2882,14 @@ export class ClineProvider
 		}
 
 		if (!historyItem || !wasForeground) {
+			if (this.foregroundTaskId === task.taskId) {
+				this.foregroundTaskId = this.clineStack.find((t) => t.taskId !== task.taskId)?.taskId
+				await this.postStateToWebview()
+			}
 			return
 		}
 
-		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask })
+		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask }, { startTask: false })
 	}
 
 	// Clear the current active task view in the UI without aborting background tasks.
@@ -2940,8 +2968,8 @@ export class ClineProvider
 
 		// Metadata-driven delegation is always enabled
 
-		// 1) Get parent (must be current task)
-		const parent = this.getCurrentTask()
+		// 1) Get parent (can be in foreground or running in background)
+		const parent = this.runningTasks.get(parentTaskId) ?? this.getCurrentTask()
 		if (!parent) {
 			throw new Error("[delegateParentAndOpenChild] No current task")
 		}

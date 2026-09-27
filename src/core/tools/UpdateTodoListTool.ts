@@ -122,11 +122,22 @@ export function updateTodoStatusForTask(cline: Task, id: string, nextStatus: Tod
 	const idx = cline.todoList.findIndex((t) => t.id === id)
 	if (idx === -1) return false
 	const current = cline.todoList[idx]
-	if (
+	// Allow:
+	// - normal progression: pending -> in_progress -> completed
+	// - blocking/cancelling: any active item (pending, in_progress) -> blocked or cancelled
+	// - unblocking: blocked -> in_progress or pending
+	// - reopening: cancelled -> pending or in_progress
+	// - identity: current.status === nextStatus
+	const allowed =
+		current.status === nextStatus ||
 		(current.status === "pending" && nextStatus === "in_progress") ||
 		(current.status === "in_progress" && nextStatus === "completed") ||
-		current.status === nextStatus
-	) {
+		nextStatus === "blocked" ||
+		nextStatus === "cancelled" ||
+		(current.status === "blocked" && (nextStatus === "in_progress" || nextStatus === "pending")) ||
+		(current.status === "cancelled" && (nextStatus === "pending" || nextStatus === "in_progress"))
+
+	if (allowed) {
 		cline.todoList[idx] = { ...current, status: nextStatus }
 		return true
 	}
@@ -164,6 +175,8 @@ function todoListToMarkdown(todos: TodoItem[]): string {
 			let box = "[ ]"
 			if (t.status === "completed") box = "[x]"
 			else if (t.status === "in_progress") box = "[-]"
+			else if (t.status === "blocked") box = "[!]"
+			else if (t.status === "cancelled") box = "[c]"
 			return `${box} ${t.content}`
 		})
 		.join("\n")
@@ -172,6 +185,8 @@ function todoListToMarkdown(todos: TodoItem[]): string {
 function normalizeStatus(status: string | undefined): TodoStatus {
 	if (status === "completed") return "completed"
 	if (status === "in_progress") return "in_progress"
+	if (status === "blocked") return "blocked"
+	if (status === "cancelled") return "cancelled"
 	return "pending"
 }
 
@@ -183,11 +198,14 @@ export function parseMarkdownChecklist(md: string): TodoItem[] {
 		.filter(Boolean)
 	const todos: TodoItem[] = []
 	for (const line of lines) {
-		const match = line.match(/^(?:-\s*)?\[\s*([ xX\-~])\s*\]\s+(.+)$/)
+		const match = line.match(/^(?:-\s*)?\[\s*([ xX\-~!bBcC])\s*\]\s+(.+)$/)
 		if (!match) continue
 		let status: TodoStatus = "pending"
-		if (match[1] === "x" || match[1] === "X") status = "completed"
-		else if (match[1] === "-" || match[1] === "~") status = "in_progress"
+		const flag = match[1].toLowerCase()
+		if (flag === "x") status = "completed"
+		else if (flag === "-" || flag === "~") status = "in_progress"
+		else if (flag === "!" || flag === "b") status = "blocked"
+		else if (flag === "c") status = "cancelled"
 		const id = crypto
 			.createHash("md5")
 			.update(match[2] + status)

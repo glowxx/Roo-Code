@@ -205,7 +205,10 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			try {
 				stream = await this.client.chat.completions.create(
 					requestOptions,
-					isAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
+					{
+						...(isAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {}),
+						signal: metadata?.signal,
+					},
 				)
 			} catch (error) {
 				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
@@ -292,7 +295,10 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			try {
 				response = await this.client.chat.completions.create(
 					requestOptions,
-					this._isAzureAiInference(modelUrl) ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
+					{
+						...(this._isAzureAiInference(modelUrl) ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {}),
+						signal: metadata?.signal,
+					},
 				)
 			} catch (error) {
 				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })
@@ -470,7 +476,10 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			try {
 				stream = await this.client.chat.completions.create(
 					requestOptions,
-					methodIsAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {},
+					{
+						...(methodIsAzureAiInference ? { path: OPENAI_AZURE_AI_INFERENCE_PATH } : {}),
+						signal: metadata?.signal,
+					},
 				)
 			} catch (error) {
 				throw handleOpenAIError(error, this.providerName, { modelId, protocol: "openai-compatible" })

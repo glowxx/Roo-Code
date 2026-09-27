@@ -5,7 +5,7 @@ const UPDATE_TODO_LIST_DESCRIPTION = `Replace the entire TODO list with an updat
 Checklist Format:
 - Use a single-level markdown checklist (no nesting or subtasks)
 - List todos in the intended execution order
-- Status options: [ ] (pending), [x] (completed), [-] (in progress)
+- Status options: [ ] (pending), [x] (completed), [-] (in progress), [!] (blocked), [c] (cancelled)
 
 Core Principles:
 - Before updating, always confirm which todos have been completed
@@ -32,7 +32,7 @@ When NOT to Use:
 - Task can be completed in one or two simple steps
 - Request is purely conversational or informational`
 
-const TODOS_PARAMETER_DESCRIPTION = `Full markdown checklist in execution order, using [ ] for pending, [x] for completed, and [-] for in progress`
+const TODOS_PARAMETER_DESCRIPTION = `Full markdown checklist in execution order, using [ ] for pending, [x] for completed, [-] for in progress, [!] for blocked, and [c] for cancelled`
 
 export default {
 	type: "function",

@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useEvent } from "react-use"
 import DynamicTextArea from "react-textarea-autosize"
-import { VolumeX, WandSparkles, SendHorizontal, X, ListEnd, Square } from "lucide-react"
+import { VolumeX, WandSparkles, SendHorizontal, X, ListEnd, Square, Loader2 } from "lucide-react"
 
 import { type ExtensionMessage, type Command, getModelContextWindow } from "@roo-code/types"
 
@@ -57,6 +57,8 @@ interface ChatTextAreaProps {
 	onCancel?: () => void
 	// Stop/Queue functionality
 	isStreaming?: boolean
+	isTaskActive?: boolean
+	isStopping?: boolean
 	onStop?: () => void
 	onEnqueueMessage?: () => void
 	onResume?: () => void
@@ -82,6 +84,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			isEditMode = false,
 			onCancel,
 			isStreaming = false,
+			isTaskActive = false,
+			isStopping = false,
 			onStop,
 			onEnqueueMessage,
 			onResume,
@@ -1246,48 +1250,59 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 										</button>
 									</StandardTooltip>
 								)}
-								{/* Send/Stop button - morphs based on streaming state, always visible in edit mode */}
-								<StandardTooltip
-									content={
-										isEditMode
-											? t("chat:pressToSend", { keyCombination: sendKeyCombination })
-											: isStreaming
-												? t("chat:stop.title")
-												: t("chat:pressToSend", { keyCombination: sendKeyCombination })
-									}>
-									<button
-										aria-label={
-											isEditMode
-												? t("chat:pressToSend", { keyCombination: sendKeyCombination })
-												: isStreaming
-													? t("chat:stop.title")
-													: t("chat:pressToSend", { keyCombination: sendKeyCombination })
-										}
-										disabled={false}
-										onClick={isStreaming ? onStop : onSend}
-										className={cn(
-											"relative inline-flex items-center justify-center",
-											"w-7 h-7 p-1.5 rounded-md",
-											"border-none cursor-pointer",
-											"transition-all duration-150",
-											isStreaming
-												? "bg-vscode-button-background hover:bg-vscode-button-hoverBackground text-vscode-button-foreground opacity-100 pointer-events-auto"
-												: cn(
-														"bg-transparent text-vscode-descriptionForeground hover:text-vscode-foreground",
-														"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
-														isEditMode || hasInputContent
-															? "opacity-100 hover:opacity-100 pointer-events-auto"
-															: "opacity-0 pointer-events-none",
-													),
-											"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
-										)}>
-										{isStreaming ? (
-											<Square className="w-4 h-4 stroke-none fill-vscode-button-foreground" />
-										) : (
-											<SendHorizontal className="w-4 h-4" />
-										)}
-									</button>
-								</StandardTooltip>
+								{/* Send/Stop button - morphs based on streaming/active state, always visible in edit mode */}
+								{(() => {
+									const isStopMode = (isStreaming || isTaskActive || isStopping) && !isEditMode
+									return (
+										<StandardTooltip
+											content={
+												isEditMode
+													? t("chat:pressToSend", { keyCombination: sendKeyCombination })
+													: isStopping
+														? t("chat:stopping.title", "Stopping task...")
+														: isStopMode
+															? t("chat:stop.title")
+															: t("chat:pressToSend", { keyCombination: sendKeyCombination })
+											}>
+											<button
+												aria-label={
+													isEditMode
+														? t("chat:pressToSend", { keyCombination: sendKeyCombination })
+														: isStopping
+															? t("chat:stopping.title", "Stopping task...")
+															: isStopMode
+																? t("chat:stop.title")
+																: t("chat:pressToSend", { keyCombination: sendKeyCombination })
+												}
+												disabled={isStopping}
+												onClick={isStopMode ? onStop : onSend}
+												className={cn(
+													"relative inline-flex items-center justify-center",
+													"w-7 h-7 p-1.5 rounded-md",
+													"border-none cursor-pointer",
+													"transition-all duration-150",
+													isStopMode
+														? "bg-vscode-button-background hover:bg-vscode-button-hoverBackground text-vscode-button-foreground opacity-100 pointer-events-auto"
+														: cn(
+																"bg-transparent text-vscode-descriptionForeground hover:text-vscode-foreground",
+																"hover:bg-[rgba(255,255,255,0.06)] active:bg-[rgba(255,255,255,0.12)]",
+																isEditMode || hasInputContent
+																	? "opacity-100 hover:opacity-100 pointer-events-auto"
+																	: "opacity-0 pointer-events-none",
+															),
+													"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
+												)}>
+												{isStopping ? (
+													<Loader2 className="w-4 h-4 animate-spin text-vscode-button-foreground" />
+												) : isStopMode ? (
+													<Square className="w-4 h-4 stroke-none fill-vscode-button-foreground" />
+												) : (
+													<SendHorizontal className="w-4 h-4" />
+												)}
+											</button>
+										</StandardTooltip>
+									)
+								})()}
 							</div>
 
 							{!inputValue && (

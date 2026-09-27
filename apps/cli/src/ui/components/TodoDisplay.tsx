@@ -14,6 +14,8 @@ const STATUS_ICON_NAMES: Record<TodoItem["status"], IconName> = {
 	completed: "checkbox-checked",
 	in_progress: "checkbox-progress",
 	pending: "checkbox",
+	blocked: "cross",
+	cancelled: "cross",
 }
 
 /**
@@ -25,6 +27,10 @@ function getStatusColor(status: TodoItem["status"]): string {
 			return theme.successColor
 		case "in_progress":
 			return theme.warningColor
+		case "blocked":
+			return theme.errorColor
+		case "cancelled":
+			return theme.dimText
 		case "pending":
 		default:
 			return theme.dimText
@@ -142,7 +148,11 @@ function TodoDisplay({
 										? "done"
 										: todo.status === "in_progress"
 											? "started"
-											: "reset"}
+											: todo.status === "blocked"
+												? "blocked"
+												: todo.status === "cancelled"
+													? "cancelled"
+													: "reset"}
 									]
 								</Text>
 							)}

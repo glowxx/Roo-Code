@@ -432,6 +432,7 @@ export class DiffViewProvider {
 	}
 
 	private async closeAllDiffViews(): Promise<void> {
+		const targetFsPath = this.relPath ? path.resolve(this.cwd, this.relPath) : undefined
 		const closeOps = vscode.window.tabGroups.all
 			.flatMap((group) => group.tabs)
 			.filter((tab) => {
@@ -441,6 +442,9 @@ export class DiffViewProvider {
 					tab.input.original.scheme === DIFF_VIEW_URI_SCHEME &&
 					!tab.isDirty
 				) {
+					if (targetFsPath && tab.input.modified?.fsPath) {
+						return arePathsEqual(tab.input.modified.fsPath, targetFsPath)
+					}
 					return true
 				}
 
@@ -448,6 +452,10 @@ export class DiffViewProvider {
 				// This catches cases where the diff view might be created differently
 				// when files are pre-opened as text documents
 				if (tab.label.includes(DIFF_VIEW_LABEL_CHANGES) && !tab.isDirty) {
+					if (targetFsPath) {
+						const fileName = path.basename(targetFsPath)
+						return tab.label.includes(fileName)
+					}
 					return true
 				}
 

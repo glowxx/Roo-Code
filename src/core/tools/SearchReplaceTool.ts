@@ -175,7 +175,7 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 
 			const sanitizedDiff = sanitizeUnifiedDiff(diff)
 			const diffStats = computeDiffStats(sanitizedDiff) || undefined
-			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath, task.cwd)
 
 			const sharedMessageProps: ClineSayTool = {
 				tool: "appliedDiff",
@@ -267,7 +267,7 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 		}
 
 		const absolutePath = path.resolve(task.cwd, relPath)
-		const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+		const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath, task.cwd)
 
 		const sharedMessageProps: ClineSayTool = {
 			tool: "appliedDiff",

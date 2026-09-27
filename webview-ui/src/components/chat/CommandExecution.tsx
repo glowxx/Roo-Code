@@ -34,6 +34,7 @@ interface CommandExecutionProps {
 
 export const CommandExecution = ({ executionId, text, icon, title }: CommandExecutionProps) => {
 	const {
+		currentTaskItem,
 		terminalShellIntegrationDisabled = false,
 		allowedCommands = [],
 		deniedCommands = [],
@@ -178,6 +179,7 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 											vscode.postMessage({
 												type: "terminalOperation",
 												terminalOperation: "abort",
+												taskId: currentTaskItem?.id,
 											})
 										}>
 										<OctagonX className="size-4" />

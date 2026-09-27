@@ -109,7 +109,9 @@ export const rooCodeEventsSchema = z.object({
 	[RooCodeEventName.TaskTokenUsageUpdated]: z.tuple([z.string(), tokenUsageSchema, toolUsageSchema]),
 
 	[RooCodeEventName.ModeChanged]: z.tuple([z.string()]),
-	[RooCodeEventName.ProviderProfileChanged]: z.tuple([z.object({ name: z.string(), provider: z.string() })]),
+	[RooCodeEventName.ProviderProfileChanged]: z.tuple([
+		z.object({ name: z.string(), provider: z.string(), targetTaskId: z.string().optional() }),
+	]),
 
 	[RooCodeEventName.CommandsResponse]: z.tuple([
 		z.array(

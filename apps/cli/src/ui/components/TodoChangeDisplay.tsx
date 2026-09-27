@@ -12,6 +12,8 @@ const STATUS_ICONS = {
 	completed: "✓",
 	in_progress: "→",
 	pending: "○",
+	blocked: "!",
+	cancelled: "✗",
 } as const
 
 /**
@@ -23,6 +25,10 @@ function getStatusColor(status: TodoItem["status"]): string {
 			return theme.successColor
 		case "in_progress":
 			return theme.warningColor
+		case "blocked":
+			return theme.errorColor
+		case "cancelled":
+			return theme.dimText
 		case "pending":
 		default:
 			return theme.dimText
@@ -118,6 +124,10 @@ function TodoChangeDisplay({ previousTodos, newTodos }: TodoChangeDisplayProps) 
 						changeLabel = "done"
 					} else if (todo.status === "in_progress" && previousTodo.status !== "in_progress") {
 						changeLabel = "started"
+					} else if (todo.status === "blocked" && previousTodo.status !== "blocked") {
+						changeLabel = "blocked"
+					} else if (todo.status === "cancelled" && previousTodo.status !== "cancelled") {
+						changeLabel = "cancelled"
 					}
 
 					return (

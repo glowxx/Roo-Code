@@ -168,6 +168,7 @@ export class ApprovalOrchestrator {
 		state: Partial<ExtensionState>
 		maxTokens?: number
 		responseFormat?: "json_object" | "text"
+		validateResponse?: (raw: string) => boolean
 	}): Promise<{
 		rawResponse: string | null
 		usedCandidate: VerifierCandidate | null
@@ -218,15 +219,21 @@ export class ApprovalOrchestrator {
 						abortSignal: abortController.signal,
 					})
 
+					const isRetry = candidateAttempts > 1
+					const effectivePrompt =
+						isRetry && lastCategory === VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
+							? `${params.userPrompt}\n\n[CRITICAL CORRECTION FOR PREVIOUS RESPONSE]\nYour previous output could not be parsed: invalid schema or formatting.\nYou MUST output ONLY a valid, single JSON object adhering strictly to the schema. Do NOT include markdown code blocks, do NOT include explanations outside JSON, and do NOT truncate the output.`
+							: params.userPrompt
+
 					const callParams = {
 						provider: candidate.provider,
 						modelId: candidate.modelId,
 						apiKey: candidate.apiKey,
 						systemPrompt,
-						userPrompt: params.userPrompt,
+						userPrompt: effectivePrompt,
 						state: params.state,
 						signal: abortController.signal,
-						maxTokens: params.maxTokens ?? 350,
+						maxTokens: isRetry ? (params.maxTokens ?? 350) * 2 : (params.maxTokens ?? 350),
 						responseFormat: params.responseFormat,
 					}
 
@@ -239,6 +246,13 @@ export class ApprovalOrchestrator {
 					const callRes = await Promise.race([providerCall, timeoutPromise])
 					const callDetails: ProviderCallDetails = typeof callRes === "string" ? { text: callRes } : callRes
 					const rawResponse = callDetails.text
+
+					if (params.validateResponse && !params.validateResponse(rawResponse)) {
+						if (timeoutId) clearTimeout(timeoutId)
+						lastError = new Error(`Approval response failed schema or JSON extraction`)
+						lastCategory = VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
+						continue
+					}
 
 					coordinator.reportSuccess(providerKey)
 					if (timeoutId) clearTimeout(timeoutId)
@@ -407,21 +421,40 @@ export class ApprovalOrchestrator {
 
 		// Attempt completion deterministic gates
 		if (actionType === "attempt_completion") {
+			const hasNoModifyConstraint = (request.taskContext.explicitConstraints || []).some((c) =>
+				/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
+			)
+			const isReadOnlyOrReportScope =
+				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj/i.test(
+					request.taskContext.latestUserInstruction || ""
+				) ||
+				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj/i.test(
+					request.taskContext.activeGoal || ""
+				)
+
 			// Gate 1: Check unresolved denial state
 			if (target.unresolvedDenialState) {
-				return {
-					decision: "CONTINUE_WORK",
-					risk: "high",
-					reason: `Cannot complete task: previous action was rejected by safety policy (${target.unresolvedDenialState.reason}) and no safe alternative was executed.`,
-					taskAligned: false,
-					replanGuidance: target.unresolvedDenialState.replanGuidance,
-					unresolvedItems: [
-						{
-							type: "unresolved_safety_denial",
-							content: `Rejected action: ${target.unresolvedDenialState.actionType} (${target.unresolvedDenialState.reason})`,
-							guidance: target.unresolvedDenialState.replanGuidance || "Execute a safe alternative first.",
-						},
-					],
+				const isDenialCausedByReadOnly =
+					(hasNoModifyConstraint || isReadOnlyOrReportScope) &&
+					(target.unresolvedDenialState.actionType === "write_to_file" ||
+						target.unresolvedDenialState.actionType === "replace_file_content" ||
+						target.unresolvedDenialState.actionType === "delete_file")
+
+				if (!isDenialCausedByReadOnly) {
+					return {
+						decision: "CONTINUE_WORK",
+						risk: "high",
+						reason: `Cannot complete task: previous action was rejected by safety policy (${target.unresolvedDenialState.reason}) and no safe alternative was executed.`,
+						taskAligned: false,
+						replanGuidance: target.unresolvedDenialState.replanGuidance,
+						unresolvedItems: [
+							{
+								type: "unresolved_safety_denial",
+								content: `Rejected action: ${target.unresolvedDenialState.actionType} (${target.unresolvedDenialState.reason})`,
+								guidance: target.unresolvedDenialState.replanGuidance || "Execute a safe alternative first.",
+							},
+						],
+					}
 				}
 			}
 
@@ -442,34 +475,54 @@ export class ApprovalOrchestrator {
 				}
 			}
 
-			// Gate 3: Check in_progress TODOs
-			const inProgress = target.todoListSnapshot?.filter((t) => t.status === "in_progress") || []
-			if (inProgress.length > 0) {
+			// Gate 3: Check in_progress TODOs (ignore blocked or cancelled items)
+			const inProgress = (target.todoListSnapshot || []).filter(
+				(t) => t.status === "in_progress"
+			)
+			const actionableInProgress = inProgress.filter((t) => {
+				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+					return false
+				}
+				return true
+			})
+
+			if (actionableInProgress.length > 0) {
 				return {
 					decision: "CONTINUE_WORK",
 					risk: "medium",
-					reason: `Cannot complete task with ${inProgress.length} item(s) marked 'in_progress' on the todo list.`,
+					reason: `Cannot complete task with ${actionableInProgress.length} item(s) marked 'in_progress' on the todo list.`,
 					taskAligned: false,
-					unresolvedItems: inProgress.map((t) => ({
+					unresolvedItems: actionableInProgress.map((t) => ({
 						type: "in_progress_todo",
 						content: t.content,
-						guidance: "Finish this in-progress item before attempting completion.",
+						guidance: "Finish this in-progress item, or if blocked by constraints/dependencies, use update_todo_list to mark it [!] (blocked).",
 					})),
 				}
 			}
 
-			// Gate 4: Check pending TODOs
-			const pending = target.todoListSnapshot?.filter((t) => t.status === "pending") || []
-			if (pending.length > 0) {
+			// Gate 4: Check pending TODOs (ignore blocked or cancelled items)
+			const pending = (target.todoListSnapshot || []).filter(
+				(t) => t.status === "pending"
+			)
+			const actionablePending = pending.filter((t) => {
+				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+					return false
+				}
+				return true
+			})
+
+			if (actionablePending.length > 0) {
 				return {
 					decision: "CONTINUE_WORK",
 					risk: "medium",
-					reason: `Task still contains ${pending.length} pending item(s) on the todo list.`,
+					reason: `Task still contains ${actionablePending.length} pending item(s) on the todo list.`,
 					taskAligned: false,
-					unresolvedItems: pending.map((t) => ({
+					unresolvedItems: actionablePending.map((t) => ({
 						type: "pending_todo",
 						content: t.content,
-						guidance: "Complete pending item or update todo list if no longer applicable.",
+						guidance: "Complete pending item, or update todo list to [!] (blocked) / [c] (cancelled) if no longer applicable.",
 					})),
 				}
 			}
@@ -501,8 +554,8 @@ export class ApprovalOrchestrator {
 			}
 		}
 
-		// Safe mode switches and subtasks
-		if (actionType === "switch_mode" || actionType === "new_task") {
+		// Safe mode switches, subtasks, and internal todo list updates
+		if (actionType === "switch_mode" || actionType === "new_task" || actionType === "update_todo_list") {
 			return {
 				decision: "ALLOW_AUTO",
 				risk: "safe",
@@ -512,7 +565,24 @@ export class ApprovalOrchestrator {
 		}
 
 		// File modifications
-		if (actionType === "write_to_file" || actionType === "replace_file_content") {
+		if (actionType === "write_to_file" || actionType === "replace_file_content" || actionType === "delete_file") {
+			// Check explicit negative constraint on modifying code
+			const hasNoModifyConstraint = (request.taskContext.explicitConstraints || []).some((c) =>
+				/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
+			)
+			if (hasNoModifyConstraint) {
+				return {
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "The current task is strictly read-only by user constraint ('DO NOT modify code'). Modifying source files is forbidden.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: "DO NOT modify code (READ-ONLY)",
+					replanGuidance: "The current task is explicitly read-only. Do not modify source code or attempt to make failing tests pass by editing implementation. Continue the review using read-only inspection or test runs only.",
+				}
+			}
+
 			// Hard-block writes to protected files (rules, configs, keys)
 			if (target.isProtected) {
 				return {
@@ -549,6 +619,23 @@ export class ApprovalOrchestrator {
 		// Command fast-paths
 		if (actionType === "execute_command" && target.command) {
 			const cmd = target.command.trim()
+
+			// Check explicit negative constraint on committing
+			const hasNoCommitConstraint = (request.taskContext.explicitConstraints || []).some((c) =>
+				/nie\s+commituj|do\s+not\s+commit|don't\s+commit|no\s+commits?/i.test(c)
+			)
+			if (hasNoCommitConstraint && /^git\s+(commit|add|push)/i.test(cmd)) {
+				return {
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "The user explicitly forbade git commits/modifications ('NIE commituj'). Staging or committing code is forbidden.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: "NIE commituj",
+					replanGuidance: "Do not stage or commit files. Keep changes unstaged or work strictly read-only per user instructions.",
+				}
+			}
 
 			// Block dangerous parameter expansions immediately
 			if (containsDangerousSubstitution(cmd)) {
@@ -658,36 +745,58 @@ export class ApprovalOrchestrator {
 			userPrompt,
 			state,
 			maxTokens: 350,
+			validateResponse: (raw: string) => safeExtractJson(raw, approvalDecisionResultSchema).success,
 		})
 
 		if (execResult.rawResponse !== null && execResult.usedCandidate) {
-			const parsed = this.parseApprovalResponse(execResult.rawResponse)
-			const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
-			const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
+			const extraction = safeExtractJson(execResult.rawResponse, approvalDecisionResultSchema)
+			if (extraction.success && extraction.data) {
+				const parsed = extraction.data
+				const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
+				const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
+				const extractionNote = extraction.category !== "VALID_JSON" ? ` jsonCategory=${extraction.category}` : ""
+				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote} finalDecision=${parsed.decision} reason="${parsed.reason}"`
 
-			const result: ApprovalDecisionResult = {
-				...parsed,
-				approvalAttemptCount: execResult.attempts,
-				auditLog,
+				const result: ApprovalDecisionResult = {
+					decision: parsed.decision,
+					risk: parsed.risk as CommandSafetyRiskLevel,
+					reason: parsed.reason,
+					taskAligned: parsed.taskAligned ?? false,
+					boundary: parsed.boundary ?? undefined,
+					hostImpact: parsed.hostImpact ?? undefined,
+					hardBoundaryViolation: parsed.hardBoundaryViolation ?? false,
+					isUserConstraintViolation: parsed.isUserConstraintViolation ?? undefined,
+					violatedConstraint: parsed.violatedConstraint ?? undefined,
+					replanGuidance: parsed.replanGuidance ?? undefined,
+					unresolvedItems: parsed.unresolvedItems ?? undefined,
+					missingCriteria: parsed.missingCriteria ?? undefined,
+					approvalAttemptCount: execResult.attempts,
+					auditLog,
+				}
+
+				this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
+				return result
 			}
-
-			this.recordDecision(request, result, execResult.usedCandidate.modelId, false, state)
-			return result
 		}
 
-		// Infrastructure failure across all candidate models
-		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown infrastructure failure"
-		const reason = `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
-		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+		// Infrastructure failure or schema invalidity across all candidate models
+		const isSchemaInvalid = execResult.lastCategory === VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
+		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown verification failure"
+		const reason = isSchemaInvalid
+			? `Approval response schema validation failed (${errorMsg}). Fail closed.`
+			: `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=${!isSchemaInvalid} verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+
+		const highestRisk = request.executionBoundary?.hostImpact.highestRisk
+		const fallbackRisk: CommandSafetyRiskLevel = highestRisk && highestRisk !== "none" ? highestRisk : "medium"
 
 		const result: ApprovalDecisionResult = {
 			decision: "MANUAL_APPROVAL",
-			risk: "high",
+			risk: fallbackRisk,
 			reason,
 			taskAligned: false,
 			infrastructureFailure: true,
-			verifierUnavailable: true,
+			verifierUnavailable: !isSchemaInvalid,
 			verifierFailureCategory: execResult.lastCategory,
 			approvalAttemptCount: execResult.attempts,
 			auditLog,
@@ -708,64 +817,45 @@ export class ApprovalOrchestrator {
 				risk: "high",
 				reason: "Empty response from Approval Authority model. Fail closed to manual approval.",
 				taskAligned: false,
+				infrastructureFailure: true,
+				verifierFailureCategory: VerifierFailureCategory.APPROVAL_RESPONSE_INVALID,
 			}
 		}
 
-		const trimmed = rawResponse.trim()
-		let parsedObject: any = null
-
-		// Attempt 1: Direct JSON parse
-		try {
-			parsedObject = JSON.parse(trimmed)
-		} catch {
-			// Attempt 2: Code block regex
-			const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-			if (match && match[1]) {
-				try {
-					parsedObject = JSON.parse(match[1].trim())
-				} catch {}
-			}
-
-			// Attempt 3: Outermost braces
-			if (!parsedObject) {
-				const start = trimmed.indexOf("{")
-				const end = trimmed.lastIndexOf("}")
-				if (start !== -1 && end > start) {
-					try {
-						parsedObject = JSON.parse(trimmed.substring(start, end + 1))
-					} catch {}
-				}
-			}
-		}
-
-		if (!parsedObject || typeof parsedObject !== "object" || Array.isArray(parsedObject)) {
+		const extraction = safeExtractJson(rawResponse, approvalDecisionResultSchema)
+		if (extraction.success && extraction.data) {
+			const data = extraction.data
 			return {
-				decision: "MANUAL_APPROVAL",
-				risk: "high",
-				reason: "Malformed JSON response from Approval Authority model. Fail closed to manual approval.",
-				taskAligned: false,
+				decision: data.decision,
+				risk: data.risk as CommandSafetyRiskLevel,
+				reason: data.reason,
+				taskAligned: data.taskAligned ?? false,
+				boundary: data.boundary ?? undefined,
+				hostImpact: data.hostImpact ?? undefined,
+				hardBoundaryViolation: data.hardBoundaryViolation ?? false,
+				isUserConstraintViolation: data.isUserConstraintViolation ?? undefined,
+				violatedConstraint: data.violatedConstraint ?? undefined,
+				replanGuidance: data.replanGuidance ?? undefined,
+				unresolvedItems: data.unresolvedItems ?? undefined,
+				missingCriteria: data.missingCriteria ?? undefined,
 			}
 		}
 
-		const validated = approvalDecisionResultSchema.safeParse(parsedObject)
-		if (!validated.success) {
-			return {
-				decision: "MANUAL_APPROVAL",
-				risk: "high",
-				reason: `Approval response schema validation failed (${validated.error.issues.map((i) => i.message).join(", ")}). Fail closed.`,
-				taskAligned: false,
-			}
-		}
+		const isSchemaError =
+			extraction.category === "WRONG_SCHEMA" ||
+			extraction.category === "WRONG_ENUM" ||
+			extraction.category === "MISSING_FIELD"
+		const reason = isSchemaError
+			? `Approval response schema validation failed (${extraction.error?.message || "Invalid schema"}). Fail closed.`
+			: `Malformed JSON response from Approval Authority model (${extraction.category}: ${extraction.error?.message || "Parse failed"}). Fail closed to manual approval.`
 
 		return {
-			decision: validated.data.decision,
-			risk: validated.data.risk,
-			reason: validated.data.reason,
-			taskAligned: validated.data.taskAligned,
-			boundary: (parsedObject as any).boundary || validated.data.boundary,
-			hostImpact: typeof (parsedObject as any).hostImpact === "boolean" ? (parsedObject as any).hostImpact : validated.data.hostImpact,
-			hardBoundaryViolation: validated.data.hardBoundaryViolation,
-			replanGuidance: validated.data.replanGuidance,
+			decision: "MANUAL_APPROVAL",
+			risk: "high",
+			reason,
+			taskAligned: false,
+			infrastructureFailure: true,
+			verifierFailureCategory: VerifierFailureCategory.APPROVAL_RESPONSE_INVALID,
 		}
 	}
 

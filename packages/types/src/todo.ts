@@ -3,7 +3,7 @@ import { z } from "zod"
 /**
  * TodoStatus
  */
-export const todoStatusSchema = z.enum(["pending", "in_progress", "completed"] as const)
+export const todoStatusSchema = z.enum(["pending", "in_progress", "completed", "blocked", "cancelled"] as const)
 
 export type TodoStatus = z.infer<typeof todoStatusSchema>
 

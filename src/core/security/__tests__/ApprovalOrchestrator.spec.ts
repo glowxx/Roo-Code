@@ -513,5 +513,237 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.verifierFailureCategory).toBe("FREE_QUOTA_EXHAUSTED")
 		})
 	})
+
+	describe("Explicit User Constraints Enforcement", () => {
+		it("deterministically denies file writes when read-only constraint is active", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-ro-write",
+				taskId: "task-ro-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: {
+					filePath: "src/security/FutureHttpLicenseTransport.js",
+					isOutsideWorkspace: false,
+					isProtected: false,
+				},
+				taskContext: {
+					latestUserInstruction: "Wykonaj SECURITY REVIEW. NIE modyfikuj kodu.",
+					activeGoal: "SECURITY REVIEW",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+					explicitConstraints: ["DO NOT modify code (READ-ONLY review)"],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.isUserConstraintViolation).toBe(true)
+			expect(result.violatedConstraint).toContain("DO NOT modify code")
+			expect(result.replanGuidance).toContain("explicitly read-only")
+		})
+
+		it("deterministically denies git commits when 'do not commit' constraint is active", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-ro-commit",
+				taskId: "task-ro-2",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "git commit -m 'fix test'",
+				},
+				taskContext: {
+					latestUserInstruction: "NIE commituj",
+					activeGoal: "SECURITY REVIEW",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+					explicitConstraints: ["DO NOT commit changes (NIE commituj)"],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.isUserConstraintViolation).toBe(true)
+			expect(result.violatedConstraint).toContain("NIE commituj")
+			expect(result.replanGuidance).toContain("Do not stage or commit files")
+		})
+	})
+
+	describe("Verifier Structured Output Robustness & Auto-Recovery", () => {
+		const realIncidentRawResponse = JSON.stringify({
+			decision: "ALLOW_AUTO",
+			risk: "safe",
+			taskAligned: true,
+			boundary: "local-workspace",
+			hostImpact: false,
+			reason: "The command performs read-only status and diff checks along with PowerShell inspection inside the authorized redesign workspace.",
+			hardBoundaryViolation: false,
+			isUserConstraintViolation: false,
+			violatedConstraint: null,
+			replanGuidance: null,
+		})
+
+		it("correctly parses real incident response with violatedConstraint: null without failing closed", async () => {
+			const parsed = orchestrator.parseApprovalResponse(realIncidentRawResponse)
+			expect(parsed.decision).toBe("ALLOW_AUTO")
+			expect(parsed.risk).toBe("safe")
+			expect(parsed.reason).toContain("read-only status and diff checks")
+			expect(parsed.violatedConstraint).toBeUndefined()
+			expect(parsed.replanGuidance).toBeUndefined()
+			expect(parsed.infrastructureFailure).toBeUndefined()
+
+			const callProviderMock = vi.fn().mockResolvedValue(realIncidentRawResponse)
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-incident-1",
+				taskId: "01a0dfad-d882-778c-aacf-197afa6c2e48",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+				},
+				taskContext: {
+					latestUserInstruction: "Inspect repo status",
+					activeGoal: "Status check",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.risk).toBe("safe")
+			expect(result.reason).toContain("read-only status and diff checks")
+			expect(callProviderMock).toHaveBeenCalledTimes(1)
+		})
+
+		it("fails validation when required critical fields are missing (e.g. decision is missing)", () => {
+			const invalidRaw = JSON.stringify({
+				risk: "safe",
+				reason: "Missing decision field",
+			})
+			const parsed = orchestrator.parseApprovalResponse(invalidRaw)
+			expect(parsed.decision).toBe("MANUAL_APPROVAL")
+			expect(parsed.infrastructureFailure).toBe(true)
+			expect(parsed.verifierFailureCategory).toBe("APPROVAL_RESPONSE_INVALID")
+			expect(parsed.reason).toContain("Approval response schema validation failed")
+		})
+
+		it("executes verifier-only bounded retry when primary model returns malformed JSON on attempt 1 and recovers on attempt 2", async () => {
+			const callProviderMock = vi
+				.fn()
+				// Attempt 1: Malformed JSON (truncated open brace)
+				.mockResolvedValueOnce('{"decision": "ALLOW_AUTO", "risk": "safe", "reason": "incomplete')
+				// Attempt 2: Valid response after correction prompt
+				.mockResolvedValueOnce(realIncidentRawResponse)
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-retry-1",
+				taskId: "task-retry-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+				},
+				taskContext: {
+					latestUserInstruction: "Check node version",
+					activeGoal: "Node version check",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(callProviderMock).toHaveBeenCalledTimes(2)
+			expect(callProviderMock.mock.calls[1][0].userPrompt).toContain("[CRITICAL CORRECTION FOR PREVIOUS RESPONSE]")
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.approvalAttemptCount).toBe(2)
+			expect(result.auditLog).toContain("retry=true attempt=2")
+		})
+
+		it("falls back to secondary verifier when primary verifier repeatedly fails schema validation", async () => {
+			const callProviderMock = vi
+				.fn()
+				// Primary attempt 1: Invalid schema
+				.mockResolvedValueOnce('{"decision": "INVALID_DECISION", "risk": "unknown"}')
+				// Primary attempt 2: Still invalid schema
+				.mockResolvedValueOnce('{"wrong": "format"}')
+				// Secondary attempt 1: Valid schema
+				.mockResolvedValueOnce(realIncidentRawResponse)
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const stateWithSecondary: Partial<ExtensionState> = {
+				...mockState,
+				commandSafetyConfig: {
+					enabled: true,
+					provider: "openai",
+					modelId: "gpt-4o-mini",
+					apiKey: "sk-mock-primary",
+					secondaryProvider: "anthropic",
+					secondaryModelId: "claude-3-5-haiku",
+					secondaryApiKey: "sk-mock-secondary",
+				},
+			}
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-secondary-schema-1",
+				taskId: "task-secondary-schema-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+				},
+				taskContext: {
+					latestUserInstruction: "Run unit tests",
+					activeGoal: "Test suite execution",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, stateWithSecondary)
+			expect(callProviderMock).toHaveBeenCalledTimes(3)
+			expect(callProviderMock.mock.calls[0][0].provider).toBe("openai")
+			expect(callProviderMock.mock.calls[1][0].provider).toBe("openai")
+			expect(callProviderMock.mock.calls[2][0].provider).toBe("anthropic")
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.auditLog).toContain("tier=secondary")
+		})
+
+		it("fails closed cleanly with APPROVAL_RESPONSE_INVALID when all candidates fail schema validation", async () => {
+			const callProviderMock = vi
+				.fn()
+				// Candidate attempts all return garbage
+				.mockResolvedValue('{"invalid": true}')
+
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const request: UnifiedApprovalRequest = {
+				id: "req-all-fail-1",
+				taskId: "task-all-fail-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+				},
+				taskContext: {
+					latestUserInstruction: "Lint code",
+					activeGoal: "Linting",
+					workspacePath: "/test/project",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("MANUAL_APPROVAL")
+			expect(result.infrastructureFailure).toBe(true)
+			expect(result.verifierFailureCategory).toBe("APPROVAL_RESPONSE_INVALID")
+			expect(result.reason).toContain("Approval response schema validation failed")
+			expect(result.risk).not.toBe("critical")
+		})
+	})
 })
 

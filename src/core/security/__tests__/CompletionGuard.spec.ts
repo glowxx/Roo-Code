@@ -435,4 +435,106 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 		// Wrong schema throws validation failed
 		expect(() => orchestrator.parseCompletionJudgeResponse(JSON.stringify({ decision: "INVALID_CHOICE" }))).toThrow("Completion response validation failed")
 	})
+
+	it("19. update_todo_list is allowed (ALLOW_AUTO) even when negative constraints (read-only) are active", async () => {
+		const request: UnifiedApprovalRequest = {
+			id: "req-update-todo-1",
+			taskId: "task-todo-1",
+			actionType: "update_todo_list",
+			timestamp: Date.now(),
+			target: {
+				todoListSnapshot: [{ content: "Step 1", status: "completed" }, { content: "Step 2 blocked", status: "blocked" }],
+			},
+			taskContext: {
+				latestUserInstruction: "Keep read-only; stop without modifying files",
+				activeGoal: "Read-only inspection",
+				workspacePath: "/workspace/project",
+				isWithinWorkspace: true,
+				explicitConstraints: ["DO NOT modify code (READ-ONLY)"],
+			},
+		}
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+	})
+
+	it("20. Blocked and cancelled TODOs do NOT trigger Gate 3 / Gate 4 CONTINUE_WORK", async () => {
+		const request = createCompletionRequest({
+			todoListSnapshot: [
+				{ id: "1", content: "Analyze architecture", status: "completed" },
+				{ id: "2", content: "Implement polish", status: "blocked" },
+				{ id: "3", content: "Run benchmarks", status: "cancelled" },
+			],
+			completionCriteria: [],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.reason).toContain("All required work and todos resolved")
+	})
+
+	it("21. Scope change to read-only stop/report reconciles implementation item without deadlock", async () => {
+		const request: UnifiedApprovalRequest = {
+			id: "req-scope-change-1",
+			taskId: "task-scope-change-1",
+			actionType: "attempt_completion",
+			timestamp: Date.now(),
+			target: {
+				completionResult: "Read-only QA is complete. Blocker: code edits prohibited.",
+				todoListSnapshot: [
+					{ id: "1", content: "Verify authorized worktree state", status: "completed" },
+					{ id: "2", content: "Implement only evidence-backed polish inside velune-website/", status: "in_progress" },
+				],
+				completionCriteria: [],
+				activeTerminalsCount: 0,
+				unresolvedDenialState: {
+					actionType: "write_to_file",
+					reason: "The current task is strictly read-only by user constraint ('DO NOT modify code'). Modifying source files is forbidden.",
+				},
+			},
+			taskContext: {
+				latestUserInstruction: "Keep read-only; stop without modifying files and report the verified QA findings and blocker.",
+				activeGoal: "Keep read-only; stop without modifying files and report the verified QA findings and blocker.",
+				workspacePath: "/workspace/project",
+				isWithinWorkspace: true,
+				explicitConstraints: ["DO NOT modify code (READ-ONLY)"],
+			},
+		}
+
+		const result = await orchestrator.evaluate(request, mockState)
+		// Must NOT be blocked by CONTINUE_WORK on the forbidden implementation item or the read-only denial!
+		expect(result.decision).toBe("ALLOW_AUTO")
+	})
+
+	it("22. Genuinely actionable non-code item still blocks completion with informative guidance", async () => {
+		const request: UnifiedApprovalRequest = {
+			id: "req-actionable-1",
+			taskId: "task-actionable-1",
+			actionType: "attempt_completion",
+			timestamp: Date.now(),
+			target: {
+				completionResult: "Preliminary report.",
+				todoListSnapshot: [
+					{ id: "1", content: "Verify authorized worktree state", status: "completed" },
+					{ id: "2", content: "Verify browser logs and console outputs", status: "in_progress" },
+				],
+				completionCriteria: [],
+				activeTerminalsCount: 0,
+			},
+			taskContext: {
+				latestUserInstruction: "Keep read-only; stop without modifying files and report findings.",
+				activeGoal: "Read-only QA",
+				workspacePath: "/workspace/project",
+				isWithinWorkspace: true,
+				explicitConstraints: ["DO NOT modify code (READ-ONLY)"],
+			},
+		}
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("CONTINUE_WORK")
+		expect(result.unresolvedItems).toBeDefined()
+		expect(result.unresolvedItems![0].content).toContain("Verify browser logs")
+		expect(result.unresolvedItems![0].guidance).toContain("blocked")
+	})
 })

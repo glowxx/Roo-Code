@@ -157,7 +157,7 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 			}
 
 			const absolutePath = path.resolve(task.cwd, relPath)
-			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath, task.cwd)
 
 			const sharedMessageProps: ClineSayTool = {
 				tool: "appliedDiff",
@@ -399,7 +399,7 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 
 			const sanitizedDiff = sanitizeUnifiedDiff(diff || "")
 			const diffStats = computeDiffStats(sanitizedDiff) || undefined
-			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+			const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath, task.cwd)
 
 			const sharedMessageProps: ClineSayTool = {
 				tool: isNewFile ? "newFileCreated" : "appliedDiff",
@@ -512,7 +512,7 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 		this.partialToolAskRelPath = relPath
 
 		const absolutePath = path.resolve(task.cwd, relPath)
-		const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+		const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath, task.cwd)
 
 		const sharedMessageProps: ClineSayTool = {
 			tool: "appliedDiff",

@@ -11,6 +11,7 @@ export enum VerifierFailureCategory {
 	NETWORK = "NETWORK",
 	AUTH = "AUTH",
 	INVALID_MODEL = "INVALID_MODEL",
+	APPROVAL_RESPONSE_INVALID = "APPROVAL_RESPONSE_INVALID",
 	OTHER_TRANSIENT = "OTHER_TRANSIENT",
 }
 
@@ -202,7 +203,7 @@ export interface CompactSafetyContext {
 	latestUserInstruction: string
 	activeTodo?: {
 		content: string
-		status: "pending" | "in_progress" | "completed"
+		status: "pending" | "in_progress" | "completed" | "blocked" | "cancelled"
 		stepIndex: number
 		totalSteps: number
 	}
@@ -220,7 +221,7 @@ export const compactSafetyContextSchema = z.object({
 	activeTodo: z
 		.object({
 			content: z.string(),
-			status: z.enum(["pending", "in_progress", "completed"]),
+			status: z.enum(["pending", "in_progress", "completed", "blocked", "cancelled"]),
 			stepIndex: z.number(),
 			totalSteps: z.number(),
 		})
@@ -297,6 +298,7 @@ export type ApprovalActionType =
 	| "access_mcp_resource"
 	| "switch_mode"
 	| "new_task"
+	| "update_todo_list"
 	| "attempt_completion"
 
 export type OrchestratorDecision = "ALLOW_AUTO" | "DENY_AND_REPLAN" | "HARD_BLOCK" | "MANUAL_APPROVAL" | "CONTINUE_WORK"
@@ -422,9 +424,11 @@ export interface ApprovalDecisionResult {
 	risk: CommandSafetyRiskLevel
 	reason: string
 	taskAligned: boolean
-	boundary?: string
-	hostImpact?: boolean
-	hardBoundaryViolation?: boolean
+	boundary?: string | null
+	hostImpact?: boolean | null
+	hardBoundaryViolation?: boolean | null
+	isUserConstraintViolation?: boolean | null
+	violatedConstraint?: string | null
 	replanGuidance?: string | null
 	unresolvedItems?: ContinueWorkItem[]
 	missingCriteria?: string[]
@@ -445,22 +449,25 @@ export const approvalDecisionResultSchema = z.object({
 		return "high" as CommandSafetyRiskLevel
 	}),
 	reason: z.string(),
-	taskAligned: z.boolean().default(false),
-	boundary: z.string().optional(),
-	hostImpact: z.boolean().optional(),
-	hardBoundaryViolation: z.boolean().default(false),
+	taskAligned: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
+	boundary: z.string().nullable().optional(),
+	hostImpact: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
+	hardBoundaryViolation: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
+	isUserConstraintViolation: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
+	violatedConstraint: z.string().nullable().optional(),
 	replanGuidance: z.string().nullable().optional(),
 	unresolvedItems: z
 		.array(
 			z.object({
 				type: z.string(),
 				content: z.string(),
-				guidance: z.string().optional(),
+				guidance: z.string().nullable().optional(),
 			})
 		)
+		.nullable()
 		.optional(),
-	missingCriteria: z.array(z.string()).optional(),
-	infrastructureFailure: z.boolean().optional(),
+	missingCriteria: z.array(z.string()).nullable().optional(),
+	infrastructureFailure: z.boolean().nullable().optional(),
 })
 
 export interface CompactCompletionContext {
@@ -492,7 +499,7 @@ export const compactCompletionContextSchema = z.object({
 export interface ContinueWorkItem {
 	type: string
 	content: string
-	guidance?: string
+	guidance?: string | null
 }
 
 export interface ContinueWorkPayload {

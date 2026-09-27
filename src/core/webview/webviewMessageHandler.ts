@@ -684,9 +684,10 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 					break
 				}
 
-				provider
-					.getCurrentTask()
-					?.handleWebviewAskResponse(message.askResponse!, resolved.text, resolved.images)
+				const targetTask =
+					(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+					provider.getCurrentTask()
+				targetTask?.handleWebviewAskResponse(message.askResponse!, resolved.text, resolved.images)
 			}
 			break
 
@@ -808,7 +809,10 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 
 		case "terminalOperation":
 			if (message.terminalOperation) {
-				provider.getCurrentTask()?.handleTerminalOperation(message.terminalOperation)
+				const targetTask =
+					(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+					provider.getCurrentTask()
+				targetTask?.handleTerminalOperation(message.terminalOperation)
 			}
 			break
 		case "clearTask":
@@ -1410,12 +1414,16 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			break
 		}
 		case "cancelTask":
-			await provider.cancelTask()
+			await provider.cancelTask(message.taskId)
 			break
-		case "cancelAutoApproval":
-			// Cancel any pending auto-approval timeout for the current task
-			provider.getCurrentTask()?.cancelAutoApprovalTimeout()
+		case "cancelAutoApproval": {
+			// Cancel any pending auto-approval timeout for the targeted or current task
+			const targetTask =
+				(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+				provider.getCurrentTask()
+			targetTask?.cancelAutoApprovalTimeout()
 			break
+		}
 		case "allowedCommands": {
 			// Validate and sanitize the commands array
 			const commands = message.commands ?? []
@@ -3036,17 +3044,26 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 
 		case "queueMessage": {
 			const resolved = await resolveIncomingImages({ text: message.text, images: message.images })
-			provider.getCurrentTask()?.messageQueueService.addMessage(resolved.text, resolved.images)
+			const targetTask =
+				(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+				provider.getCurrentTask()
+			targetTask?.messageQueueService.addMessage(resolved.text, resolved.images)
 			break
 		}
 		case "removeQueuedMessage": {
-			provider.getCurrentTask()?.messageQueueService.removeMessage(message.text ?? "")
+			const targetTask =
+				(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+				provider.getCurrentTask()
+			targetTask?.messageQueueService.removeMessage(message.text ?? "")
 			break
 		}
 		case "editQueuedMessage": {
 			if (message.payload) {
 				const { id, text, images } = message.payload as EditQueuedMessagePayload
-				provider.getCurrentTask()?.messageQueueService.updateMessage(id, text, images)
+				const targetTask =
+					(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
+					provider.getCurrentTask()
+				targetTask?.messageQueueService.updateMessage(id, text, images)
 			}
 
 			break
