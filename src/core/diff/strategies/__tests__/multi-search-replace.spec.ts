@@ -1204,4 +1204,117 @@ function sum(a, b) {
 			expect(result.error).toContain(":start_line:5    <-- Invalid location")
 		})
 	})
+
+	describe("start_line formatting resilience and incident reproduction", () => {
+		let strategy: MultiSearchReplaceDiffStrategy
+
+		beforeEach(() => {
+			strategy = new MultiSearchReplaceDiffStrategy()
+		})
+
+		it("should support :start_line: with trailing colon (:start_line:62:)", async () => {
+			const originalContent = "line 1\nline 2\nline 3\nline 4\nline 5\n"
+			const diffContent = `<<<<<<< SEARCH
+:start_line:2:
+-------
+line 2
+=======
+line two
+>>>>>>> REPLACE`
+
+			const result = await strategy.applyDiff(originalContent, diffContent)
+			expect(result.success).toBe(true)
+			if (result.success) {
+				expect(result.content).toBe("line 1\nline two\nline 3\nline 4\nline 5\n")
+			}
+		})
+
+		it("should support :start_line: with spaces and trailing colon (:start_line: 42 :)", async () => {
+			const originalContent = "a\nb\nc\nd\n"
+			const diffContent = `<<<<<<< SEARCH
+:start_line: 2 :
+-------
+b
+=======
+beta
+>>>>>>> REPLACE`
+
+			const result = await strategy.applyDiff(originalContent, diffContent)
+			expect(result.success).toBe(true)
+			if (result.success) {
+				expect(result.content).toBe("a\nbeta\nc\nd\n")
+			}
+		})
+
+		it("should defensively strip leaked :start_line: and separator headers from searchContent", async () => {
+			const originalContent = "header\ntarget content\nfooter\n"
+			// Simulates a malformed block where searchContent inadvertently contains the header
+			const diffContent = `<<<<<<< SEARCH
+:start_line:2:
+-------
+:start_line:2:
+-------
+target content
+=======
+updated content
+>>>>>>> REPLACE`
+
+			const result = await strategy.applyDiff(originalContent, diffContent)
+			expect(result.success).toBe(true)
+			if (result.success) {
+				expect(result.content).toBe("header\nupdated content\nfooter\n")
+			}
+		})
+
+		it("should apply multi-block diff with trailing colons and Windows CRLF matching incident 01a0e044", async () => {
+			const originalHtml = [
+				`      <section class="hero-section">`,
+				`        <div class="hero-grid">`,
+				`          <div class="hero-copy">`,
+				`            `,
+				`            <h1>Velune</h1>`,
+				`          </div>`,
+				`        </div>`,
+				`      </section>`,
+				`      <section class="statement-section">`,
+				`        <div class="site-container statement-layout">`,
+				`          `,
+				`          <div><h2>The path from a Discord message to your client.</h2></div>`,
+				`        </div>`,
+				`      </section>`,
+			].join("\r\n")
+
+			const incidentDiff = [
+				`<<<<<<< SEARCH`,
+				`:start_line:3:`,
+				`-------`,
+				`          <div class="hero-copy">`,
+				`            `,
+				`            <h1>Velune</h1>`,
+				`=======`,
+				`          <div class="hero-copy">`,
+				`            <h1>Velune</h1>`,
+				`>>>>>>> REPLACE`,
+				`<<<<<<< SEARCH`,
+				`:start_line:10:`,
+				`-------`,
+				`        <div class="site-container statement-layout">`,
+				`          `,
+				`          <div><h2>The path from a Discord message to your client.</h2></div>`,
+				`=======`,
+				`        <div class="site-container statement-layout">`,
+				`          <div><h2>The path from a Discord message to your client.</h2></div>`,
+				`>>>>>>> REPLACE`,
+			].join("\n")
+
+			const result = await strategy.applyDiff(originalHtml, incidentDiff)
+			expect(result.success).toBe(true)
+			if (result.success) {
+				// Lines containing only whitespace should be cleanly removed while preserving CRLF
+				expect(result.content).toContain("\r\n")
+				expect(result.content).not.toContain("            \r\n            <h1>Velune</h1>")
+				expect(result.content).not.toContain("          \r\n          <div><h2>The path")
+			}
+		})
+	})
 })

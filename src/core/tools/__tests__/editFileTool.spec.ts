@@ -106,6 +106,7 @@ describe("editFileTool", () => {
 		mockTask.cwd = "/"
 		mockTask.consecutiveMistakeCount = 0
 		mockTask.consecutiveMistakeCountForEditFile = new Map()
+		mockTask.failedDiffHashesForPath = new Map()
 		mockTask.didEditFile = false
 		mockTask.didToolFailInCurrentTurn = false
 		mockTask.providerRef = {
@@ -375,10 +376,20 @@ describe("editFileTool", () => {
 		})
 
 		it("emits diff_error on the 2nd consecutive failure for the same file", async () => {
-			await executeEditFileTool({ old_string: "NonExistent" }, { fileContent: "Line 1\nLine 2\nLine 3" })
-			await executeEditFileTool({ old_string: "NonExistent" }, { fileContent: "Line 1\nLine 2\nLine 3" })
+			await executeEditFileTool({ old_string: "NonExistent1" }, { fileContent: "Line 1\nLine 2\nLine 3" })
+			await executeEditFileTool({ old_string: "NonExistent2" }, { fileContent: "Line 1\nLine 2\nLine 3" })
 
 			expect(mockTask.say).toHaveBeenCalledWith("diff_error", expect.stringContaining("No match found"))
+		})
+
+		it("detects and rejects identical failed edit retry with actionable advice", async () => {
+			const firstResult = await executeEditFileTool({ old_string: "NonExistent" }, { fileContent: "Line 1\nLine 2\nLine 3" })
+			expect(firstResult).toContain("No match found")
+
+			const retryResult = await executeEditFileTool({ old_string: "NonExistent" }, { fileContent: "Line 1\nLine 2\nLine 3" })
+			expect(retryResult).toContain("IDENTICAL FAILED EDIT RETRY")
+			expect(retryResult).toContain("You submitted the exact same old_string/new_string replacement")
+			expect(mockTask.consecutiveMistakeCount).toBe(2)
 		})
 
 		it("returns error when occurrence count does not match expected_replacements", async () => {

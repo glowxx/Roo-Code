@@ -540,5 +540,35 @@ describe("ToolRepetitionDetector", () => {
 			expect(result.allowExecution).toBe(false)
 			expect(result.askUser).toBeDefined()
 		})
+
+		it("should detect repeating mutating tool calls when interleaved with diagnostic read-only tools", () => {
+			const detector = new ToolRepetitionDetector(3)
+
+			const editTool = createToolUse("apply_diff", "apply_diff", { path: "index.html", diff: "some patch" })
+			const readTool = createToolUse("read_file", "read_file", { path: "index.html" })
+
+			// Call 1: apply_diff (initial mutating call)
+			expect(detector.check(editTool).allowExecution).toBe(true)
+
+			// Diagnostic read
+			expect(detector.check(readTool).allowExecution).toBe(true)
+
+			// Call 2: identical apply_diff after read
+			expect(detector.check(editTool).allowExecution).toBe(true)
+
+			// Diagnostic read
+			expect(detector.check(readTool).allowExecution).toBe(true)
+
+			// Call 3: identical apply_diff after read
+			expect(detector.check(editTool).allowExecution).toBe(true)
+
+			// Diagnostic read
+			expect(detector.check(readTool).allowExecution).toBe(true)
+
+			// Call 4: identical apply_diff hits limit (3 consecutive identical mutating calls)
+			const result = detector.check(editTool)
+			expect(result.allowExecution).toBe(false)
+			expect(result.askUser?.messageKey).toBe("mistake_limit_reached")
+		})
 	})
 })

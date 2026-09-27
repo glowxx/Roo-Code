@@ -289,7 +289,7 @@ export class MultiSearchReplaceDiffStrategy implements DiffStrategy {
 
 		let matches = [
 			...diffContent.matchAll(
-				/(?:^|\n)(?<!\\)<<<<<<< SEARCH>?\s*\n((?:\:start_line:\s*(\d+)\s*\n))?((?:\:end_line:\s*(\d+)\s*\n))?((?<!\\)-------\s*\n)?([\s\S]*?)(?:\n)?(?:(?<=\n)(?<!\\)=======\s*\n)([\s\S]*?)(?:\n)?(?:(?<=\n)(?<!\\)>>>>>>> REPLACE)(?=\n|$)/g,
+				/(?:^|\n)(?<!\\)<<<<<<< SEARCH>?\s*\n((?:\:start_line:\s*(\d+)[:\s]*\n))?((?:\:end_line:\s*(\d+)[:\s]*\n))?((?<!\\)-------\s*\n)?([\s\S]*?)(?:\n)?(?:(?<=\n)(?<!\\)=======\s*\n)([\s\S]*?)(?:\n)?(?:(?<=\n)(?<!\\)>>>>>>> REPLACE)(?=\n|$)/g,
 			),
 		]
 
@@ -320,6 +320,19 @@ export class MultiSearchReplaceDiffStrategy implements DiffStrategy {
 			// First unescape any escaped markers in the content
 			searchContent = this.unescapeMarkers(searchContent)
 			replaceContent = this.unescapeMarkers(replaceContent)
+
+			// Defensive cleanup: if :start_line: or dashed separator leaked into searchContent, strip them
+			const leakedStartLine = searchContent.match(/^:start_line:\s*(\d+)[:\s]*\r?\n/)
+			if (leakedStartLine) {
+				if (startLine === 0) {
+					startLine = parseInt(leakedStartLine[1], 10)
+				}
+				searchContent = searchContent.slice(leakedStartLine[0].length)
+			}
+			const leakedSeparator = searchContent.match(/^-------\s*\r?\n/)
+			if (leakedSeparator) {
+				searchContent = searchContent.slice(leakedSeparator[0].length)
+			}
 
 			// Strip line numbers from search and replace content if every line starts with a line number
 			const hasAllLineNumbers =
@@ -453,7 +466,7 @@ export class MultiSearchReplaceDiffStrategy implements DiffStrategy {
 
 					diffResults.push({
 						success: false,
-						error: `No sufficiently similar match found${lineRange} (${Math.floor(bestMatchScore * 100)}% similar, needs ${Math.floor(this.fuzzyThreshold * 100)}%)\n\nDebug Info:\n- Similarity Score: ${Math.floor(bestMatchScore * 100)}%\n- Required Threshold: ${Math.floor(this.fuzzyThreshold * 100)}%\n- Search Range: ${startLine ? `starting at line ${startLine}` : "start to end"}\n- Tried both standard and aggressive line number stripping\n- Tip: Use the read_file tool to get the latest content of the file before attempting to use the apply_diff tool again, as the file content may have changed\n\nSearch Content:\n${searchChunk}${bestMatchSection}${originalContentSection}`,
+						error: `No sufficiently similar match found${lineRange} (${Math.floor(bestMatchScore * 100)}% similar, needs ${Math.floor(this.fuzzyThreshold * 100)}%)\n\nDebug Info:\n- Similarity Score: ${Math.floor(bestMatchScore * 100)}%\n- Required Threshold: ${Math.floor(this.fuzzyThreshold * 100)}%\n- Search Range: ${startLine ? `starting at line ${startLine}` : "start to end"}\n- Tried both standard and aggressive line number stripping\n- Tip: Verify that your SEARCH block matches the actual file content, indentation, and line breaks exactly. Do not include diff markers (like :start_line: or -------) inside the SEARCH block. If the file may have changed, use read_file first.\n\nSearch Content:\n${searchChunk}${bestMatchSection}${originalContentSection}`,
 					})
 					continue
 				}

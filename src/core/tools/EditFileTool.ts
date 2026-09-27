@@ -174,6 +174,16 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 			const currentCount = (task.consecutiveMistakeCountForEditFile.get(relPath) || 0) + 1
 			task.consecutiveMistakeCountForEditFile.set(relPath, currentCount)
 
+			const oldLF = normalizeToLF(old_string ?? "")
+			const newLF = normalizeToLF(new_string ?? "")
+			const expectedReplacements = Math.max(1, expected_replacements)
+			if (oldLF || newLF) {
+				const editFingerprint = `${oldLF}::-->::${newLF}:${expectedReplacements}`
+				const failedHashes = task.failedDiffHashesForPath?.get(relPath) || new Set<string>()
+				failedHashes.add(editFingerprint)
+				task.failedDiffHashesForPath?.set(relPath, failedHashes)
+			}
+
 			if (currentCount >= 2) {
 				await task.say("diff_error", formattedError)
 			}
@@ -282,6 +292,20 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 			const newLF = normalizeToLF(new_string)
 			const expectedReplacements = Math.max(1, expected_replacements)
 
+			const editFingerprint = `${oldLF}::-->::${newLF}:${expectedReplacements}`
+			const failedHashes = task.failedDiffHashesForPath?.get(relPath) || new Set<string>()
+
+			if (failedHashes.has(editFingerprint)) {
+				task.consecutiveMistakeCount++
+				task.didToolFailInCurrentTurn = true
+				const formattedError = `Failed to edit file: ${absolutePath}\n\n<error_details>\nIDENTICAL FAILED EDIT RETRY: You submitted the exact same old_string/new_string replacement that previously failed for this file.\n\nRecovery suggestions:\n1. Use read_file to inspect the current file content, indentation, and line breaks.\n2. Ensure old_string matches the target content uniquely.\n3. Modify old_string or provide more surrounding context before retrying.\n</error_details>`
+				await finalizePartialToolAskIfNeeded(relPath)
+				await recordFailureForPathAndMaybeEscalate(relPath, formattedError)
+				task.recordToolError("edit_file", formattedError)
+				pushToolResult(formattedError)
+				return
+			}
+
 			// Validate replacement operation
 			if (!isNewFile && currentContentLF !== null) {
 				// Validate that old_string and new_string are different (normalized for EOL)
@@ -371,6 +395,7 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 
 			task.consecutiveMistakeCount = 0
 			task.consecutiveMistakeCountForEditFile.delete(relPath)
+			task.failedDiffHashesForPath?.delete(relPath)
 
 			// Initialize diff view
 			task.diffViewProvider.editType = isNewFile ? "create" : "modify"
@@ -381,6 +406,7 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 			if (!diff && !isNewFile) {
 				task.consecutiveMistakeCount = 0
 				task.consecutiveMistakeCountForEditFile.delete(relPath)
+				task.failedDiffHashesForPath?.delete(relPath)
 				await finalizePartialToolAskIfNeeded(relPath)
 				pushToolResult(`No changes needed for '${relPath}'`)
 				await task.diffViewProvider.reset()

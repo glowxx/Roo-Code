@@ -277,6 +277,19 @@ describe("ReadFileTool", () => {
 				expect.stringContaining("anchor_line must be a 1-indexed line number"),
 			)
 		})
+
+		it("should reset consecutiveMistakeCount on successful file read", async () => {
+			const mockTask = createMockTask()
+			mockTask.consecutiveMistakeCount = 2
+			const callbacks = createMockCallbacks()
+
+			mockedFsStat.mockResolvedValue({ isFile: () => true, isDirectory: () => false } as any)
+			mockedFsReadFile.mockResolvedValue(Buffer.from("file content line 1\nline 2"))
+
+			await readFileTool.execute({ path: "test.txt" }, mockTask as any, callbacks)
+
+			expect(mockTask.consecutiveMistakeCount).toBe(0)
+		})
 	})
 
 	describe("RooIgnore handling", () => {

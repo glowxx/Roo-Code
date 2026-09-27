@@ -67,13 +67,29 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 				return
 			}
 
+			const patchFingerprint = diffContent.trim()
+			const failedHashes = task.failedDiffHashesForPath?.get(relPath) || new Set<string>()
+
+			// Detect identical failed patch retry before running expensive diff matching
+			if (failedHashes.has(patchFingerprint)) {
+				task.consecutiveMistakeCount++
+				const currentCount = (task.consecutiveMistakeCountForApplyDiff.get(relPath) || 0) + 1
+				task.consecutiveMistakeCountForApplyDiff.set(relPath, currentCount)
+				const formattedError = `Unable to apply diff to file: ${absolutePath}\n\n<error_details>\nIDENTICAL FAILED PATCH RETRY: You submitted the exact same diff that previously failed for this file without changing the search or replacement content.\n\nTips to resolve:\n1. The file content on disk differs from your SEARCH block.\n2. Use read_file to inspect the current file content, indentation, and line breaks.\n3. Verify diff markers (:start_line:, -------) are not placed inside SEARCH or REPLACE blocks.\n4. Modify your SEARCH block to match the actual file lines before retrying.\n</error_details>`
+				await task.say("diff_error", formattedError)
+				task.recordToolError("apply_diff", formattedError)
+				pushToolResult(formattedError)
+				return
+			}
+
 			const originalContent: string = await fs.readFile(absolutePath, "utf-8")
 
 			// Apply the diff to the original content
+			const parsedStartLine = parseInt(params.diff.match(/:start_line:\s*(\d+)/i)?.[1] ?? "")
 			const diffResult = (await task.diffStrategy?.applyDiff(
 				originalContent,
 				diffContent,
-				parseInt(params.diff.match(/:start_line:(\d+)/)?.[1] ?? ""),
+				isNaN(parsedStartLine) ? undefined : parsedStartLine,
 			)) ?? {
 				success: false,
 				error: "No diff strategy available",
@@ -81,21 +97,23 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 
 			if (!diffResult.success) {
 				task.consecutiveMistakeCount++
+				failedHashes.add(patchFingerprint)
+				task.failedDiffHashesForPath?.set(relPath, failedHashes)
+
 				const currentCount = (task.consecutiveMistakeCountForApplyDiff.get(relPath) || 0) + 1
 				task.consecutiveMistakeCountForApplyDiff.set(relPath, currentCount)
 				let formattedError = ""
 
 				if (diffResult.failParts && diffResult.failParts.length > 0) {
-					for (const failPart of diffResult.failParts) {
-						if (failPart.success) {
-							continue
-						}
-
-						const errorDetails = failPart.details ? JSON.stringify(failPart.details, null, 2) : ""
-
-						formattedError = `<error_details>\n${
-							failPart.error
-						}${errorDetails ? `\n\nDetails:\n${errorDetails}` : ""}\n</error_details>`
+					const failingParts = diffResult.failParts.filter((part) => !part.success)
+					if (failingParts.length > 0) {
+						const partErrors = failingParts.map((failPart, idx) => {
+							const errorDetails = failPart.details ? JSON.stringify(failPart.details, null, 2) : ""
+							return `[Block ${idx + 1} Failure]:\n${failPart.error}${errorDetails ? `\n\nDetails:\n${errorDetails}` : ""}`
+						})
+						formattedError = `<error_details>\n${partErrors.join("\n\n---\n\n")}\n</error_details>`
+					} else {
+						formattedError = `<error_details>\n${diffResult.error ?? "Diff application failed"}\n</error_details>`
 					}
 				} else {
 					const errorDetails = diffResult.details ? JSON.stringify(diffResult.details, null, 2) : ""
@@ -117,6 +135,7 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 
 			task.consecutiveMistakeCount = 0
 			task.consecutiveMistakeCountForApplyDiff.delete(relPath)
+			task.failedDiffHashesForPath?.delete(relPath)
 
 			// Generate backend-unified diff for display in chat/webview
 			const unifiedPatchRaw = formatResponse.createPrettyPatch(relPath, originalContent, diffResult.content)

@@ -2,6 +2,13 @@ import stringify from "safe-stable-stringify"
 import { ToolUse } from "../../shared/tools"
 import { t } from "../../i18n"
 
+const DIAGNOSTIC_READ_ONLY_TOOLS = new Set([
+	"read_file",
+	"list_files",
+	"codebase_search",
+	"search_files",
+])
+
 /**
  * Class for detecting consecutive identical tool calls
  * to prevent the AI from getting stuck in a loop.
@@ -10,6 +17,9 @@ export class ToolRepetitionDetector {
 	private previousToolCallJson: string | null = null
 	private consecutiveIdenticalToolCallCount: number = 0
 	private readonly consecutiveIdenticalToolCallLimit: number
+
+	private previousMutatingToolCallJson: string | null = null
+	private consecutiveIdenticalMutatingToolCallCount: number = 0
 
 	/**
 	 * Creates a new ToolRepetitionDetector
@@ -35,8 +45,9 @@ export class ToolRepetitionDetector {
 	} {
 		// Serialize the block to a canonical JSON string for comparison
 		const currentToolCallJson = this.serializeToolUse(currentToolCallBlock)
+		const isDiagnosticTool = DIAGNOSTIC_READ_ONLY_TOOLS.has(currentToolCallBlock.name)
 
-		// Compare with previous tool call
+		// Compare with immediately previous tool call
 		if (this.previousToolCallJson === currentToolCallJson) {
 			this.consecutiveIdenticalToolCallCount++
 		} else {
@@ -44,14 +55,27 @@ export class ToolRepetitionDetector {
 			this.previousToolCallJson = currentToolCallJson
 		}
 
+		// Also compare against previous mutating tool call if current call is not diagnostic
+		if (!isDiagnosticTool) {
+			if (this.previousMutatingToolCallJson === currentToolCallJson) {
+				this.consecutiveIdenticalMutatingToolCallCount++
+			} else {
+				this.consecutiveIdenticalMutatingToolCallCount = 0
+				this.previousMutatingToolCallJson = currentToolCallJson
+			}
+		}
+
 		// Check if limit is reached (0 means unlimited)
 		if (
 			this.consecutiveIdenticalToolCallLimit > 0 &&
-			this.consecutiveIdenticalToolCallCount >= this.consecutiveIdenticalToolCallLimit
+			(this.consecutiveIdenticalToolCallCount >= this.consecutiveIdenticalToolCallLimit ||
+				this.consecutiveIdenticalMutatingToolCallCount >= this.consecutiveIdenticalToolCallLimit)
 		) {
 			// Reset counters to allow recovery if user guides the AI past this point
 			this.consecutiveIdenticalToolCallCount = 0
+			this.consecutiveIdenticalMutatingToolCallCount = 0
 			this.previousToolCallJson = null
+			this.previousMutatingToolCallJson = null
 
 			// Return result indicating execution should not be allowed
 			return {

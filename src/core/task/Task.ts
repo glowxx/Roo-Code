@@ -371,6 +371,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	consecutiveMistakeLimit: number
 	consecutiveMistakeCountForApplyDiff: Map<string, number> = new Map()
 	consecutiveMistakeCountForEditFile: Map<string, number> = new Map()
+	failedDiffHashesForPath: Map<string, Set<string>> = new Map()
 	consecutiveNoToolUseCount: number = 0
 	consecutiveNoAssistantMessagesCount: number = 0
 	toolUsage: ToolUsage = {}
@@ -2212,7 +2213,8 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		// Only drain queued prompts when the task has reached completion / awaiting next turn!
 		// Queued messages must NEVER be consumed as approvals for tools/commands or followups.
 		const shouldDrainQueuedMessageForAsk = type === "resume_completed_task"
-		const isStatusMutable = !partial && isBlocking && !isMessageQueued && approval.decision === "ask"
+		const isStatusMutable =
+			!partial && isBlocking && !(isMessageQueued && shouldDrainQueuedMessageForAsk) && approval.decision === "ask"
 
 		if (isStatusMutable) {
 			const statusMutationTimeout = 2_000
