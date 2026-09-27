@@ -749,8 +749,44 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		}
 
 		if (pathname === "/api/diffs") {
+			const taskId = parsedUrl.searchParams.get("taskId")
+			const files = [...agentHost.getDiffFiles()]
+
+			// If taskId provided, ensure files modified in this task are included
+			if (taskId) {
+				try {
+					const storageDir =
+						agentHost.getStorageDir() ||
+						path.join(process.env.USERPROFILE || process.env.HOME || "", ".roo-desktop-data")
+					const uiMsgsPath = path.join(storageDir, "global-storage", "tasks", taskId, "ui_messages.json")
+					if (fs.existsSync(uiMsgsPath)) {
+						const msgs = JSON.parse(fs.readFileSync(uiMsgsPath, "utf-8"))
+						for (const m of msgs) {
+							if (m.ask === "tool" || m.say === "tool") {
+								try {
+									const toolData = typeof m.text === "string" ? JSON.parse(m.text) : m.text
+									if (toolData && toolData.path) {
+										const normPath = toolData.path.replace(/\\/g, "/").replace(/^\.\//, "")
+										if (!files.some((f) => f.filePath.replace(/\\/g, "/") === normPath)) {
+											const status: "modified" | "added" | "deleted" =
+												toolData.tool === "newFileCreated" ? "added" : "modified"
+											files.push({
+												filePath: normPath,
+												status,
+												additions: 1,
+												deletions: 0,
+											})
+										}
+									}
+								} catch {}
+							}
+						}
+					}
+				} catch {}
+			}
+
 			res.writeHead(200, { "Content-Type": "application/json" })
-			res.end(JSON.stringify(agentHost.getDiffFiles()))
+			res.end(JSON.stringify(files))
 			return
 		}
 
@@ -761,71 +797,174 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				res.end(JSON.stringify({ error: "Missing path parameter" }))
 				return
 			}
-			const curWs = agentHost.getWorkspace()
-			if (!curWs) {
-				res.writeHead(400, { "Content-Type": "application/json" })
-				res.end(JSON.stringify({ error: "No workspace open" }))
-				return
+			const wsQuery = parsedUrl.searchParams.get("workspace")
+			const taskId = parsedUrl.searchParams.get("taskId")
+			let curWs = wsQuery && fs.existsSync(wsQuery) ? wsQuery : agentHost.getWorkspace()
+
+			if ((!curWs || !fs.existsSync(curWs)) && taskId) {
+				try {
+					const storageDir =
+						agentHost.getStorageDir() ||
+						path.join(process.env.USERPROFILE || process.env.HOME || "", ".roo-desktop-data")
+					const histItemPath = path.join(storageDir, "global-storage", "tasks", taskId, "history_item.json")
+					if (fs.existsSync(histItemPath)) {
+						const histItem = JSON.parse(fs.readFileSync(histItemPath, "utf-8"))
+						if (histItem.workspace && fs.existsSync(histItem.workspace)) {
+							curWs = histItem.workspace
+						}
+					}
+				} catch {}
 			}
-			const normTarget = targetFilePath.replace(/\\/g, "/")
+
+			const normTarget = targetFilePath.replace(/\\/g, "/").replace(/^\.\//, "")
 			const diffFiles = agentHost.getDiffFiles()
-			let entry = diffFiles.find((f) => f.filePath.replace(/\\/g, "/") === normTarget)
-			const absPath = path.resolve(curWs, normTarget)
+			const entry = diffFiles.find((f) => f.filePath.replace(/\\/g, "/") === normTarget)
 
 			let oldContent = entry?.oldContent
 			let newContent = entry?.newContent
 			let diffText = ""
+			let resolvedStatus: "modified" | "added" | "deleted" = entry?.status || "modified"
 
-			try {
-				diffText = execSync(`git diff HEAD -- "${normTarget}"`, {
-					cwd: curWs,
-					encoding: "utf-8",
-					stdio: ["ignore", "pipe", "ignore"],
-					timeout: 4000,
-				})
-			} catch {}
-
-			if (!diffText) {
+			// Check task ui_messages.json for exact patches or file contents
+			if (taskId) {
 				try {
-					diffText = execSync(`git diff -- "${normTarget}"`, {
-						cwd: curWs,
-						encoding: "utf-8",
-						stdio: ["ignore", "pipe", "ignore"],
-						timeout: 3000,
-					})
+					const storageDir =
+						agentHost.getStorageDir() ||
+						path.join(process.env.USERPROFILE || process.env.HOME || "", ".roo-desktop-data")
+					const uiMsgsPath = path.join(storageDir, "global-storage", "tasks", taskId, "ui_messages.json")
+					if (fs.existsSync(uiMsgsPath)) {
+						const msgs = JSON.parse(fs.readFileSync(uiMsgsPath, "utf-8"))
+						for (let i = msgs.length - 1; i >= 0; i--) {
+							const m = msgs[i]
+							if (m.ask === "tool" || m.say === "tool") {
+								try {
+									const toolData = typeof m.text === "string" ? JSON.parse(m.text) : m.text
+									if (toolData && toolData.path) {
+										const toolNormPath = toolData.path.replace(/\\/g, "/").replace(/^\.\//, "")
+										if (
+											toolNormPath === normTarget ||
+											normTarget.endsWith(toolNormPath) ||
+											toolNormPath.endsWith(normTarget)
+										) {
+											if (toolData.tool === "newFileCreated") {
+												resolvedStatus = "added"
+												newContent = toolData.content ?? ""
+												oldContent = ""
+												break
+											} else if (
+												toolData.tool === "appliedDiff" ||
+												toolData.tool === "editedExistingFile"
+											) {
+												resolvedStatus = "modified"
+												if (toolData.diff) diffText = toolData.diff
+												if (toolData.content && newContent === undefined)
+													newContent = toolData.content
+												break
+											}
+										}
+									}
+								} catch {}
+							}
+						}
+					}
 				} catch {}
 			}
 
-			if (oldContent === undefined) {
-				try {
-					oldContent = execSync(`git show HEAD:"${normTarget}"`, {
-						cwd: curWs,
-						encoding: "utf-8",
-						stdio: ["ignore", "pipe", "ignore"],
-						timeout: 3000,
-					})
-				} catch {
-					oldContent = ""
+			// Try git diff if we have a workspace
+			if (curWs && fs.existsSync(curWs)) {
+				const absPath = path.isAbsolute(targetFilePath) ? targetFilePath : path.resolve(curWs, normTarget)
+
+				if (!diffText) {
+					try {
+						diffText = execSync(`git diff HEAD -- "${normTarget}"`, {
+							cwd: curWs,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "ignore"],
+							timeout: 4000,
+						})
+					} catch {}
+				}
+
+				if (!diffText) {
+					try {
+						diffText = execSync(`git diff -- "${normTarget}"`, {
+							cwd: curWs,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "ignore"],
+							timeout: 3000,
+						})
+					} catch {}
+				}
+
+				if (oldContent === undefined) {
+					try {
+						oldContent = execSync(`git show HEAD:"${normTarget}"`, {
+							cwd: curWs,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "ignore"],
+							timeout: 3000,
+						})
+					} catch {
+						if (fs.existsSync(absPath)) {
+							try {
+								const gitStatus = execSync(`git status --porcelain -- "${normTarget}"`, {
+									cwd: curWs,
+									encoding: "utf-8",
+									stdio: ["ignore", "pipe", "ignore"],
+									timeout: 3000,
+								}).trim()
+								if (gitStatus.startsWith("??") || gitStatus.startsWith("A")) {
+									resolvedStatus = "added"
+									oldContent = ""
+								}
+							} catch {}
+						}
+					}
+				}
+
+				if (newContent === undefined && fs.existsSync(absPath)) {
+					try {
+						newContent = fs.readFileSync(absPath, "utf-8")
+					} catch {}
+				}
+
+				if (!fs.existsSync(absPath) && oldContent) {
+					resolvedStatus = "deleted"
 				}
 			}
 
-			if (newContent === undefined && fs.existsSync(absPath)) {
-				try {
-					newContent = fs.readFileSync(absPath, "utf-8")
-				} catch {}
+			let additions = entry?.additions ?? 0
+			let deletions = entry?.deletions ?? 0
+			if (!additions && !deletions) {
+				if (diffText) {
+					const diffLines = diffText.split("\n")
+					for (const dl of diffLines) {
+						if (dl.startsWith("+") && !dl.startsWith("+++")) additions++
+						else if (dl.startsWith("-") && !dl.startsWith("---")) deletions++
+					}
+				} else if (newContent !== undefined && oldContent !== undefined) {
+					const nLines = newContent ? newContent.split("\n").length : 0
+					const oLines = oldContent ? oldContent.split("\n").length : 0
+					if (resolvedStatus === "added") additions = nLines
+					else if (resolvedStatus === "deleted") deletions = oLines
+					else {
+						additions = Math.max(0, nLines - oLines)
+						deletions = Math.max(0, oLines - nLines)
+					}
+				}
 			}
 
 			res.writeHead(200, { "Content-Type": "application/json" })
 			res.end(
 				JSON.stringify({
 					filePath: normTarget,
-					status: entry?.status || (fs.existsSync(absPath) ? "modified" : "deleted"),
+					status: resolvedStatus,
 					oldContent: oldContent ?? "",
 					newContent: newContent ?? "",
 					diff: diffText,
-					additions: entry?.additions ?? 0,
-					deletions: entry?.deletions ?? 0,
-				})
+					additions,
+					deletions,
+				}),
 			)
 			return
 		}

@@ -13,6 +13,7 @@ export interface TerminalLogEntry {
 	timestamp: number
 	command: string
 	cwd?: string
+	taskId?: string
 	output: string
 	exitCode?: number
 	status: "running" | "completed" | "error"

@@ -1,6 +1,7 @@
 import { execa, ExecaError } from "execa"
 import psTree from "ps-tree"
 import process from "process"
+import { execSync } from "child_process"
 
 import type { RooTerminal } from "./types"
 import { BaseTerminal } from "./BaseTerminal"
@@ -60,16 +61,20 @@ export class ExecaTerminalProcess extends BaseTerminalProcess {
 			if (this.pid) {
 				this.pidUpdatePromise = new Promise<void>((resolve) => {
 					setTimeout(() => {
-						psTree(this.pid!, (err, children) => {
-							if (!err && children.length > 0) {
-								// Update PID to the first child (the actual command)
-								const actualPid = parseInt(children[0].PID)
-								if (!isNaN(actualPid)) {
-									this.pid = actualPid
+						try {
+							psTree(this.pid!, (err, children) => {
+								if (!err && children && children.length > 0) {
+									// Update PID to the first child (the actual command)
+									const actualPid = parseInt(children[0].PID)
+									if (!isNaN(actualPid)) {
+										this.pid = actualPid
+									}
 								}
-							}
+								resolve()
+							})
+						} catch {
 							resolve()
-						})
+						}
 					}, 100)
 				})
 			}
@@ -196,26 +201,34 @@ export class ExecaTerminalProcess extends BaseTerminalProcess {
 
 		// Continue with the rest of the abort logic
 		if (this.pid) {
-			// Also check for any child processes
-			psTree(this.pid, async (err, children) => {
-				if (!err) {
-					const pids = children.map((p) => parseInt(p.PID))
-
-					for (const pid of pids) {
-						try {
-							process.kill(pid, "SIGKILL")
-						} catch (e) {
-							console.warn(
-								`[ExecaTerminalProcess#abort] Failed to send SIGKILL to child PID ${pid}: ${e instanceof Error ? e.message : String(e)}`,
-							)
-						}
-					}
-				} else {
-					console.error(
-						`[ExecaTerminalProcess#abort] Failed to get process tree for PID ${this.pid}: ${err.message}`,
-					)
+			if (process.platform === "win32") {
+				try {
+					execSync(`taskkill /pid ${this.pid} /T /F`, { stdio: "ignore" })
+				} catch {
+					// Ignore if already terminated
 				}
-			})
+			} else {
+				// Also check for any child processes
+				psTree(this.pid, async (err, children) => {
+					if (!err) {
+						const pids = children.map((p) => parseInt(p.PID))
+
+						for (const pid of pids) {
+							try {
+								process.kill(pid, "SIGKILL")
+							} catch (e) {
+								console.warn(
+									`[ExecaTerminalProcess#abort] Failed to send SIGKILL to child PID ${pid}: ${e instanceof Error ? e.message : String(e)}`,
+								)
+							}
+						}
+					} else {
+						console.error(
+							`[ExecaTerminalProcess#abort] Failed to get process tree for PID ${this.pid}: ${err.message}`,
+						)
+					}
+				})
+			}
 		}
 	}
 

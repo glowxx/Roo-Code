@@ -161,6 +161,8 @@
 	let isSidebarCollapsed = localStorage.getItem("roo-sidebar-collapsed") === "true"
 	let activeTaskId = null
 	const projectExpansions = new Set()
+	const projectChatExpansions = new Set()
+	const MAX_VISIBLE_CHATS = 6
 
 	// ==========================================
 	// Desktop Internationalization (i18n)
@@ -242,6 +244,8 @@
 			workspaces: "Workspaces",
 			projectsSection: "PROJECTS",
 			addProject: "Add project",
+			viewMoreChats: (count) => `View more (${count})`,
+			viewLessChats: "View less",
 			noConversations: "No conversations",
 			newChat: "New Chat",
 			toggleSidebar: "Toggle Sidebar (Ctrl+B)",
@@ -331,6 +335,8 @@
 			workspaces: "Obszary robocze",
 			projectsSection: "PROJEKTY",
 			addProject: "Dodaj projekt",
+			viewMoreChats: (count) => `Pokaż więcej (${count})`,
+			viewLessChats: "Pokaż mniej",
 			noConversations: "Brak konwersacji",
 			newChat: "Nowy czat",
 			toggleSidebar: "Zwiń/Rozwiń panel (Ctrl+B)",
@@ -731,6 +737,15 @@
 			}
 		}
 
+		if (wsPath) {
+			projectExpansions.add(wsPath)
+			const chatList = sidebarData.chats[wsPath] || []
+			const idx = chatList.findIndex((c) => c.id === taskId)
+			if (idx >= MAX_VISIBLE_CHATS) {
+				projectChatExpansions.add(wsPath)
+			}
+		}
+
 		renderSidebar()
 
 		switchDesktopTab("chat", "user")
@@ -782,6 +797,131 @@
 		)
 		renderSidebar()
 		sendToServer({ type: "removeRecentWorkspace", path: wsPath })
+	}
+
+	function renderChatsList(ws, chats, isExpanded, activeTaskId) {
+		if (!isExpanded) {
+			return ""
+		}
+
+		if (!chats || chats.length === 0) {
+			return `
+				<div class="sidebar-no-chats">
+					<span>${escapeHtml(tDesktop("noConversations"))}</span>
+					<button class="btn-start-chat" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}">+ ${escapeHtml(tDesktop("newChat"))}</button>
+				</div>
+			`
+		}
+
+		const isChatExpanded = projectChatExpansions.has(ws)
+
+		let visibleChats = chats
+		let isTruncated = false
+		let hiddenChats = []
+
+		if (chats.length > MAX_VISIBLE_CHATS) {
+			if (!isChatExpanded) {
+				isTruncated = true
+				visibleChats = chats.slice(0, MAX_VISIBLE_CHATS)
+				// Ensure active chat outside top 6 is not occluded
+				if (activeTaskId) {
+					const activeIdx = chats.findIndex((c) => c.id === activeTaskId)
+					if (activeIdx >= MAX_VISIBLE_CHATS && !visibleChats.some((c) => c.id === activeTaskId)) {
+						visibleChats = [...visibleChats, chats[activeIdx]]
+					}
+				}
+				hiddenChats = chats.filter((c) => !visibleChats.some((v) => v.id === c.id))
+			}
+		}
+
+		let html = ""
+		visibleChats.forEach((chat) => {
+			const isChatActive = activeTaskId === chat.id
+			let statusSlotHtml = ""
+			let statusAria = tDesktop("chatStatusCompleted")
+
+			if (chat.status === "running") {
+				statusSlotHtml = `<span class="chat-spinner" role="status" aria-label="${escapeHtml(tDesktop("chatStatusRunning"))}"></span>`
+				statusAria = tDesktop("chatStatusRunning")
+			} else if (chat.status === "needs_attention") {
+				statusSlotHtml = `<span class="chat-status-badge needs-attention" role="status" aria-label="${escapeHtml(tDesktop("chatStatusNeedsAttention"))}">!</span>`
+				statusAria = tDesktop("chatStatusNeedsAttention")
+			} else if (chat.hasUnread) {
+				statusSlotHtml = `<span class="chat-unread-dot" role="status" aria-label="${escapeHtml(tDesktop("chatStatusCompletedUnread"))}"></span>`
+				statusAria = tDesktop("chatStatusCompletedUnread")
+			}
+
+			const itemAriaLabel = `${chat.title} - ${statusAria}`
+			html += `
+				<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" 
+				     data-task-id="${escapeHtml(chat.id)}" 
+				     data-workspace="${escapeHtml(ws)}"
+				     role="button"
+				     tabindex="0"
+				     aria-label="${escapeHtml(itemAriaLabel)}">
+					<svg class="chat-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+					</svg>
+					<div class="chat-meta">
+						<div class="chat-title-row">
+							<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
+							<span class="chat-status-slot" title="${escapeHtml(statusAria)}">${statusSlotHtml}</span>
+						</div>
+						<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
+					</div>
+				</div>
+			`
+		})
+
+		if (isTruncated && hiddenChats.length > 0) {
+			const hiddenRunning = hiddenChats.filter((c) => c.status === "running").length
+			const hiddenAttention = hiddenChats.filter((c) => c.status === "needs_attention").length
+			const hiddenUnread = hiddenChats.filter((c) => c.hasUnread).length
+
+			let indicatorsHtml = ""
+			if (hiddenRunning > 0) {
+				indicatorsHtml += `<span class="chat-spinner" role="status" title="${hiddenRunning} active"></span>`
+			}
+			if (hiddenAttention > 0) {
+				indicatorsHtml += `<span class="chat-status-badge needs-attention" role="status" title="${hiddenAttention} needs attention">!</span>`
+			}
+			if (hiddenUnread > 0) {
+				indicatorsHtml += `<span class="chat-unread-dot" role="status" title="${hiddenUnread} unread"></span>`
+			}
+
+			html += `
+				<button class="sidebar-chat-toggle-btn" 
+				        data-action="toggle-chat-list" 
+				        data-workspace="${escapeHtml(ws)}" 
+				        role="button" 
+				        tabindex="0" 
+				        aria-expanded="false" 
+				        title="${escapeHtml(tDesktop("viewMoreChats", hiddenChats.length))}">
+					<svg class="chat-toggle-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+						<polyline points="6 9 12 15 18 9"></polyline>
+					</svg>
+					<span>${escapeHtml(tDesktop("viewMoreChats", hiddenChats.length))}</span>
+					${indicatorsHtml ? `<div class="chat-toggle-indicators">${indicatorsHtml}</div>` : ""}
+				</button>
+			`
+		} else if (chats.length > MAX_VISIBLE_CHATS && isChatExpanded) {
+			html += `
+				<button class="sidebar-chat-toggle-btn" 
+				        data-action="toggle-chat-list" 
+				        data-workspace="${escapeHtml(ws)}" 
+				        role="button" 
+				        tabindex="0" 
+				        aria-expanded="true" 
+				        title="${escapeHtml(tDesktop("viewLessChats"))}">
+					<svg class="chat-toggle-chevron expanded" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+						<polyline points="18 15 12 9 6 15"></polyline>
+					</svg>
+					<span>${escapeHtml(tDesktop("viewLessChats"))}</span>
+				</button>
+			`
+		}
+
+		return html
 	}
 
 	function renderSidebar() {
@@ -837,56 +977,7 @@
 
 			const isExpanded = projectExpansions.has(ws)
 
-			let chatsHtml = ""
-			if (chats.length > 0) {
-				chats.forEach((chat) => {
-					const isChatActive = activeTaskId === chat.id
-
-					// Status precedence: RUNNING (spinner) > NEEDS_ATTENTION (!) > COMPLETED_UNREAD (blue dot) > COMPLETED_READ (empty)
-					let statusSlotHtml = ""
-					let statusAria = tDesktop("chatStatusCompleted")
-
-					if (chat.status === "running") {
-						statusSlotHtml = `<span class="chat-spinner" role="status" aria-label="${escapeHtml(tDesktop("chatStatusRunning"))}"></span>`
-						statusAria = tDesktop("chatStatusRunning")
-					} else if (chat.status === "needs_attention") {
-						statusSlotHtml = `<span class="chat-status-badge needs-attention" role="status" aria-label="${escapeHtml(tDesktop("chatStatusNeedsAttention"))}">!</span>`
-						statusAria = tDesktop("chatStatusNeedsAttention")
-					} else if (chat.hasUnread) {
-						statusSlotHtml = `<span class="chat-unread-dot" role="status" aria-label="${escapeHtml(tDesktop("chatStatusCompletedUnread"))}"></span>`
-						statusAria = tDesktop("chatStatusCompletedUnread")
-					}
-
-					const itemAriaLabel = `${chat.title} - ${statusAria}`
-
-					chatsHtml += `
-						<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" 
-						     data-task-id="${escapeHtml(chat.id)}" 
-						     data-workspace="${escapeHtml(ws)}"
-						     role="button"
-						     tabindex="0"
-						     aria-label="${escapeHtml(itemAriaLabel)}">
-							<svg class="chat-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-								<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-							</svg>
-							<div class="chat-meta">
-								<div class="chat-title-row">
-									<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
-									<span class="chat-status-slot" title="${escapeHtml(statusAria)}">${statusSlotHtml}</span>
-								</div>
-								<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
-							</div>
-						</div>
-					`
-				})
-			} else {
-				chatsHtml = `
-					<div class="sidebar-no-chats">
-						<span>${escapeHtml(tDesktop("noConversations"))}</span>
-						<button class="btn-start-chat" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}">+ ${escapeHtml(tDesktop("newChat"))}</button>
-					</div>
-				`
-			}
+			const chatsHtml = renderChatsList(ws, chats, isExpanded, activeTaskId)
 
 			html += `
 				<div class="sidebar-project-item ${isActive ? "active" : ""}" data-workspace="${escapeHtml(ws)}">
@@ -961,6 +1052,28 @@
 						projectExpansions.add(ws)
 					}
 					renderSidebar()
+				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='toggle-chat-list']").forEach((btn) => {
+			const onToggle = (e) => {
+				e.stopPropagation()
+				const ws = btn.getAttribute("data-workspace")
+				if (ws) {
+					if (projectChatExpansions.has(ws)) {
+						projectChatExpansions.delete(ws)
+					} else {
+						projectChatExpansions.add(ws)
+					}
+					renderSidebar()
+				}
+			}
+			btn.addEventListener("click", onToggle)
+			btn.addEventListener("keydown", (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault()
+					onToggle(e)
 				}
 			})
 		})
@@ -1771,7 +1884,12 @@
 		// If diff text or content not already present, fetch from /api/diff
 		if (!diffData.diff && (diffData.newContent === undefined || diffData.oldContent === undefined)) {
 			try {
-				const res = await fetch(`/api/diff?path=${encodeURIComponent(file.filePath)}`)
+				const wsPath = sidebarData.currentWorkspace || currentWorkspace?.path || ""
+				const qParams = new URLSearchParams()
+				qParams.set("path", file.filePath)
+				if (wsPath) qParams.set("workspace", wsPath)
+				if (activeTaskId) qParams.set("taskId", activeTaskId)
+				const res = await fetch(`/api/diff?${qParams.toString()}`)
 				if (res.ok) {
 					const data = await res.json()
 					diffData = { ...file, ...data }
@@ -1787,8 +1905,42 @@
 	function renderDiffContent(file) {
 		if (!diffContentEl) return
 
-		// 1. If we have unified diff output (from git diff or unified patch)
+		// 1. If we have unified diff output or SEARCH/REPLACE block
 		if (file.diff && typeof file.diff === "string" && file.diff.trim().length > 0) {
+			if (file.diff.includes("<<<<<<< SEARCH")) {
+				const lines = file.diff.split("\n")
+				let html = ""
+				let mode = "outside" // "search", "replace"
+				let lineNum = 1
+				for (const line of lines) {
+					if (line.startsWith("<<<<<<< SEARCH")) {
+						mode = "search"
+						html += `<div class="diff-line hunk-header"><span class="diff-gutter"></span><span class="diff-prefix"></span><span class="diff-text">Original (Search Block)</span></div>`
+						continue
+					} else if (line.startsWith("=======")) {
+						mode = "replace"
+						html += `<div class="diff-line hunk-header"><span class="diff-gutter"></span><span class="diff-prefix"></span><span class="diff-text">Replacement</span></div>`
+						continue
+					} else if (line.startsWith(">>>>>>>")) {
+						mode = "outside"
+						continue
+					} else if (mode === "search" && (line.startsWith(":start_line:") || line === "-------")) {
+						continue
+					}
+					if (mode === "search") {
+						html += `<div class="diff-line deletion"><span class="diff-gutter">${lineNum}</span><span class="diff-prefix">-</span><span class="diff-text">${escapeHtml(line)}</span></div>`
+						lineNum++
+					} else if (mode === "replace") {
+						html += `<div class="diff-line addition"><span class="diff-gutter">${lineNum}</span><span class="diff-prefix">+</span><span class="diff-text">${escapeHtml(line)}</span></div>`
+						lineNum++
+					}
+				}
+				if (html) {
+					diffContentEl.innerHTML = html
+					return
+				}
+			}
+
 			const lines = file.diff.split("\n")
 			let html = ""
 			let oldLineNum = 0
@@ -1796,7 +1948,12 @@
 			let inHunk = false
 
 			for (const line of lines) {
-				if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+				if (
+					line.startsWith("diff --git") ||
+					line.startsWith("index ") ||
+					line.startsWith("--- ") ||
+					line.startsWith("+++ ")
+				) {
 					continue
 				}
 				if (line.startsWith("@@")) {
@@ -1851,7 +2008,11 @@
 		}
 
 		// 3. Brand new file (all additions)
-		if (file.status === "added" || file.status === "created" || (!file.oldContent && file.newContent)) {
+		if (file.status === "added" || file.status === "created" || (!file.oldContent && file.newContent !== undefined)) {
+			if (!file.newContent) {
+				diffContentEl.innerHTML = `<div class="empty-state">Empty file (0 bytes)</div>`
+				return
+			}
 			const lines = (file.newContent || "").split("\n")
 			let html = ""
 			lines.forEach((line, idx) => {
@@ -1873,8 +2034,13 @@
 		}
 
 		// 5. Fallback or no changes
-		if (file.newContent || file.oldContent) {
-			const lines = (file.newContent || file.oldContent || "").split("\n")
+		if (file.newContent !== undefined || file.oldContent !== undefined) {
+			const content = file.newContent !== undefined ? file.newContent : file.oldContent
+			if (content === "") {
+				diffContentEl.innerHTML = `<div class="empty-state">Empty file (0 bytes)</div>`
+				return
+			}
+			const lines = (content || "").split("\n")
 			let html = ""
 			lines.forEach((line, idx) => {
 				html += `<div class="diff-line same"><span class="diff-gutter">${idx + 1}</span><span class="diff-prefix"> </span><span class="diff-text">${escapeHtml(line)}</span></div>`
@@ -2046,11 +2212,18 @@
 	}
 
 	function renderTerminalSessions() {
+		const runningCount = terminalSessions.filter((s) => s.status === "running").length
 		if (terminalSessionCounter) {
 			terminalSessionCounter.textContent = tDesktop("terminalSessionsCount", terminalSessions.length)
 		}
 		if (terminalCountEl) {
-			terminalCountEl.textContent = String(terminalSessions.length)
+			if (runningCount > 0) {
+				terminalCountEl.textContent = String(runningCount)
+				terminalCountEl.title = `${runningCount} active command(s) running (${terminalSessions.length} total)`
+			} else {
+				terminalCountEl.textContent = String(terminalSessions.length)
+				terminalCountEl.title = `${terminalSessions.length} command session(s)`
+			}
 		}
 
 		if (!terminalSessionsList) return
@@ -2163,7 +2336,7 @@
 			}
 		}
 
-		if (isNearBottom || activeSession.status === "running") {
+		if (isNearBottom) {
 			terminalOutputEl.scrollTop = terminalOutputEl.scrollHeight
 		}
 	}
