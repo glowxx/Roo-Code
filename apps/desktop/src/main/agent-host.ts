@@ -624,9 +624,22 @@ export class DesktopAgentHost extends EventEmitter {
 			let status: "running" | "needs_attention" | "queued" | "completed" | "failed" = "completed"
 			const runningTask = this.provider?.runningTasks?.get(String(item.id))
 			if (runningTask) {
+				const lastAsk = runningTask.clineMessages
+					? [...runningTask.clineMessages].reverse().find((m: any) => m.type === "ask")
+					: undefined
+				const pendingAskType =
+					runningTask.currentAskType ??
+					runningTask.taskAsk?.ask ??
+					(runningTask.askResponse === undefined && !runningTask.isStreaming ? lastAsk?.ask : undefined)
+
+				const isUserDecisionRequired =
+					lastAsk?.approvalState === "USER_DECISION_REQUIRED" ||
+					Boolean(runningTask.clineMessages?.some?.((m: any) => m.approvalState === "USER_DECISION_REQUIRED"))
+
 				const isCompleted =
 					runningTask.isTaskCompleted === true ||
-					runningTask.currentAskType === "resume_completed_task"
+					pendingAskType === "resume_completed_task" ||
+					(!runningTask.isStreaming && !isUserDecisionRequired && runningTask.taskStatus === "idle")
 
 				const isAborted = runningTask.abort === true || runningTask.abandoned === true
 
@@ -636,21 +649,27 @@ export class DesktopAgentHost extends EventEmitter {
 					status = item.status === "failed" ? "failed" : "completed"
 				} else {
 					const isWaitingInteractiveUser =
-						runningTask.askResponse === undefined &&
 						!runningTask.isStreaming &&
 						!runningTask.isWaitingForFirstChunk &&
 						!runningTask.autoApprovalTimeoutRef &&
-						(runningTask.currentAskType === "followup" ||
-							runningTask.currentAskType === "command" ||
-							runningTask.currentAskType === "tool" ||
-							runningTask.currentAskType === "api_req_failed" ||
-							runningTask.currentAskType === "mistake_limit_reached" ||
-							runningTask.currentAskType === "plan_mode_response")
+						(isUserDecisionRequired ||
+							pendingAskType === "followup" ||
+							pendingAskType === "command" ||
+							pendingAskType === "tool" ||
+							pendingAskType === "use_mcp_server" ||
+							pendingAskType === "api_req_failed" ||
+							pendingAskType === "mistake_limit_reached" ||
+							pendingAskType === "auto_approval_max_req_reached" ||
+							pendingAskType === "plan_mode_response" ||
+							(pendingAskType === "completion_result" && isUserDecisionRequired) ||
+							runningTask.taskStatus === "interactive")
 
 					if (isWaitingInteractiveUser) {
 						status = "needs_attention"
-					} else {
+					} else if (runningTask.isStreaming || runningTask.isWaitingForFirstChunk || runningTask.autoApprovalTimeoutRef) {
 						status = "running"
+					} else {
+						status = isUserDecisionRequired ? "needs_attention" : "completed"
 					}
 				}
 			} else if (item.status === "failed") {

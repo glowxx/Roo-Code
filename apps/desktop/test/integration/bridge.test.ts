@@ -364,6 +364,56 @@ describe("Desktop Shell & Agent Host Integration Bridge", () => {
 			expect(t3?.status).toBe("needs_attention")
 		})
 
+		it("should resolve status='needs_attention' (NO spinner) for tasks waiting on manual review from completion loop guard", async () => {
+			const mockRunningTasks = new Map<string, any>()
+			const fakeProvider = {
+				runningTasks: mockRunningTasks,
+				taskHistoryStore: {
+					getAll: () => [
+						{ id: "task-loop-guard-1", task: "Task under review", ts: 4000, workspace: tempDir },
+						{ id: "task-real-instance-1", task: "Task without currentAskType property", ts: 5000, workspace: tempDir },
+					],
+				},
+			}
+
+			// Task A: Loop guard triggered manual review on completion_result
+			// Notice: isStreaming is false, task is waiting on user decision
+			mockRunningTasks.set("task-loop-guard-1", {
+				taskId: "task-loop-guard-1",
+				isStreaming: false,
+				isTaskCompleted: false,
+				askResponse: undefined,
+				clineMessages: [
+					{ ts: 3900, type: "say", say: "completion_result", approvalState: "USER_DECISION_REQUIRED" },
+					{ ts: 4000, type: "ask", ask: "completion_result", approvalState: "USER_DECISION_REQUIRED" },
+					{ ts: 4001, type: "say", say: "command_safety_warning", text: JSON.stringify({ reason: "Completion loop guard triggered" }) },
+				],
+			})
+
+			// Task B: Real Task instance without the synthetic currentAskType property, waiting on interactive ask
+			mockRunningTasks.set("task-real-instance-1", {
+				taskId: "task-real-instance-1",
+				isStreaming: false,
+				isTaskCompleted: false,
+				askResponse: undefined,
+				// NO currentAskType property!
+				clineMessages: [
+					{ ts: 5000, type: "ask", ask: "followup" },
+				],
+			})
+
+			host.registerWebviewProvider("test-view", fakeProvider)
+			const chatsByWs = host.getChatsByWorkspace()
+			const chats = chatsByWs[path.normalize(path.resolve(tempDir))]!
+
+			const loopGuardChat = chats.find((c) => c.id === "task-loop-guard-1")
+			const realInstanceChat = chats.find((c) => c.id === "task-real-instance-1")
+
+			// Must NOT be "running" (which causes sidebar spinner)!
+			expect(loopGuardChat?.status).toBe("needs_attention")
+			expect(realInstanceChat?.status).toBe("needs_attention")
+		})
+
 		it("should flag background task completion as hasUnread=true and foreground completion as hasUnread=false", async () => {
 			const storeItems = new Map<string, any>([
 				["bg-task", { id: "bg-task", task: "Background Work", ts: 1000, workspace: tempDir }],
