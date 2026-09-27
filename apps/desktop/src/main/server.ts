@@ -661,6 +661,41 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			return
 		}
 
+		if (pathname === "/api/chat/delete") {
+			if (req.method === "POST") {
+				let body = ""
+				req.on("data", (chunk) => {
+					body += chunk
+				})
+				req.on("end", async () => {
+					try {
+						const data = JSON.parse(body || "{}")
+						const taskId = data.taskId
+						if (!taskId || typeof taskId !== "string") {
+							res.writeHead(400, { "Content-Type": "application/json" })
+							res.end(JSON.stringify({ error: "Missing or invalid taskId" }))
+							return
+						}
+						const forceStop = Boolean(data.forceStop)
+						const result = await agentHost.deleteChat(taskId, forceStop)
+						if (result.success) {
+							broadcastSidebarData()
+						}
+						res.writeHead(result.success ? 200 : 400, { "Content-Type": "application/json" })
+						res.end(JSON.stringify(result))
+					} catch (e) {
+						res.writeHead(500, { "Content-Type": "application/json" })
+						res.end(JSON.stringify({ error: String(e) }))
+					}
+				})
+				return
+			}
+			res.writeHead(405, { "Content-Type": "application/json" })
+			res.end(JSON.stringify({ error: "Method not allowed" }))
+			return
+		}
+
+
 		if (pathname === "/api/files") {
 			let scan = { files: [] as string[], directories: [] as string[] }
 			try {
@@ -1869,6 +1904,20 @@ window.addEventListener("keydown", function(e) {
 					)
 					saveDesktopConfig({ recentWorkspaces: updated })
 					broadcastSidebarData()
+				} else if (clientMsg.type === "deleteChat") {
+					const taskId = clientMsg.taskId
+					const forceStop = Boolean(clientMsg.forceStop)
+					const result = await agentHost.deleteChat(taskId, forceStop)
+					safeSend(ws, {
+						type: "chatDeleted",
+						taskId,
+						success: result.success,
+						error: result.error,
+						requiresStop: result.requiresStop,
+					})
+					if (result.success) {
+						broadcastSidebarData()
+					}
 				}
 			} catch (err) {
 				safeSend(ws, { type: "error", message: String(err) })

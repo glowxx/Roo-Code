@@ -153,6 +153,19 @@
 	const sidebarProjectsLabelEl = document.getElementById("sidebar-projects-label")
 	const sidebarHintTextEl = document.getElementById("sidebar-hint-text")
 
+	// Sidebar Context Menu & Confirmation Dialog Elements
+	const sidebarContextMenuEl = document.getElementById("sidebar-context-menu")
+	const confirmationModalBackdrop = document.getElementById("confirmation-modal-backdrop")
+	const confirmationModalTitle = document.getElementById("confirmation-modal-title")
+	const confirmationModalSubtitle = document.getElementById("confirmation-modal-subtitle")
+	const confirmationModalIcon = document.getElementById("confirmation-modal-icon")
+	const confirmationModalBody = document.getElementById("confirmation-modal-body")
+	const confirmationModalConfirmBtn = document.getElementById("confirmation-modal-confirm-btn")
+	const confirmationModalCancelBtn = document.getElementById("confirmation-modal-cancel-btn")
+	const confirmationModalCloseBtn = document.getElementById("confirmation-modal-close-btn")
+	let activeContextMenuTrigger = null
+	let confirmationAction = null
+
 	let sidebarData = {
 		recentWorkspaces: [],
 		currentWorkspace: "",
@@ -258,6 +271,25 @@
 			chatStatusNeedsAttention: "Action required from user",
 			chatStatusCompletedUnread: "Completed with unread response",
 			chatStatusCompleted: "Completed",
+
+			// Chat & Project Management
+			deleteChat: "Delete chat",
+			deleteChatTitle: "Delete Chat",
+			deleteChatConfirmIdle: "Are you sure you want to delete this chat history from Roo Code?\n\nYour project and workspace files will not be affected.",
+			deleteChatConfirmRunning: "This chat currently has an active task running in the background.\n\nDeleting it requires stopping the task first. Your workspace files will not be affected.",
+			stopTaskAndDelete: "Stop task and delete",
+			confirmDelete: "Delete chat",
+			chatMenu: "Chat options",
+			projectMenu: "Project options",
+			openProjectFolder: "Open project folder",
+			copyProjectPath: "Copy project path",
+			pathCopied: "Project path copied to clipboard",
+			removeProject: "Remove project from Roo",
+			removeProjectTitle: "Remove Project from Roo Code",
+			removeProjectConfirmIdle: (name) => `Are you sure you want to remove "${name}" from Roo Code?\n\nThis project will be removed from your sidebar and its conversation history in Roo Code will be deleted.\n\nYour physical project folder and source files on disk will remain untouched.`,
+			removeProjectConfirmRunning: (name, count) => `This project "${name}" has ${count} active task(s) running in the background.\n\nRemoving it from Roo Code requires stopping those tasks first.\n\nYour physical project folder and source files on disk will remain untouched.`,
+			stopTasksAndRemove: "Stop tasks and remove",
+			confirmRemoveProject: "Remove from Roo",
 		},
 		pl: {
 			// Loading & Error States
@@ -349,6 +381,25 @@
 			chatStatusNeedsAttention: "Wymagana reakcja użytkownika",
 			chatStatusCompletedUnread: "Zakończono z nieprzeczytaną odpowiedzią",
 			chatStatusCompleted: "Zakończono",
+
+			// Chat & Project Management
+			deleteChat: "Usuń chat",
+			deleteChatTitle: "Usuń chat",
+			deleteChatConfirmIdle: "Czy na pewno chcesz usunąć tę historię chatu z Roo Code?\n\nPliki projektu i folderu roboczego pozostaną nietknięte.",
+			deleteChatConfirmRunning: "Ten chat ma obecnie zadanie działające w tle.\n\nUsunięcie go wymaga wcześniejszego zatrzymania zadania. Pliki folderu roboczego pozostaną nietknięte.",
+			stopTaskAndDelete: "Zatrzymaj zadanie i usuń",
+			confirmDelete: "Usuń chat",
+			chatMenu: "Opcje chatu",
+			projectMenu: "Opcje projektu",
+			openProjectFolder: "Otwórz folder projektu",
+			copyProjectPath: "Kopiuj ścieżkę projektu",
+			pathCopied: "Ścieżka projektu skopiowana do schowka",
+			removeProject: "Usuń projekt z Roo",
+			removeProjectTitle: "Usuń projekt z Roo Code",
+			removeProjectConfirmIdle: (name) => `Czy na pewno chcesz usunąć projekt "${name}" z Roo Code?\n\nProjekt zostanie usunięty z paska bocznego, a jego historia rozmów w Roo Code zostanie usunięta.\n\nFizyczny folder projektu i pliki źródłowe na dysku pozostaną nietknięte.`,
+			removeProjectConfirmRunning: (name, count) => `Projekt "${name}" posiada ${count} aktywnych zadań działających w tle.\n\nUsunięcie go z Roo Code wymaga zatrzymania tych zadań.\n\nFizyczny folder projektu i pliki źródłowe na dysku pozostaną nietknięte.`,
+			stopTasksAndRemove: "Zatrzymaj zadania i usuń projekt",
+			confirmRemoveProject: "Usuń z Roo",
 		},
 	}
 
@@ -791,6 +842,227 @@
 		}
 	}
 
+	function showConfirmationModal({ title, subtitle, icon, message, confirmText, confirmClass, onConfirm }) {
+		if (!confirmationModalBackdrop) return
+		if (confirmationModalTitle) confirmationModalTitle.textContent = title || "Confirm"
+		if (confirmationModalSubtitle) confirmationModalSubtitle.textContent = subtitle || ""
+		if (confirmationModalIcon) confirmationModalIcon.textContent = icon || "⚠️"
+		if (confirmationModalBody) confirmationModalBody.textContent = message || ""
+		if (confirmationModalConfirmBtn) {
+			confirmationModalConfirmBtn.textContent = confirmText || tDesktop("confirm") || "Confirm"
+			confirmationModalConfirmBtn.className = `btn ${confirmClass || "btn-danger"}`
+		}
+		if (confirmationModalCancelBtn) {
+			confirmationModalCancelBtn.textContent = tDesktop("cancel") || "Cancel"
+		}
+
+		confirmationAction = onConfirm
+		confirmationModalBackdrop.classList.remove("hidden")
+		confirmationModalBackdrop.style.display = "flex"
+		confirmationModalConfirmBtn?.focus()
+	}
+
+	function closeConfirmationModal() {
+		if (!confirmationModalBackdrop) return
+		confirmationModalBackdrop.classList.add("hidden")
+		confirmationModalBackdrop.style.display = "none"
+		confirmationAction = null
+	}
+
+	function closeSidebarContextMenu() {
+		if (!sidebarContextMenuEl) return
+		sidebarContextMenuEl.classList.add("hidden")
+		sidebarContextMenuEl.setAttribute("aria-hidden", "true")
+		sidebarContextMenuEl.innerHTML = ""
+		if (activeContextMenuTrigger) {
+			activeContextMenuTrigger.closest(".sidebar-chat-item, .sidebar-project-item")?.classList.remove("menu-open")
+			activeContextMenuTrigger = null
+		}
+	}
+
+	function openSidebarContextMenu({ x, y, items, triggerEl }) {
+		if (!sidebarContextMenuEl) return
+		closeSidebarContextMenu()
+		activeContextMenuTrigger = triggerEl || null
+		if (triggerEl) {
+			triggerEl.closest(".sidebar-chat-item, .sidebar-project-item")?.classList.add("menu-open")
+		}
+
+		let itemsHtml = ""
+		items.forEach((item, idx) => {
+			if (item.type === "divider") {
+				itemsHtml += `<div class="context-menu-divider" role="separator"></div>`
+			} else {
+				itemsHtml += `
+					<button class="context-menu-item ${item.danger ? "danger" : ""}" 
+					        type="button" 
+					        role="menuitem" 
+					        tabindex="${idx === 0 ? "0" : "-1"}" 
+					        data-index="${idx}"
+					        aria-label="${escapeHtml(item.label)}">
+						${item.icon ? `<span class="menu-icon">${item.icon}</span>` : ""}
+						<span>${escapeHtml(item.label)}</span>
+					</button>
+				`
+			}
+		})
+
+		sidebarContextMenuEl.innerHTML = itemsHtml
+		sidebarContextMenuEl.classList.remove("hidden")
+		sidebarContextMenuEl.setAttribute("aria-hidden", "false")
+
+		// Viewport bounds detection
+		const menuWidth = 200
+		const menuHeight = sidebarContextMenuEl.offsetHeight || 130
+		const winW = window.innerWidth
+		const winH = window.innerHeight
+
+		let left = x
+		let top = y
+		if (left + menuWidth > winW - 10) {
+			left = Math.max(10, winW - menuWidth - 10)
+		}
+		if (top + menuHeight > winH - 10) {
+			top = Math.max(10, winH - menuHeight - 10)
+		}
+
+		sidebarContextMenuEl.style.left = `${left}px`
+		sidebarContextMenuEl.style.top = `${top}px`
+
+		const menuButtons = sidebarContextMenuEl.querySelectorAll(".context-menu-item")
+		menuButtons.forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation()
+				const idx = parseInt(btn.getAttribute("data-index") || "0", 10)
+				const item = items[idx]
+				closeSidebarContextMenu()
+				if (item && typeof item.action === "function") {
+					item.action()
+				}
+			})
+		})
+
+		const focusItem = (index) => {
+			const btns = Array.from(menuButtons)
+			if (btns.length === 0) return
+			const validIndex = (index + btns.length) % btns.length
+			btns.forEach((b, i) => b.setAttribute("tabindex", i === validIndex ? "0" : "-1"))
+			btns[validIndex]?.focus()
+		}
+
+		sidebarContextMenuEl.onkeydown = (e) => {
+			const btns = Array.from(menuButtons)
+			const activeIdx = btns.indexOf(document.activeElement)
+			if (e.key === "ArrowDown") {
+				e.preventDefault()
+				focusItem(activeIdx >= 0 ? activeIdx + 1 : 0)
+			} else if (e.key === "ArrowUp") {
+				e.preventDefault()
+				focusItem(activeIdx >= 0 ? activeIdx - 1 : btns.length - 1)
+			} else if (e.key === "Escape") {
+				e.preventDefault()
+				closeSidebarContextMenu()
+				activeContextMenuTrigger?.focus()
+			}
+		}
+
+		setTimeout(() => {
+			menuButtons[0]?.focus()
+		}, 20)
+	}
+
+	function openChatContextMenu(eventOrX, yOrTaskId, taskIdOrWs, wsOrTrigger, triggerEl) {
+		let x, y, taskId, ws, trigger
+		if (eventOrX && typeof eventOrX === "object" && ("clientX" in eventOrX || "target" in eventOrX)) {
+			const e = eventOrX
+			taskId = yOrTaskId
+			ws = taskIdOrWs
+			trigger = wsOrTrigger || e.currentTarget || e.target
+			if (e.clientX !== undefined && e.clientY !== undefined && e.clientX > 0 && e.clientY > 0) {
+				x = e.clientX
+				y = e.clientY
+			} else if (trigger?.getBoundingClientRect) {
+				const rect = trigger.getBoundingClientRect()
+				x = rect.left
+				y = rect.bottom + 4
+			} else {
+				x = 100
+				y = 100
+			}
+		} else {
+			x = eventOrX
+			y = yOrTaskId
+			taskId = taskIdOrWs
+			ws = wsOrTrigger
+			trigger = triggerEl
+		}
+
+		const items = [
+			{
+				label: tDesktop("deleteChat"),
+				danger: true,
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+				action: () => handleDeleteChat(taskId, ws),
+			},
+		]
+		openSidebarContextMenu({ x, y, items, triggerEl: trigger })
+	}
+
+	function handleDeleteChat(taskId, ws) {
+		const chatList = sidebarData.chats[ws] || []
+		const chat = chatList.find((c) => c.id === taskId)
+		const isRunning = chat?.status === "running"
+
+		if (isRunning) {
+			showConfirmationModal({
+				title: tDesktop("deleteChatTitle"),
+				subtitle: chat?.title || taskId,
+				icon: "⚠️",
+				message: tDesktop("deleteChatConfirmRunning"),
+				confirmText: tDesktop("stopTaskAndDelete"),
+				confirmClass: "btn-danger",
+				onConfirm: () => {
+					executeDeleteChat(taskId, ws, true)
+				},
+			})
+		} else {
+			showConfirmationModal({
+				title: tDesktop("deleteChatTitle"),
+				subtitle: chat?.title || taskId,
+				icon: "🗑️",
+				message: tDesktop("deleteChatConfirmIdle"),
+				confirmText: tDesktop("confirmDelete"),
+				confirmClass: "btn-danger",
+				onConfirm: () => {
+					executeDeleteChat(taskId, ws, false)
+				},
+			})
+		}
+	}
+
+	function executeDeleteChat(taskId, ws, forceStop) {
+		if (sidebarData.chats[ws]) {
+			sidebarData.chats[ws] = sidebarData.chats[ws].filter((c) => c.id !== taskId)
+		}
+
+		if (activeTaskId === taskId) {
+			const remaining = sidebarData.chats[ws] || []
+			if (remaining.length > 0) {
+				switchChat(remaining[0].id, ws)
+			} else {
+				startNewChat(ws)
+			}
+		}
+
+		renderSidebar()
+
+		sendToServer({
+			type: "deleteChat",
+			taskId,
+			forceStop,
+		})
+	}
+
 	function removeRecentWorkspace(wsPath) {
 		sidebarData.recentWorkspaces = sidebarData.recentWorkspaces.filter(
 			(p) => pathNormalize(p) !== pathNormalize(wsPath)
@@ -868,6 +1140,21 @@
 							<span class="chat-status-slot" title="${escapeHtml(statusAria)}">${statusSlotHtml}</span>
 						</div>
 						<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
+					</div>
+					<div class="chat-actions">
+						<button class="chat-action-btn chat-menu-btn" 
+						        type="button" 
+						        data-action="chat-menu" 
+						        data-task-id="${escapeHtml(chat.id)}" 
+						        data-workspace="${escapeHtml(ws)}" 
+						        title="${escapeHtml(tDesktop("chatMenu"))}" 
+						        aria-label="${escapeHtml(tDesktop("chatMenu"))}">
+							<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+								<circle cx="5" cy="12" r="2"/>
+								<circle cx="12" cy="12" r="2"/>
+								<circle cx="19" cy="12" r="2"/>
+							</svg>
+						</button>
 					</div>
 				</div>
 			`
@@ -998,7 +1285,7 @@
 							<span class="project-path" title="${escapeHtml(ws)}">${escapeHtml(ws)}</span>
 						</div>
 						<div class="project-actions">
-							<button class="project-action-btn project-new-chat-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}">
+							<button class="project-action-btn project-new-chat-btn" data-action="new-chat-in-ws" data-workspace="${escapeHtml(ws)}" title="${escapeHtml(tDesktop("newChatInProject"))}" aria-label="${escapeHtml(tDesktop("newChatInProject"))}">
 								<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 									<line x1="12" y1="5" x2="12" y2="19"/>
 									<line x1="5" y1="12" x2="19" y2="12"/>
@@ -1027,17 +1314,50 @@
 
 		// Attach event delegations for dynamically generated items
 		sidebarProjectsListEl.querySelectorAll(".sidebar-chat-item").forEach((el) => {
-			const onActivate = () => {
+			const onActivate = (e) => {
+				if (e.target.closest("[data-action='chat-menu']")) return
 				const taskId = el.getAttribute("data-task-id")
 				const ws = el.getAttribute("data-workspace")
 				if (taskId) switchChat(taskId, ws)
 			}
 			el.addEventListener("click", onActivate)
+			el.addEventListener("contextmenu", (e) => {
+				e.preventDefault()
+				e.stopPropagation()
+				const taskId = el.getAttribute("data-task-id")
+				const ws = el.getAttribute("data-workspace")
+				if (taskId && ws) {
+					openChatContextMenu(e, taskId, ws, el)
+				}
+			})
 			el.addEventListener("keydown", (e) => {
 				if (e.key === "Enter" || e.key === " ") {
+					if (e.target.closest("[data-action='chat-menu']")) return
 					e.preventDefault()
-					onActivate()
+					const taskId = el.getAttribute("data-task-id")
+					const ws = el.getAttribute("data-workspace")
+					if (taskId) switchChat(taskId, ws)
 				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='chat-menu']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.preventDefault()
+				e.stopPropagation()
+				const taskId = btn.getAttribute("data-task-id")
+				const ws = btn.getAttribute("data-workspace")
+				if (taskId && ws) {
+					openChatContextMenu(e, taskId, ws, btn)
+				}
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll("[data-action='remove-project']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation()
+				const ws = btn.getAttribute("data-workspace")
+				if (ws) removeRecentWorkspace(ws)
 			})
 		})
 
@@ -1093,14 +1413,6 @@
 				e.stopPropagation()
 				const ws = btn.getAttribute("data-workspace")
 				if (ws) startNewChat(ws)
-			})
-		})
-
-		sidebarProjectsListEl.querySelectorAll("[data-action='remove-project']").forEach((btn) => {
-			btn.addEventListener("click", (e) => {
-				e.stopPropagation()
-				const ws = btn.getAttribute("data-workspace")
-				if (ws) removeRecentWorkspace(ws)
 			})
 		})
 	}
@@ -3403,8 +3715,47 @@
 		}
 	})
 
+	// Confirmation Modal Listeners
+	confirmationModalConfirmBtn?.addEventListener("click", () => {
+		const action = confirmationAction
+		closeConfirmationModal()
+		if (typeof action === "function") {
+			action()
+		}
+	})
+	confirmationModalCancelBtn?.addEventListener("click", closeConfirmationModal)
+	confirmationModalCloseBtn?.addEventListener("click", closeConfirmationModal)
+	confirmationModalBackdrop?.addEventListener("click", (e) => {
+		if (e.target === confirmationModalBackdrop) {
+			closeConfirmationModal()
+		}
+	})
+
+	// Context Menu Dismissals
+	document.addEventListener("click", (e) => {
+		if (sidebarContextMenuEl && !sidebarContextMenuEl.classList.contains("hidden")) {
+			if (!sidebarContextMenuEl.contains(e.target) && !e.target.closest("[data-action='chat-menu'], [data-action='project-menu']")) {
+				closeSidebarContextMenu()
+			}
+		}
+	})
+	window.addEventListener("resize", () => {
+		closeSidebarContextMenu()
+	})
+	window.addEventListener("scroll", () => {
+		closeSidebarContextMenu()
+	}, true)
+
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") {
+			if (sidebarContextMenuEl && !sidebarContextMenuEl.classList.contains("hidden")) {
+				closeSidebarContextMenu()
+				return
+			}
+			if (confirmationModalBackdrop && !confirmationModalBackdrop.classList.contains("hidden")) {
+				closeConfirmationModal()
+				return
+			}
 			if (settingsModalBackdrop && !settingsModalBackdrop.classList.contains("hidden")) {
 				closeSettingsModal()
 				return

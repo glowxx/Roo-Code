@@ -443,6 +443,34 @@
 		</div>
 	</div>
 
+	<!-- Sidebar Context Menu (for Projects and Chats) -->
+	<div id="sidebar-context-menu" class="sidebar-context-menu hidden" role="menu" tabindex="-1" aria-hidden="true"></div>
+
+	<!-- Management Confirmation Modal (Delete Chat / Remove Project) -->
+	<div id="confirmation-modal-backdrop" class="modal-backdrop hidden" style="display: none;">
+		<div class="modal-card confirmation-modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmation-modal-title">
+			<div class="modal-header">
+				<div class="modal-title-row">
+					<div class="modal-icon-badge" id="confirmation-modal-icon">⚠️</div>
+					<div>
+						<h3 class="modal-title" id="confirmation-modal-title">Confirm Action</h3>
+						<p class="modal-subtitle" id="confirmation-modal-subtitle"></p>
+					</div>
+				</div>
+				<button class="modal-close-btn" id="confirmation-modal-close-btn" title="Close (Esc)" aria-label="Close">&times;</button>
+			</div>
+			<div class="modal-body">
+				<p id="confirmation-modal-body" class="confirmation-body-text"></p>
+			</div>
+			<div class="modal-footer">
+				<div class="modal-footer-right">
+					<button class="btn btn-secondary" id="confirmation-modal-cancel-btn">Cancel</button>
+					<button class="btn btn-danger" id="confirmation-modal-confirm-btn">Confirm</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<script src="app.js"></script>
 </body>
 </html>

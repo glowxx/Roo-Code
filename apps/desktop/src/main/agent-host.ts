@@ -1,6 +1,7 @@
 import { createRequire } from "module"
 import path from "path"
 import fs from "fs"
+import os from "os"
 import { fileURLToPath } from "url"
 import { EventEmitter } from "events"
 import { execSync } from "child_process"
@@ -10,7 +11,7 @@ const __dirname = path.dirname(__filename)
 import { RooCodeEventName, type ExtensionMessage, type WebviewMessage } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
 import type { AgentStatusType, TerminalLogEntry, DiffFileEntry } from "../shared/types.js"
-import { canonicalizePath } from "./config.js"
+import { canonicalizePath, arePathsEqual, loadDesktopConfig, saveDesktopConfig } from "./config.js"
 
 export interface AgentHostOptions {
 	workspacePath: string
@@ -41,12 +42,15 @@ export class DesktopAgentHost extends EventEmitter {
 	private provider: any = null
 	private currentWorkspaceEpoch = 0
 	private pendingWorkspaceChangeAbortController: AbortController | null = null
+	private deletedTaskIds: Set<string> = new Set()
 
 	constructor(options: AgentHostOptions) {
 		super()
 		this.currentWorkspace = options.workspacePath && options.workspacePath.trim() ? canonicalizePath(options.workspacePath) : ""
 		this.extensionPath = path.normalize(path.resolve(options.extensionPath))
-		this.storageDir = options.storageDir ? path.normalize(path.resolve(options.storageDir)) : undefined
+		this.storageDir = options.storageDir
+			? path.normalize(path.resolve(options.storageDir))
+			: path.join(process.env.APPDATA || os.homedir(), ".roo-desktop-data")
 	}
 
 	public getWorkspace(): string {
@@ -455,7 +459,7 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public async markChatRead(taskId: string): Promise<void> {
-		if (!taskId) return
+		if (!taskId || this.deletedTaskIds.has(taskId)) return
 		let changed = false
 
 		if (this.provider?.taskHistoryStore) {
@@ -495,7 +499,7 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public async handleTaskCompleted(taskId: string): Promise<void> {
-		if (!taskId) return
+		if (!taskId || this.deletedTaskIds.has(taskId)) return
 		const isBackground = taskId !== this.activeTaskId
 		let changed = false
 
@@ -615,7 +619,7 @@ export class DesktopAgentHost extends EventEmitter {
 		> = {}
 
 		for (const item of items) {
-			if (!item || !item.id) continue
+			if (!item || !item.id || this.deletedTaskIds.has(String(item.id))) continue
 			let ws = ""
 			if (item.workspace && typeof item.workspace === "string" && item.workspace.trim()) {
 				ws = canonicalizePath(item.workspace.trim())
@@ -723,7 +727,7 @@ export class DesktopAgentHost extends EventEmitter {
 	}
 
 	public async showTaskWithId(taskId: string): Promise<void> {
-		if (!taskId || typeof taskId !== "string") return
+		if (!taskId || typeof taskId !== "string" || this.deletedTaskIds.has(taskId)) return
 		this.activeTaskId = taskId
 		await this.markChatRead(taskId)
 		if (this.provider && typeof this.provider.showTaskWithId === "function") {
@@ -763,6 +767,193 @@ export class DesktopAgentHost extends EventEmitter {
 		} else {
 			this.sendToExtension({ type: "clearTask" } as any)
 		}
+	}
+
+	public isTaskDeleted(taskId: string): boolean {
+		return this.deletedTaskIds.has(taskId)
+	}
+
+	public isTaskRunning(taskId: string): boolean {
+		if (this.deletedTaskIds.has(taskId)) return false
+		const runningTask = this.provider?.runningTasks?.get(taskId)
+		if (runningTask) {
+			return (
+				runningTask.taskStatus === "running" ||
+				runningTask.isStreaming === true ||
+				runningTask.isWaitingForFirstChunk === true
+			)
+		}
+		const curTask = this.provider?.getCurrentTask?.()
+		if (curTask && curTask.taskId === taskId) {
+			return (
+				curTask.taskStatus === "running" ||
+				curTask.isStreaming === true ||
+				curTask.isWaitingForFirstChunk === true
+			)
+		}
+		return false
+	}
+
+	public async stopTask(taskId: string): Promise<boolean> {
+		const runningTask =
+			this.provider?.runningTasks?.get(taskId) ||
+			(this.provider?.getCurrentTask?.()?.taskId === taskId ? this.provider.getCurrentTask() : undefined)
+
+		if (!runningTask) return true
+
+		try {
+			if (typeof this.provider?.cancelTask === "function") {
+				await this.provider.cancelTask(runningTask)
+			} else {
+				runningTask.cancelCurrentRequest?.()
+				runningTask.abortCompaction?.()
+				runningTask.abortReason = "user_cancelled"
+				runningTask.abort = true
+				if (typeof runningTask.abortTask === "function") {
+					await runningTask.abortTask(true)
+				}
+				runningTask.abandoned = true
+				this.provider?.runningTasks?.delete(taskId)
+			}
+			return true
+		} catch (err) {
+			console.error(`[DesktopAgentHost] Failed to stop task ${taskId}:`, err)
+			return false
+		}
+	}
+
+	public async deleteChat(
+		taskId: string,
+		forceStop: boolean = false
+	): Promise<{ success: boolean; error?: string; requiresStop?: boolean; reason?: string; runningCount?: number }> {
+		if (!taskId || typeof taskId !== "string") {
+			return { success: false, error: "Invalid task ID" }
+		}
+
+		if (this.deletedTaskIds.has(taskId)) {
+			return { success: true }
+		}
+
+		if (this.isTaskRunning(taskId)) {
+			if (!forceStop) {
+				return {
+					success: false,
+					requiresStop: true,
+					reason: "requires_force_stop",
+					runningCount: 1,
+					error: "This chat currently has an active task.",
+				}
+			}
+			const stopped = await this.stopTask(taskId)
+			if (!stopped) {
+				return { success: false, error: "Failed to stop active task before deletion." }
+			}
+		}
+
+		// 1. Mark tombstone to block any late asynchronous callbacks from recreating/touching it
+		this.deletedTaskIds.add(taskId)
+
+		// 2. Identify the workspace for this chat to handle active task fallback selection
+		const chatsByWs = this.getChatsByWorkspace()
+		let taskWs: string | null = null
+		for (const [wsKey, chatList] of Object.entries(chatsByWs)) {
+			if (chatList.some((c) => c.id === taskId)) {
+				taskWs = wsKey
+				break
+			}
+		}
+		if (!taskWs) {
+			taskWs = this.currentWorkspace || "__unassigned__"
+		}
+
+		// 3. If currently selected/active task is the one being deleted:
+		// Pick the next newest chat in the same workspace or clear task
+		const currentActiveId = this.activeTaskId || this.provider?.getCurrentTask?.()?.taskId
+		const wasActive = currentActiveId === taskId
+		if (wasActive) {
+			const remainingChats = (chatsByWs[taskWs] || []).filter(
+				(c) => c.id !== taskId && !this.deletedTaskIds.has(c.id)
+			)
+			if (remainingChats.length > 0) {
+				await this.showTaskWithId(remainingChats[0]!.id)
+			} else {
+				await this.clearTask()
+			}
+		}
+
+		// 4. Dispose runtime ownership
+		if (this.provider?.runningTasks?.has(taskId)) {
+			this.provider.runningTasks.delete(taskId)
+		}
+		if (this.provider?.getCurrentTask?.()?.taskId === taskId) {
+			try {
+				await this.provider.removeClineFromStack?.()
+			} catch {}
+		}
+
+		// Clean up chat-owned terminal logs
+		this.terminalLogs = this.terminalLogs.filter((s) => s.taskId !== taskId)
+		for (const [wsKey, logs] of this.terminalLogsByWorkspace.entries()) {
+			this.terminalLogsByWorkspace.set(
+				wsKey,
+				logs.filter((s) => s.taskId !== taskId)
+			)
+		}
+		this.emit("terminalLogsUpdated", this.terminalLogs)
+
+		// 5. Delete persistence via provider or direct fallback
+		if (this.provider && typeof this.provider.deleteTaskWithId === "function") {
+			try {
+				await this.provider.deleteTaskWithId(taskId)
+			} catch (err) {
+				console.warn(`[DesktopAgentHost] provider.deleteTaskWithId error:`, err)
+			}
+		}
+
+		if (this.provider?.taskHistoryStore) {
+			if (typeof this.provider.taskHistoryStore.deleteTaskWithId === "function") {
+				try {
+					await this.provider.taskHistoryStore.deleteTaskWithId(taskId)
+				} catch {}
+			} else if (typeof this.provider.taskHistoryStore.delete === "function") {
+				try {
+					await this.provider.taskHistoryStore.delete(taskId)
+				} catch {}
+			}
+		}
+
+		if (this.storageDir) {
+			try {
+				const appDataDir = process.env.APPDATA || os.homedir()
+				const candidateDirs = [
+					path.join(this.storageDir, "global-storage", "tasks", taskId),
+					path.join(this.storageDir, "tasks", taskId),
+					path.join(this.storageDir, "Roo-Code", "tasks", taskId),
+					path.join(appDataDir, "Roo-Code", "tasks", taskId),
+					path.join(appDataDir, ".roo-desktop-data", "global-storage", "tasks", taskId),
+					path.join(appDataDir, ".roo-desktop-data", "tasks", taskId),
+				]
+				for (const d of candidateDirs) {
+					if (fs.existsSync(d)) {
+						fs.rmSync(d, { recursive: true, force: true })
+					}
+				}
+				const indexPath = path.join(this.storageDir, "global-storage", "tasks", "_index.json")
+				if (fs.existsSync(indexPath)) {
+					const content = fs.readFileSync(indexPath, "utf-8")
+					const parsed = JSON.parse(content)
+					if (Array.isArray(parsed?.entries)) {
+						parsed.entries = parsed.entries.filter((e: any) => e.id !== taskId)
+						fs.writeFileSync(indexPath, JSON.stringify(parsed, null, 2), "utf-8")
+					}
+				}
+			} catch (err) {
+				console.warn(`[DesktopAgentHost] storageDir task cleanup error:`, err)
+			}
+		}
+
+		this.emit("taskHistoryChanged")
+		return { success: true }
 	}
 
 	public sendToExtension(message: WebviewMessage): void {
@@ -966,19 +1157,21 @@ export class DesktopAgentHost extends EventEmitter {
 				this.setStatus("idle")
 				this.finishRunningTerminalLogs()
 				const currentId = this.provider?.getCurrentTask?.()?.taskId || this.activeTaskId
-				if (currentId) {
+				if (currentId && !this.deletedTaskIds.has(currentId)) {
 					this.handleTaskCompleted(currentId).catch(() => {})
 				}
 			}
 		} else if (raw.type === "ask") {
 			this.setStatus("waiting_approval")
 		} else if (raw.type === "state" && raw.state?.currentTaskId) {
-			if (!this.activeTaskId) {
+			if (!this.deletedTaskIds.has(raw.state.currentTaskId) && !this.activeTaskId) {
 				this.activeTaskId = raw.state.currentTaskId
 			}
 		} else if (raw.type === "showTaskWithId" && raw.text) {
-			this.activeTaskId = raw.text
-			this.markChatRead(raw.text).catch(() => {})
+			if (!this.deletedTaskIds.has(raw.text)) {
+				this.activeTaskId = raw.text
+				this.markChatRead(raw.text).catch(() => {})
+			}
 		} else if (raw.type === "clearTask") {
 			this.activeTaskId = null
 		}

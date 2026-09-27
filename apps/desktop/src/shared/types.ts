@@ -68,6 +68,7 @@ export type DesktopClientMessage =
 	| { type: "newChat"; workspacePath?: string }
 	| { type: "removeRecentWorkspace"; path: string }
 	| { type: "markChatRead"; taskId: string }
+	| { type: "deleteChat"; taskId: string; forceStop?: boolean }
 
 export type DesktopServerMessage =
 	| { type: "extensionMessage"; message: ExtensionMessage }
@@ -102,4 +103,5 @@ export type DesktopServerMessage =
 			isTruncated?: boolean
 			error?: string
 	  }
+	| { type: "chatDeleted"; taskId: string; success: boolean; error?: string; requiresStop?: boolean }
 	| { type: "error"; message: string }
