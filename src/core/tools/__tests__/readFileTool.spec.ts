@@ -278,7 +278,7 @@ describe("ReadFileTool", () => {
 			)
 		})
 
-		it("should reset consecutiveMistakeCount on successful file read", async () => {
+		it("should preserve consecutiveMistakeCount on successful file read (does not reset mutation failure budget)", async () => {
 			const mockTask = createMockTask()
 			mockTask.consecutiveMistakeCount = 2
 			const callbacks = createMockCallbacks()
@@ -288,7 +288,7 @@ describe("ReadFileTool", () => {
 
 			await readFileTool.execute({ path: "test.txt" }, mockTask as any, callbacks)
 
-			expect(mockTask.consecutiveMistakeCount).toBe(0)
+			expect(mockTask.consecutiveMistakeCount).toBe(2)
 		})
 	})
 

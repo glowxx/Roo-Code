@@ -324,9 +324,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							break
 						case "tool": {
 							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							const isAutoSuppress =
+								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("tool")
-							if (isEvaluating) {
+							if (isEvaluating || isAutoSuppress) {
 								setEnableButtons(false)
 								setPrimaryButtonText(undefined)
 								setSecondaryButtonText(undefined)
@@ -381,11 +383,25 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							break
 						}
 						case "command": {
-							const isExecuting = !!lastMessage?.text?.includes(COMMAND_OUTPUT_STRING)
+							const isExecuting =
+								!!lastMessage?.text?.includes(COMMAND_OUTPUT_STRING) ||
+								lastMessage?.approvalState === "AUTO_APPROVED"
 							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							const isAutoSuppress =
+								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("command")
-							if (isExecuting) {
+							if (isAutoSuppress) {
+								if (isExecuting) {
+									setEnableButtons(true)
+									setPrimaryButtonText(undefined)
+									setSecondaryButtonText(t("chat:cancel.title"))
+								} else {
+									setEnableButtons(false)
+									setPrimaryButtonText(undefined)
+									setSecondaryButtonText(undefined)
+								}
+							} else if (isExecuting) {
 								setEnableButtons(true)
 								setPrimaryButtonText(undefined)
 								setSecondaryButtonText(t("chat:cancel.title"))
@@ -403,15 +419,23 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "command_output":
 							setSendingDisabled(false)
 							setClineAsk("command_output")
-							setEnableButtons(true)
-							setPrimaryButtonText(t("chat:proceedWhileRunning.title"))
-							setSecondaryButtonText(t("chat:killCommand.title"))
+							if (approvalMode === "auto") {
+								setEnableButtons(false)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(undefined)
+							} else {
+								setEnableButtons(true)
+								setPrimaryButtonText(t("chat:proceedWhileRunning.title"))
+								setSecondaryButtonText(t("chat:killCommand.title"))
+							}
 							break
 						case "use_mcp_server": {
 							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							const isAutoSuppress =
+								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("use_mcp_server")
-							if (isEvaluating) {
+							if (isEvaluating || isAutoSuppress) {
 								setEnableButtons(false)
 								setPrimaryButtonText(undefined)
 								setSecondaryButtonText(undefined)

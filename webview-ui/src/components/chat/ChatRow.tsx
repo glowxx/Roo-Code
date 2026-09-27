@@ -328,7 +328,10 @@ export const ChatRowContent = ({
 			: undefined
 
 	const isCommandExecuting =
-		isLast && lastModifiedMessage?.ask === "command" && lastModifiedMessage?.text?.includes(COMMAND_OUTPUT_STRING)
+		isLast &&
+		lastModifiedMessage?.ask === "command" &&
+		(lastModifiedMessage?.text?.includes(COMMAND_OUTPUT_STRING) ||
+			lastModifiedMessage?.approvalState === "AUTO_APPROVED")
 
 	const isMcpServerResponding = isLast && lastModifiedMessage?.say === "mcp_server_request_started"
 

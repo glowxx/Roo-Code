@@ -184,6 +184,11 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 				task.failedDiffHashesForPath?.set(relPath, failedHashes)
 			}
 
+			const mistakeLimit = task.consecutiveMistakeLimit || 3
+			if (currentCount >= mistakeLimit) {
+				task.consecutiveMistakeCount = Math.max(task.consecutiveMistakeCount, mistakeLimit)
+			}
+
 			if (currentCount >= 2) {
 				await task.say("diff_error", formattedError)
 			}

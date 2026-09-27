@@ -715,9 +715,72 @@ describe("Task safety interceptor", () => {
 			// No command_safety_warning offering manual Run
 			expect(saySpy).not.toHaveBeenCalledWith(
 				"command_safety_warning",
-				expect.stringContaining("Manual approval required")
+				expect.stringContaining("Manual approval required"),
 			)
 		})
 	})
+
+	describe("Turn-boundary resets and model switch ACAC baseline", () => {
+		it("resets consecutive completion, replan counters and unresolved denial state when user responds or approves", () => {
+			;(task as any).consecutiveAttemptCompletionCount = 3
+			;(task as any).consecutiveIdenticalCompletionCount = 2
+			;(task as any).consecutiveReplanCount = 4
+			;(task as any).lastCompletionFingerprint = "fingerprint_abc"
+			;(task as any).unresolvedDenialState = { actionType: "write_to_file", reason: "Blocked" }
+
+			task.handleWebviewAskResponse("messageResponse", "User instruction")
+
+			expect((task as any).consecutiveAttemptCompletionCount).toBe(0)
+			expect((task as any).consecutiveIdenticalCompletionCount).toBe(0)
+			expect((task as any).consecutiveReplanCount).toBe(0)
+			expect((task as any).lastCompletionFingerprint).toBeNull()
+			expect((task as any).unresolvedDenialState).toBeNull()
+
+			// Test yesButtonClicked as well
+			;(task as any).consecutiveAttemptCompletionCount = 2
+			;(task as any).consecutiveIdenticalCompletionCount = 1
+			;(task as any).consecutiveReplanCount = 2
+			;(task as any).lastCompletionFingerprint = "fingerprint_xyz"
+			;(task as any).unresolvedDenialState = { actionType: "execute_command", reason: "Denied" }
+
+			task.handleWebviewAskResponse("yesButtonClicked")
+
+			expect((task as any).consecutiveAttemptCompletionCount).toBe(0)
+			expect((task as any).consecutiveIdenticalCompletionCount).toBe(0)
+			expect((task as any).consecutiveReplanCount).toBe(0)
+			expect((task as any).lastCompletionFingerprint).toBeNull()
+			expect((task as any).unresolvedDenialState).toBeNull()
+		})
+
+		it("resets ACAC compaction metrics when model or provider changes in updateApiConfiguration", () => {
+			;(task as any).apiConfiguration = {
+				apiProvider: "openai",
+				apiModelId: "gpt-4o",
+			}
+			;(task as any).requestsSinceLastCompaction = 45
+			;(task as any).tokensInAtLastCompaction = 10000
+			;(task as any).retryRetransmissionTokens = 5000
+			;(task as any).getTokenUsage = vi.fn().mockReturnValue({ totalTokensIn: 85000 })
+
+			// Switch to a new model
+			task.updateApiConfiguration({
+				apiProvider: "openai",
+				apiModelId: "gpt-4o-mini",
+			} as any)
+
+			expect((task as any).requestsSinceLastCompaction).toBe(0)
+			expect((task as any).tokensInAtLastCompaction).toBe(85000)
+			expect((task as any).retryRetransmissionTokens).toBe(0)
+
+			// If updated with same configuration, metrics should NOT be reset
+			;(task as any).requestsSinceLastCompaction = 10
+			task.updateApiConfiguration({
+				apiProvider: "openai",
+				apiModelId: "gpt-4o-mini",
+			} as any)
+			expect((task as any).requestsSinceLastCompaction).toBe(10)
+		})
+	})
 })
+
 

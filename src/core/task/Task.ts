@@ -1388,30 +1388,54 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Negative promotion directives
 		const noPromoteRegex = /(?:nie\s+promuj|do\s+not\s+promote)/i
 
+		// Check for scoped prohibitions in initial goal
+		const scopedDenyMatch = initialGoal.match(/(?:nie\s+commituj\s+zmian|do\s+not\s+commit\s+changes\s+to)\s*([^\n.;]+)/i)
+		const scopedAllowMatch = initialGoal.match(/(?:masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|commit\s+wyłącznie|you\s+(?:may|can)\s+commit\s+only)\s*([^\n.;]+)/i)
+
 		// Check initial prompt
 		let hasNoModify = noModifyRegex.test(initialGoal)
-		let hasNoCommit = noCommitRegex.test(initialGoal)
+		let hasNoCommit = noCommitRegex.test(initialGoal) && !scopedDenyMatch && !scopedAllowMatch
 		let hasNoBuild = noBuildRegex.test(initialGoal)
 		let hasNoSign = noSignRegex.test(initialGoal)
 		let hasNoActivate = noActivateRegex.test(initialGoal)
 		let hasNoPromote = noPromoteRegex.test(initialGoal)
+
+		const scopedDenies: string[] = []
+		const scopedAllows: string[] = []
+
+		if (scopedDenyMatch && scopedDenyMatch[1]) {
+			scopedDenies.push(scopedDenyMatch[1].trim())
+		}
+		if (scopedAllowMatch && scopedAllowMatch[1]) {
+			scopedAllows.push(scopedAllowMatch[1].trim())
+		}
 
 		// Check subsequent user instructions in conversation history
 		for (const msg of this.clineMessages) {
 			if (msg.type === "say" && msg.say === "user_feedback" && msg.text) {
 				const text = msg.text
 
-				// Positive override checking (e.g. user says: "Możesz jednak zmodyfikować kod" or "Now fix blockers")
-				if (/(?:możesz(?:\s+jednak)?\s+modyfikować|you\s+can\s+modify|you\s+may\s+modify|now\s+fix|napraw\s+blockery)/i.test(text)) {
+				// Positive override checking (e.g. user says: "Możesz jednak zmodyfikować kod" or "Now fix blockers" or "Napraw...")
+				if (/(?:możesz(?:\s+jednak)?\s+(?:modyfikować|przygotować)|you\s+can\s+modify|now\s+fix|napraw|popraw|zaimplementuj|implement|update|edit|refactor)/i.test(text)) {
 					hasNoModify = false
-				} else if (noModifyRegex.test(text)) {
+				} else if (noModifyRegex.test(text) && !/applies\s+only|tylko\s+do/i.test(text)) {
 					hasNoModify = true
 				}
 
-				if (/(?:możesz(?:\s+jednak)?\s+commitować|you\s+can\s+commit|you\s+may\s+commit|stwórz\s+commity)/i.test(text)) {
+				if (/(?:możesz(?:\s+jednak)?\s+commitować|you\s+can\s+commit|you\s+may\s+commit|stwórz\s+commit|zrób\s+commit|commits?:|commituj|proceed\s+with.*(?:commit|add)|yes.*(?:commit|add)|tak.*commit)/i.test(text)) {
 					hasNoCommit = false
-				} else if (noCommitRegex.test(text)) {
+				} else if (noCommitRegex.test(text) && !/proceed\s+with|applies\s+only|tylko\s+do/i.test(text)) {
 					hasNoCommit = true
+				}
+
+				// Check follow-up scoped allow/confirmations
+				const followUpAllow = text.match(/(?:commit\s+for|commit\s+wyłącznie|proceed\s+with\s+git\s+add\s+and\s+commit\s+for)\s*([^\n.;]+)/i)
+				if (followUpAllow && followUpAllow[1]) {
+					const cleanScope = followUpAllow[1].replace(/\s+only.*$/i, "").trim()
+					if (cleanScope && !scopedAllows.includes(cleanScope)) {
+						scopedAllows.push(cleanScope)
+					}
+					hasNoCommit = false
 				}
 
 				if (noBuildRegex.test(text)) hasNoBuild = true
@@ -1423,6 +1447,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		if (hasNoModify) constraints.push("DO NOT modify code (READ-ONLY review)")
 		if (hasNoCommit) constraints.push("DO NOT commit changes (NIE commituj)")
+		for (const d of scopedDenies) {
+			constraints.push(`DO NOT commit changes to ${d} (NIE commituj zmian ${d})`)
+		}
+		for (const a of scopedAllows) {
+			constraints.push(`ALLOWED to commit ${a} (Masz pozwolenie na commit ${a})`)
+		}
 		if (hasNoBuild) constraints.push("DO NOT build release candidate (NIE buduj candidate)")
 		if (hasNoSign) constraints.push("DO NOT sign release (NIE podpisuj release)")
 		if (hasNoActivate) constraints.push("DO NOT perform production activation (NIE wykonuj production activation)")
@@ -1809,6 +1839,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 						this.autoApprovalTimeoutRef = undefined
 					}, timeoutApproval.timeout)
 					timeouts.push(this.autoApprovalTimeoutRef)
+				} else {
+					const askMsg = this.clineMessages.find((m) => m.ts === askTs)
+					if (askMsg) {
+						askMsg.approvalState = "USER_DECISION_REQUIRED"
+						this.updateClineMessage(askMsg)
+					}
 				}
 			} else {
 				const request = this.buildApprovalRequest({ askType: type, text, isProtected, askTs })
@@ -2321,6 +2357,15 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		this.askResponseText = text
 		this.askResponseImages = images
 
+		// Reset turn-boundary loop counters and unresolved denial state when user responds or approves
+		if (askResponse === "messageResponse" || askResponse === "yesButtonClicked") {
+			this.consecutiveAttemptCompletionCount = 0
+			this.consecutiveIdenticalCompletionCount = 0
+			this.consecutiveReplanCount = 0
+			this.lastCompletionFingerprint = null
+			this.unresolvedDenialState = null
+		}
+
 		// Create a checkpoint whenever the user sends a message.
 		// Use allowEmpty=true to ensure a checkpoint is recorded even if there are no file changes.
 		// Suppress the checkpoint_saved chat row for this particular checkpoint to keep the timeline clean.
@@ -2392,9 +2437,22 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 	 * @param newApiConfiguration - The new API configuration to use
 	 */
 	public updateApiConfiguration(newApiConfiguration: ProviderSettings): void {
+		const prevModelId = this.apiConfiguration?.apiModelId
+		const nextModelId = newApiConfiguration?.apiModelId
+		const prevProvider = this.apiConfiguration?.apiProvider
+		const nextProvider = newApiConfiguration?.apiProvider
+
 		// Update the configuration and rebuild the API handler
 		this.apiConfiguration = newApiConfiguration
 		this.api = buildApiHandler(this.apiConfiguration)
+
+		// Reset ACAC metrics if model or provider changed to prevent immediate spurious compaction
+		if (prevModelId !== nextModelId || prevProvider !== nextProvider) {
+			this.requestsSinceLastCompaction = 0
+			const { totalTokensIn } = this.getTokenUsage()
+			this.tokensInAtLastCompaction = totalTokensIn ?? 0
+			this.retryRetransmissionTokens = 0
+		}
 	}
 
 	public async submitUserMessage(

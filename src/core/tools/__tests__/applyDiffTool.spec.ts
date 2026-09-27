@@ -247,4 +247,75 @@ describe("ApplyDiffTool", () => {
 		expect(result).toContain('"line": 3')
 		expect(mockTask.consecutiveMistakeCount).toBe(1)
 	})
+
+	it("enforces bounded recovery: consecutive different failing diffs escalate to mistakeLimit", async () => {
+		mockTask.consecutiveMistakeLimit = 3
+		mockTask.diffStrategy.applyDiff.mockResolvedValue({
+			success: false,
+			error: "Diff mismatch",
+		})
+
+		const diff1 = `<<<<<<< SEARCH\n:start_line:1\n-------\nAttempt 1\n=======\nFix 1\n>>>>>>> REPLACE`
+		const diff2 = `<<<<<<< SEARCH\n:start_line:1\n-------\nAttempt 2\n=======\nFix 2\n>>>>>>> REPLACE`
+		const diff3 = `<<<<<<< SEARCH\n:start_line:1\n-------\nAttempt 3\n=======\nFix 3\n>>>>>>> REPLACE`
+
+		await executeApplyDiff({ diff: diff1 })
+		expect(mockTask.consecutiveMistakeCount).toBe(1)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get(testFilePath)).toBe(1)
+		expect(mockTask.didToolFailInCurrentTurn).toBe(true)
+
+		await executeApplyDiff({ diff: diff2 })
+		expect(mockTask.consecutiveMistakeCount).toBe(2)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get(testFilePath)).toBe(2)
+
+		await executeApplyDiff({ diff: diff3 })
+		expect(mockTask.consecutiveMistakeCount).toBe(3)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get(testFilePath)).toBe(3)
+		// Escalated to limit so task halts or prompts user
+		expect(mockTask.consecutiveMistakeCount).toBeGreaterThanOrEqual(mockTask.consecutiveMistakeLimit)
+	})
+
+	it("isolates failure counts per file: errors on File A do not poison File B", async () => {
+		mockTask.diffStrategy.applyDiff.mockResolvedValue({
+			success: false,
+			error: "Diff mismatch",
+		})
+
+		const fileADiff = `<<<<<<< SEARCH\n:start_line:1\n-------\nLine A\n=======\nNew A\n>>>>>>> REPLACE`
+		const fileBDiff = `<<<<<<< SEARCH\n:start_line:1\n-------\nLine B\n=======\nNew B\n>>>>>>> REPLACE`
+
+		// Failing diff on file A (testFilePath = "test/file.ts")
+		await executeApplyDiff({ path: "fileA.ts", diff: fileADiff })
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get("fileA.ts")).toBe(1)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get("fileB.ts")).toBeUndefined()
+
+		// Failing diff on file B
+		await executeApplyDiff({ path: "fileB.ts", diff: fileBDiff })
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get("fileA.ts")).toBe(1)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get("fileB.ts")).toBe(1)
+	})
+
+	it("resets failure budget and cached hashes for target file upon successful mutation", async () => {
+		mockTask.diffStrategy.applyDiff.mockResolvedValueOnce({
+			success: false,
+			error: "Diff mismatch",
+		})
+
+		const failingDiff = `<<<<<<< SEARCH\n:start_line:1\n-------\nOld line\n=======\nBad line\n>>>>>>> REPLACE`
+		await executeApplyDiff({ path: "target.ts", diff: failingDiff })
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.get("target.ts")).toBe(1)
+		expect(mockTask.failedDiffHashesForPath.get("target.ts")?.has(failingDiff.trim())).toBe(true)
+
+		// Now succeed
+		mockTask.diffStrategy.applyDiff.mockResolvedValueOnce({
+			success: true,
+			content: "Successful content",
+		})
+		const successDiff = `<<<<<<< SEARCH\n:start_line:1\n-------\nActual old\n=======\nGood new\n>>>>>>> REPLACE`
+		await executeApplyDiff({ path: "target.ts", diff: successDiff })
+
+		expect(mockTask.consecutiveMistakeCount).toBe(0)
+		expect(mockTask.consecutiveMistakeCountForApplyDiff.has("target.ts")).toBe(false)
+		expect(mockTask.failedDiffHashesForPath.has("target.ts")).toBe(false)
+	})
 })

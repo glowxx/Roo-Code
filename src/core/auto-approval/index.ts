@@ -69,14 +69,14 @@ export async function checkAutoApproval({
 			try {
 				const suggestion = (JSON.parse(text || "{}") as FollowUpData).suggest?.[0]
 
-				if (
-					suggestion &&
-					typeof state.followupAutoApproveTimeoutMs === "number" &&
-					state.followupAutoApproveTimeoutMs > 0
-				) {
+				if (suggestion) {
+					const timeout =
+						typeof state.followupAutoApproveTimeoutMs === "number" && state.followupAutoApproveTimeoutMs > 0
+							? state.followupAutoApproveTimeoutMs
+							: 0
 					return {
 						decision: "timeout",
-						timeout: state.followupAutoApproveTimeoutMs,
+						timeout,
 						fn: () => ({ askResponse: "messageResponse", text: suggestion.answer }),
 					}
 				} else {

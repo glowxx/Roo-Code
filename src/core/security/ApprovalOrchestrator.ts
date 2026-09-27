@@ -425,10 +425,10 @@ export class ApprovalOrchestrator {
 				/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
 			)
 			const isReadOnlyOrReportScope =
-				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj/i.test(
+				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj|zgł[oó]ś\s+blocker|zglos\s+blocker|zaraportuj|tylko\s+audyt|tylko\s+inspekcja|zako[nń]cz\s+bez\s+zmian/i.test(
 					request.taskContext.latestUserInstruction || ""
 				) ||
-				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj/i.test(
+				/stop.*without\s+modifying|keep.*read-only|report.*blocker|tylko\s+raport|nie\s+modyfikuj|zgł[oó]ś\s+blocker|zglos\s+blocker|zaraportuj|tylko\s+audyt|tylko\s+inspekcja|zako[nń]cz\s+bez\s+zmian/i.test(
 					request.taskContext.activeGoal || ""
 				)
 
@@ -527,6 +527,71 @@ export class ApprovalOrchestrator {
 				}
 			}
 
+			// Gate 4b: Check blocked TODOs (Invariant: BLOCKED != COMPLETED)
+			// Under standard user instruction, blocked items MUST NOT auto-complete as ALLOW_AUTO.
+			// They require user decision / approval (MANUAL_APPROVAL).
+			// Exception (Case 1): Scope changed to read-only/stop/report where mutating items are non-blocking.
+			const blocked = (target.todoListSnapshot || []).filter(
+				(t) => t.status === "blocked"
+			)
+			const actionableBlocked = blocked.filter((t) => {
+				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+					return false
+				}
+				return true
+			})
+
+			if (actionableBlocked.length > 0) {
+				return {
+					decision: "MANUAL_APPROVAL",
+					risk: "medium",
+					reason: `Cannot complete task with ${actionableBlocked.length} item(s) marked 'blocked' on the todo list without user approval.`,
+					taskAligned: false,
+					unresolvedItems: actionableBlocked.map((t) => ({
+						type: "blocked_todo",
+						content: t.content,
+						guidance: "Review blocked item with user or request explicit approval to proceed.",
+					})),
+				}
+			}
+
+			// Gate 4c: Check cancelled TODOs (unauthorized worker cancellations)
+			// Worker cannot unilaterally cancel items to bypass completion without user authorization.
+			const cancelled = (target.todoListSnapshot || []).filter(
+				(t) => t.status === "cancelled"
+			)
+			const isCancellationAuthorized =
+				hasNoModifyConstraint ||
+				isReadOnlyOrReportScope ||
+				/cancel|omit|skip|drop|abort|ignore|remove\s+requirement|pomi[nń]|anuluj|porzu[cć]|zignoruj|odrzu[cć]|nie\s+rób|zrezygnuj/i.test(
+					request.taskContext?.latestUserInstruction || ""
+				)
+
+			const actionableCancelled = isCancellationAuthorized
+				? []
+				: cancelled.filter((t) => {
+					const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
+					if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+						return false
+					}
+					return true
+				})
+
+			if (actionableCancelled.length > 0) {
+				return {
+					decision: "CONTINUE_WORK",
+					risk: "medium",
+					reason: `Worker cannot cancel todo items without user authorization (${actionableCancelled.length} item(s) cancelled).`,
+					taskAligned: false,
+					unresolvedItems: actionableCancelled.map((t) => ({
+						type: "cancelled_todo",
+						content: t.content,
+						guidance: "Resume cancelled work, or obtain user confirmation before dropping required tasks.",
+					})),
+				}
+			}
+
 			// Gate 5: If there are explicit completion criteria, delegate to AI Completion Judge
 			if (target.completionCriteria && target.completionCriteria.length > 0) {
 				return null // Delegate to independent AI Completion Judge
@@ -620,20 +685,122 @@ export class ApprovalOrchestrator {
 		if (actionType === "execute_command" && target.command) {
 			const cmd = target.command.trim()
 
-			// Check explicit negative constraint on committing
-			const hasNoCommitConstraint = (request.taskContext.explicitConstraints || []).some((c) =>
-				/nie\s+commituj|do\s+not\s+commit|don't\s+commit|no\s+commits?/i.test(c)
-			)
-			if (hasNoCommitConstraint && /^git\s+(commit|add|push)/i.test(cmd)) {
-				return {
-					decision: "DENY_AND_REPLAN",
-					risk: "medium",
-					reason: "The user explicitly forbade git commits/modifications ('NIE commituj'). Staging or committing code is forbidden.",
-					taskAligned: false,
-					hardBoundaryViolation: false,
-					isUserConstraintViolation: true,
-					violatedConstraint: "NIE commituj",
-					replanGuidance: "Do not stage or commit files. Keep changes unstaged or work strictly read-only per user instructions.",
+			// Check git operations (commit, add, push)
+			if (/^git\s+(commit|add|push)/i.test(cmd)) {
+				const explicitConstraints = request.taskContext.explicitConstraints || []
+				const latestInstruction = request.taskContext.latestUserInstruction || ""
+				const activeGoal = request.taskContext.activeGoal || ""
+
+				// 1. Check affirmative user override in latest user instruction
+				const hasAffirmativeOverride =
+					/(?:proceed\s+with|tak|yes|potwierdzam|confirm|allow|permit|go\s+ahead|approved?|możesz|you\s+can|you\s+may).*(?:commit|add|staging)/i.test(
+						latestInstruction
+					)
+
+				// 2. Extract scoped permissions and prohibitions
+				const scopedAllows: string[] = []
+				const scopedDenies: string[] = []
+
+				for (const c of explicitConstraints) {
+					const allowMatch = c.match(/(?:ALLOWED\s+to\s+commit|commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|możesz\s+commitować)\s*(.+)/i)
+					if (allowMatch && allowMatch[1]) {
+						scopedAllows.push(...allowMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+					}
+					const denyMatch = c.match(/(?:DO\s+NOT\s+commit(?:\s+changes)?(?:\s+to)?|nie\s+commituj(?:\s+zmian)?)\s*(.+)/i)
+					if (denyMatch && denyMatch[1]) {
+						const rawScope = denyMatch[1].replace(/\(nie\s+commituj\)/i, "").trim()
+						if (rawScope && !/^(changes|kodu|files)?$/i.test(rawScope)) {
+							scopedDenies.push(...rawScope.split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+						}
+					}
+				}
+
+				// Also inspect prompt text for scoped rules if not in explicitConstraints
+				const promptText = `${latestInstruction}\n${activeGoal}`
+				const promptAllowMatch = promptText.match(/(?:commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|you\s+(?:may|can)\s+commit\s+only)\s*([^\n.;]+)/i)
+				if (promptAllowMatch && promptAllowMatch[1]) {
+					scopedAllows.push(...promptAllowMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+				}
+				const promptDenyMatch = promptText.match(/(?:nie\s+commituj\s+zmian|do\s+not\s+commit\s+changes\s+to)\s*([^\n.;]+)/i)
+				if (promptDenyMatch && promptDenyMatch[1]) {
+					scopedDenies.push(...promptDenyMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+				}
+
+				// Parse target paths from git command (e.g., git add -- velune-website/)
+				// Parse target paths from git command without stripping hyphens inside folder names (e.g. velune-website/)
+				const rawTokens = cmd
+					.replace(/"[^"]*"/g, "")
+					.replace(/'[^']*'/g, "")
+					.trim()
+					.split(/\s+/)
+					.filter(Boolean)
+
+				const pathArgs = rawTokens.filter(
+					(t) => !t.startsWith("-") && !["git", "add", "commit", "push"].includes(t.toLowerCase())
+				)
+
+				const isGlobalAdd = rawTokens.some((p) => p === "." || p === "-A" || p === "--all")
+
+				// Check if any targeted path touches a prohibited scope
+				const touchesForbiddenScope = scopedDenies.find((deniedScope) =>
+					pathArgs.some((p) => p.toLowerCase().includes(deniedScope))
+				)
+
+				if (touchesForbiddenScope) {
+					return {
+						decision: "DENY_AND_REPLAN",
+						risk: "medium",
+						reason: `The user explicitly forbade staging or committing files in scope '${touchesForbiddenScope}'.`,
+						taskAligned: false,
+						hardBoundaryViolation: false,
+						isUserConstraintViolation: true,
+						violatedConstraint: `security/licensing/backend (${touchesForbiddenScope})`,
+						replanGuidance: `Do not stage or commit files in forbidden scope '${touchesForbiddenScope}'. Only work within authorized scopes.`,
+					}
+				}
+
+				if (isGlobalAdd && scopedDenies.length > 0) {
+					return {
+						decision: "DENY_AND_REPLAN",
+						risk: "medium",
+						reason: "Cannot stage all files globally with 'git add .' when prohibited scopes exist. Stage only the allowed scope.",
+						taskAligned: false,
+						hardBoundaryViolation: false,
+						isUserConstraintViolation: true,
+						violatedConstraint: "scoped commit policy",
+						replanGuidance: `Stage only the specifically authorized scope (${scopedAllows.join(", ") || "explicit directory"}) rather than all files.`,
+					}
+				}
+
+				// Check if the target explicitly matches an allowed scope
+				const matchesAllowedScope = scopedAllows.length > 0 && scopedAllows.some((allowedScope) =>
+					pathArgs.some((p) => p.toLowerCase().includes(allowedScope))
+				)
+
+				if (matchesAllowedScope || hasAffirmativeOverride) {
+					return {
+						decision: "ALLOW_AUTO",
+						risk: "low",
+						reason: `Git operation scoped to authorized path (${pathArgs.join(", ") || "authorized scope"}) per user instruction.`,
+						taskAligned: true,
+					}
+				}
+
+				// Generic negative commit constraint (blanket ban)
+				const hasNoCommitConstraint = explicitConstraints.some((c) =>
+					/nie\s+commituj|do\s+not\s+commit|don't\s+commit|no\s+commits?/i.test(c)
+				)
+				if (hasNoCommitConstraint) {
+					return {
+						decision: "DENY_AND_REPLAN",
+						risk: "medium",
+						reason: "The user explicitly forbade git commits/modifications ('NIE commituj'). Staging or committing code is forbidden.",
+						taskAligned: false,
+						hardBoundaryViolation: false,
+						isUserConstraintViolation: true,
+						violatedConstraint: "NIE commituj",
+						replanGuidance: "Do not stage or commit files. Keep changes unstaged or work strictly read-only per user instructions.",
+					}
 				}
 			}
 

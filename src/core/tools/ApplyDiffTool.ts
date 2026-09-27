@@ -73,8 +73,13 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 			// Detect identical failed patch retry before running expensive diff matching
 			if (failedHashes.has(patchFingerprint)) {
 				task.consecutiveMistakeCount++
+				task.didToolFailInCurrentTurn = true
 				const currentCount = (task.consecutiveMistakeCountForApplyDiff.get(relPath) || 0) + 1
 				task.consecutiveMistakeCountForApplyDiff.set(relPath, currentCount)
+				const mistakeLimit = task.consecutiveMistakeLimit || 3
+				if (currentCount >= mistakeLimit) {
+					task.consecutiveMistakeCount = Math.max(task.consecutiveMistakeCount, mistakeLimit)
+				}
 				const formattedError = `Unable to apply diff to file: ${absolutePath}\n\n<error_details>\nIDENTICAL FAILED PATCH RETRY: You submitted the exact same diff that previously failed for this file without changing the search or replacement content.\n\nTips to resolve:\n1. The file content on disk differs from your SEARCH block.\n2. Use read_file to inspect the current file content, indentation, and line breaks.\n3. Verify diff markers (:start_line:, -------) are not placed inside SEARCH or REPLACE blocks.\n4. Modify your SEARCH block to match the actual file lines before retrying.\n</error_details>`
 				await task.say("diff_error", formattedError)
 				task.recordToolError("apply_diff", formattedError)
@@ -97,11 +102,16 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 
 			if (!diffResult.success) {
 				task.consecutiveMistakeCount++
+				task.didToolFailInCurrentTurn = true
 				failedHashes.add(patchFingerprint)
 				task.failedDiffHashesForPath?.set(relPath, failedHashes)
 
 				const currentCount = (task.consecutiveMistakeCountForApplyDiff.get(relPath) || 0) + 1
 				task.consecutiveMistakeCountForApplyDiff.set(relPath, currentCount)
+				const mistakeLimit = task.consecutiveMistakeLimit || 3
+				if (currentCount >= mistakeLimit) {
+					task.consecutiveMistakeCount = Math.max(task.consecutiveMistakeCount, mistakeLimit)
+				}
 				let formattedError = ""
 
 				if (diffResult.failParts && diffResult.failParts.length > 0) {

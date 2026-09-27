@@ -27,7 +27,10 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 		CommandSafetyJudge.globalCallProviderOverride = undefined
 	})
 
-	const createCompletionRequest = (overrides: Partial<UnifiedApprovalRequest["target"]> = {}): UnifiedApprovalRequest => ({
+	const createCompletionRequest = (
+		overrides: Partial<UnifiedApprovalRequest["target"]> = {},
+		contextOverrides: Partial<UnifiedApprovalRequest["taskContext"]> = {},
+	): UnifiedApprovalRequest => ({
 		id: "req-comp-1",
 		taskId: "task-completion-1",
 		actionType: "attempt_completion",
@@ -45,6 +48,7 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 			activeGoal: "Primary project objective",
 			workspacePath: "/workspace/project",
 			isWithinWorkspace: true,
+			...contextOverrides,
 		},
 	})
 
@@ -459,15 +463,24 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 		expect(result.taskAligned).toBe(true)
 	})
 
-	it("20. Blocked and cancelled TODOs do NOT trigger Gate 3 / Gate 4 CONTINUE_WORK", async () => {
-		const request = createCompletionRequest({
-			todoListSnapshot: [
-				{ id: "1", content: "Analyze architecture", status: "completed" },
-				{ id: "2", content: "Implement polish", status: "blocked" },
-				{ id: "3", content: "Run benchmarks", status: "cancelled" },
-			],
-			completionCriteria: [],
-		})
+	it("20. Blocked and cancelled TODOs in read-only / stop scope do NOT block completion (Case 1)", async () => {
+		const request = createCompletionRequest(
+			{
+				todoListSnapshot: [
+					{ id: "1", content: "Analyze architecture", status: "completed" },
+					{ id: "2", content: "Implement polish", status: "blocked" },
+					{ id: "3", content: "Run benchmarks", status: "cancelled" },
+				],
+				completionCriteria: [],
+			},
+			{
+				latestUserInstruction: "Stop without modifying files, cancel benchmarks and report findings.",
+				activeGoal: "Read-only inspection",
+				workspacePath: "/workspace/project",
+				isWithinWorkspace: true,
+				explicitConstraints: ["DO NOT modify code (READ-ONLY)"],
+			},
+		)
 
 		const result = await orchestrator.evaluate(request, mockState)
 		expect(result.decision).toBe("ALLOW_AUTO")
@@ -537,4 +550,97 @@ describe("Autonomous Auto-Approve Completion Guard", () => {
 		expect(result.unresolvedItems![0].content).toContain("Verify browser logs")
 		expect(result.unresolvedItems![0].guidance).toContain("blocked")
 	})
+
+	it("23. Required blocked TODO under standard user instruction MUST NOT complete as ALLOW_AUTO (requires MANUAL_APPROVAL)", async () => {
+		const request = createCompletionRequest({
+			todoListSnapshot: [
+				{ id: "1", content: "Setup database", status: "completed" },
+				{ id: "2", content: "Implement feature X: payment webhook", status: "blocked" },
+			],
+			completionCriteria: [],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		// Invariant: BLOCKED != COMPLETED. Must fail-closed to MANUAL_APPROVAL so task enters WAITING_USER with blocker report
+		expect(result.decision).toBe("MANUAL_APPROVAL")
+		expect(result.taskAligned).toBe(false)
+		expect(result.reason).toContain("blocked")
+		expect(result.unresolvedItems).toBeDefined()
+		expect(result.unresolvedItems!.some((i) => i.content.includes("payment webhook"))).toBe(true)
+	})
+
+	it("24. Worker self-cancelled TODO without user authorization MUST NOT complete (returns CONTINUE_WORK)", async () => {
+		const request = createCompletionRequest({
+			todoListSnapshot: [
+				{ id: "1", content: "Setup database", status: "completed" },
+				{ id: "2", content: "Implement user authentication", status: "cancelled" },
+			],
+			completionCriteria: [],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("CONTINUE_WORK")
+		expect(result.taskAligned).toBe(false)
+		expect(result.reason).toContain("without user authorization")
+		expect(result.unresolvedItems).toBeDefined()
+		expect(result.unresolvedItems!.some((i) => i.content.includes("Implement user authentication"))).toBe(true)
+	})
+
+	it("25. Multiple TODOs: A completed, B completed, C blocked required -> requires MANUAL_APPROVAL", async () => {
+		const request = createCompletionRequest({
+			todoListSnapshot: [
+				{ id: "1", content: "Task A", status: "completed" },
+				{ id: "2", content: "Task B", status: "completed" },
+				{ id: "3", content: "Task C: required external integration", status: "blocked" },
+			],
+			completionCriteria: [],
+		})
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("MANUAL_APPROVAL")
+		expect(result.unresolvedItems).toBeDefined()
+		expect(result.unresolvedItems!.some((i) => i.content.includes("Task C"))).toBe(true)
+	})
+
+	it("26. Multilingual Gate 4c: 'Pomiń zadanie 3 i zakończ' does NOT block as unauthorized cancellation", async () => {
+		const request = createCompletionRequest(
+			{
+				todoListSnapshot: [
+					{ id: "1", content: "Task 1: Core setup", status: "completed" },
+					{ id: "2", content: "Task 2: Primary audit", status: "completed" },
+					{ id: "3", content: "Task 3: Optional polish", status: "cancelled" },
+				],
+				completionCriteria: [],
+			},
+			{
+				latestUserInstruction: "Pomiń zadanie 3 i zakończ zadanie.",
+				activeGoal: "Core audit",
+			}
+		)
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+	})
+
+	it("27. Multilingual Gate 4b: 'Zgłoś blocker i zakończ' does NOT block as unapproved blocked items", async () => {
+		const request = createCompletionRequest(
+			{
+				todoListSnapshot: [
+					{ id: "1", content: "Task 1: Security inspection", status: "completed" },
+					{ id: "2", content: "Task 2: Implement license patch", status: "blocked" },
+				],
+				completionCriteria: [],
+			},
+			{
+				latestUserInstruction: "Zgłoś blocker i zakończ bez zmian.",
+				activeGoal: "Security audit",
+			}
+		)
+
+		const result = await orchestrator.evaluate(request, mockState)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(result.taskAligned).toBe(true)
+	})
 })
+

@@ -238,8 +238,6 @@ export class ReadFileTool extends BaseTool<"read_file"> {
 			const hasErrors = fileResults.some((r) => r.status === "error" || r.status === "blocked")
 			if (hasErrors) {
 				task.didToolFailInCurrentTurn = true
-			} else if (!task.didRejectTool) {
-				task.consecutiveMistakeCount = 0
 			}
 
 			this.buildAndPushResult(task, fileResults, pushToolResult)
@@ -816,8 +814,8 @@ ${result.content}`
 		}
 
 		const hasErrors = results.some((r) => r.includes("\nError: "))
-		if (!hasErrors && !task.didRejectTool) {
-			task.consecutiveMistakeCount = 0
+		if (hasErrors) {
+			task.didToolFailInCurrentTurn = true
 		}
 
 		// Push combined results

@@ -566,6 +566,116 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.violatedConstraint).toContain("NIE commituj")
 			expect(result.replanGuidance).toContain("Do not stage or commit files")
 		})
+
+		it("AUTO + scoped allow on velune-website + deny on security/licensing/backend -> git add velune-website resolves as ALLOW_AUTO", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-scoped-allow-1",
+				taskId: "task-scoped-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "git add -- velune-website/",
+				},
+				taskContext: {
+					latestUserInstruction: "Masz pozwolenie na: commit wyłącznie velune-website. NIE commituj zmian security/licensing/backend.",
+					activeGoal: "Frontend polish and commit",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: [
+						"DO NOT commit changes to security/licensing/backend",
+						"ALLOWED to commit velune-website",
+					],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.taskAligned).toBe(true)
+			expect(result.isUserConstraintViolation).toBeFalsy()
+		})
+
+		it("AUTO + scoped deny on security -> git add security/ is DENIED and replanned", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-scoped-deny-1",
+				taskId: "task-scoped-2",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "git add -- security/",
+				},
+				taskContext: {
+					latestUserInstruction: "Masz pozwolenie na: commit wyłącznie velune-website. NIE commituj zmian security/licensing/backend.",
+					activeGoal: "Frontend polish and commit",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: [
+						"DO NOT commit changes to security/licensing/backend",
+						"ALLOWED to commit velune-website",
+					],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.isUserConstraintViolation).toBe(true)
+			expect(result.violatedConstraint).toContain("security")
+		})
+
+		it("User follow-up confirmation overrides block and allows git add velune-website/", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-override-1",
+				taskId: "task-override-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "git add -- velune-website/",
+				},
+				taskContext: {
+					latestUserInstruction: "Yes, proceed with git add and commit for velune-website/ only.",
+					activeGoal: "Frontend polish and commit",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: ["DO NOT commit changes (NIE commituj)"],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.taskAligned).toBe(true)
+		})
+
+		it("Read-only test runner: node tests/test.js and npm test are ALLOW_AUTO under read-only constraint", async () => {
+			const nodeTestRequest: UnifiedApprovalRequest = {
+				id: "req-node-test-1",
+				taskId: "task-ro-test-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "node tests/test.js",
+				},
+				taskContext: {
+					latestUserInstruction: "Wykonaj inspekcję. NIE modyfikuj kodu.",
+					activeGoal: "Read-only review",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: ["DO NOT modify code (READ-ONLY review)"],
+				},
+			}
+
+			const npmTestRequest: UnifiedApprovalRequest = {
+				...nodeTestRequest,
+				id: "req-npm-test-1",
+				target: { command: "npm test" },
+			}
+
+			const nodeResult = await orchestrator.evaluate(nodeTestRequest, mockState)
+			expect(nodeResult.decision).toBe("ALLOW_AUTO")
+			expect(nodeResult.taskAligned).toBe(true)
+
+			const npmResult = await orchestrator.evaluate(npmTestRequest, mockState)
+			expect(npmResult.decision).toBe("ALLOW_AUTO")
+			expect(npmResult.taskAligned).toBe(true)
+		})
 	})
 
 	describe("Verifier Structured Output Robustness & Auto-Recovery", () => {
