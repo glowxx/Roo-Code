@@ -978,7 +978,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			<div
 				className={cn(
 					"flex flex-col gap-1 bg-editor-background outline-none border border-none box-border",
-					isEditMode ? "p-2 w-full" : "relative px-1.5 pb-1 w-[calc(100%-16px)] max-w-[1240px] ml-auto mr-auto",
+					isEditMode ? "p-2 w-full" : "relative px-1.5 pb-1 w-full canvas-narrative",
 				)}>
 				<div className={cn(!isEditMode && "relative")}>
 					<div
@@ -1356,7 +1356,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							customModePrompts={customModePrompts}
 						/>
 						<ModelSelector
-							disabled={false}
+							disabled={Boolean(selectApiConfigDisabled)}
 							triggerTestId="dropdown-trigger"
 							triggerClassName="min-w-0 max-w-[280px] sm:max-w-[320px] w-auto inline-flex items-center text-ellipsis overflow-hidden px-2.5 py-1"
 							currentConfigId={currentConfigId}
@@ -1368,7 +1368,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							onToggleLockApiConfig={handleToggleLockApiConfig}
 							onApiConfigChange={handleApiConfigChange}
 						/>
-						<ReasoningEffortButton disabled={false} />
+						<ReasoningEffortButton disabled={Boolean(selectApiConfigDisabled)} />
 						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden shrink-0" />
 						{!isEditMode && contextWindow > 0 && (
 							<ContextWindowProgress

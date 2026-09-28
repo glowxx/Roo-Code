@@ -2145,8 +2145,6 @@ export class ClineProvider
 		const mergedDeniedCommands = this.mergeDeniedCommands(deniedCommands)
 		const cwd = this.cwd
 		const currentTask = this.getCurrentTask()
-		const isCurrentTaskActive = Boolean(currentTask && !currentTask.isTaskCompleted && !currentTask.abort)
-		const activeTaskApiConfiguration = isCurrentTaskActive ? currentTask?.apiConfiguration : undefined
 		const cachedOpenAiModels =
 			(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
 			(await this.getGlobalState("openAiModels")) ??
@@ -2159,7 +2157,6 @@ export class ClineProvider
 		return {
 			version: this.context.extension?.packageJSON?.version ?? Package.version ?? "",
 			apiConfiguration,
-			activeTaskApiConfiguration,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
 			alwaysAllowReadOnlyOutsideWorkspace: alwaysAllowReadOnlyOutsideWorkspace ?? false,
