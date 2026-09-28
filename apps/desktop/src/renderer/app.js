@@ -561,10 +561,12 @@
 		}
 
 		if (targetTab === "terminal") {
-			if (terminalDirty || !terminalRenderedOnce || lastRenderedTerminalSessionId !== selectedTerminalSessionId) {
+			const activeSession = terminalSessions.find((s) => s.id === selectedTerminalSessionId) || terminalSessions[0]
+			if (terminalDirty || !terminalRenderedOnce || lastRenderedTerminalSessionId !== selectedTerminalSessionId || activeSession?._dirty) {
 				renderTerminalLogs()
 				terminalDirty = false
 				terminalRenderedOnce = true
+				if (activeSession) activeSession._dirty = false
 				lastRenderedTerminalSessionId = selectedTerminalSessionId
 			}
 		}
@@ -804,6 +806,22 @@
 
 		forwardToWebview({ type: "showTaskWithId", text: taskId })
 		sendToServer({ type: "markChatRead", taskId })
+
+		// Immediately fetch diffs for the selected task to keep top bar counter accurate
+		fetch(`/api/diffs?taskId=${encodeURIComponent(taskId)}`)
+			.then((r) => (r.ok ? r.json() : []))
+			.then((data) => {
+				if (Array.isArray(data)) {
+					diffFiles = data
+					diffsDirty = true
+					if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
+					if (currentDesktopTab === "diffs") {
+						renderDiffs()
+						diffsDirty = false
+					}
+				}
+			})
+			.catch(() => {})
 
 		try {
 			const resp = await fetch("/api/chat/switch", {
@@ -1937,6 +1955,7 @@
 			// WebSocket connected - remove loading overlay immediately
 			showWebviewSuccess()
 			sendToServer({ type: "getWorkspaceInfo" })
+			sendToServer({ type: "getDiffs", taskId: activeTaskId })
 		}
 
 		socket.onmessage = (event) => {
@@ -2006,6 +2025,9 @@
 				}
 				if (msg.message?.type === "state" && msg.message.state) {
 					latestExtensionState = { ...(latestExtensionState || {}), ...msg.message.state }
+					if (settingsWebviewFrame?.contentWindow && settingsWebviewFrame.getAttribute("src")) {
+						settingsWebviewFrame.contentWindow.postMessage({ type: "state", state: latestExtensionState }, "*")
+					}
 					if (msg.message.state.language) {
 						const newLang = (msg.message.state.language === "pl" || msg.message.state.language.startsWith("pl")) ? "pl" : "en"
 						if (newLang !== currentLanguage) {
@@ -2102,9 +2124,15 @@
 					session = terminalSessions[0]
 				}
 				if (session) {
-					session.output = (session.output || "") + (msg.data || "")
-					if (selectedTerminalSessionId === session.id) {
-						renderActiveTerminalOutput()
+					const chunk = msg.data || ""
+					const combined = (session.output || "") + chunk
+					session.output = combined.length > 1024 * 1024 ? combined.slice(-1024 * 1024) : combined
+
+					// Tab isolation: ONLY perform DOM work if terminal tab is currently active!
+					if (currentDesktopTab === "terminal" && selectedTerminalSessionId === session.id) {
+						appendActiveTerminalChunk(chunk)
+					} else {
+						session._dirty = true
 					}
 				}
 				break
@@ -2120,9 +2148,13 @@
 				if (session) {
 					session.exitCode = exitCode
 					session.status = exitCode === 0 ? "completed" : "error"
-					renderTerminalSessions()
-					if (selectedTerminalSessionId === session.id) {
-						renderActiveTerminalOutput()
+					if (currentDesktopTab === "terminal") {
+						renderTerminalSessions()
+						if (selectedTerminalSessionId === session.id) {
+							renderActiveTerminalOutput()
+						}
+					} else {
+						session._dirty = true
 					}
 				}
 				break
@@ -2303,6 +2335,97 @@
 		renderFilesTree(ws.files || [], filesSearchInput?.value?.toLowerCase() || "", ws.directories || [])
 	}
 
+	const DIFF_ITEM_HEIGHT = 40
+	const diffContentCache = new Map()
+	let activeDiffAbortController = null
+
+	function computeLineDiff(oldLines, newLines) {
+		const N = oldLines.length
+		const M = newLines.length
+		let start = 0
+		while (start < N && start < M && oldLines[start] === newLines[start]) {
+			start++
+		}
+		let oldEnd = N - 1
+		let newEnd = M - 1
+		while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+			oldEnd--
+			newEnd--
+		}
+
+		const items = []
+		for (let i = 0; i < start; i++) {
+			items.push({ type: "same", line: oldLines[i], oldNum: i + 1, newNum: i + 1 })
+		}
+
+		const midOld = oldLines.slice(start, oldEnd + 1)
+		const midNew = newLines.slice(start, newEnd + 1)
+
+		if (midOld.length * midNew.length <= 4000000) {
+			const dp = Array.from({ length: midOld.length + 1 }, () => new Int32Array(midNew.length + 1))
+			for (let i = 0; i < midOld.length; i++) {
+				for (let j = 0; j < midNew.length; j++) {
+					if (midOld[i] === midNew[j]) {
+						dp[i + 1][j + 1] = dp[i][j] + 1
+					} else {
+						dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1])
+					}
+				}
+			}
+			let i = midOld.length
+			let j = midNew.length
+			const midItems = []
+			while (i > 0 || j > 0) {
+				if (i > 0 && j > 0 && midOld[i - 1] === midNew[j - 1]) {
+					midItems.push({ type: "same", line: midOld[i - 1], oldNum: start + i, newNum: start + j })
+					i--
+					j--
+				} else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+					midItems.push({ type: "add", line: midNew[j - 1], newNum: start + j })
+					j--
+				} else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+					midItems.push({ type: "del", line: midOld[i - 1], oldNum: start + i })
+					i--
+				}
+			}
+			midItems.reverse()
+			items.push(...midItems)
+		} else {
+			for (let i = 0; i < midOld.length; i++) {
+				items.push({ type: "del", line: midOld[i], oldNum: start + i + 1 })
+			}
+			for (let j = 0; j < midNew.length; j++) {
+				items.push({ type: "add", line: midNew[j], newNum: start + j + 1 })
+			}
+		}
+
+		for (let k = 0; k < (N - 1 - oldEnd); k++) {
+			const oIdx = oldEnd + 1 + k
+			const nIdx = newEnd + 1 + k
+			items.push({ type: "same", line: oldLines[oIdx], oldNum: oIdx + 1, newNum: nIdx + 1 })
+		}
+
+		return items
+	}
+
+	function selectDiffFile(filePath) {
+		if (selectedDiffFile === filePath) return
+		selectedDiffFile = filePath
+		if (diffsFileListEl) {
+			diffsFileListEl.querySelectorAll(".diff-item").forEach((el) => {
+				if (el.getAttribute("data-file-path") === filePath) {
+					el.classList.add("selected")
+				} else {
+					el.classList.remove("selected")
+				}
+			})
+		}
+		const file = diffFiles.find((f) => f.filePath === filePath)
+		if (file) {
+			loadAndRenderSelectedDiff(file)
+		}
+	}
+
 	function renderDiffs() {
 		const count = diffFiles.length
 		if (diffsCountEl) diffsCountEl.textContent = String(count)
@@ -2339,34 +2462,58 @@
 			selectedDiffFile = diffFiles[0].filePath
 		}
 
-		targetList.innerHTML = ""
-		diffFiles.forEach((file) => {
-			const status = (file.status || "modified").toLowerCase()
-			const isCreated = status === "created" || status === "added"
-			const isDeleted = status === "deleted"
-			const statusClass = isCreated ? "created" : isDeleted ? "deleted" : "modified"
-			const statusChar = isCreated ? "A" : isDeleted ? "D" : "M"
-			const statusTitle = isCreated ? "Created" : isDeleted ? "Deleted" : "Modified"
+		// Virtualized rendering
+		const totalHeight = count * DIFF_ITEM_HEIGHT
+		targetList.innerHTML = `<div class="diff-virtual-container" style="height: ${totalHeight}px; position: relative;"></div>`
+		const virtualContainer = targetList.querySelector(".diff-virtual-container")
 
-			const item = document.createElement("div")
-			item.className = `diff-item ${selectedDiffFile === file.filePath ? "selected" : ""}`
-			item.innerHTML = `
-				<div class="diff-item-left">
-					<span class="diff-type-badge ${statusClass}" title="${statusTitle}">${statusChar}</span>
-					<span class="diff-file-path" title="${escapeHtml(file.filePath)}">${escapeHtml(file.filePath)}</span>
-				</div>
-				<div class="diff-stats">
-					<span class="add">+${file.additions || 0}</span>
-					<span class="del">-${file.deletions || 0}</span>
-				</div>
-			`
-			item.addEventListener("click", () => {
-				selectedDiffFile = file.filePath
-				renderDiffs()
-				loadAndRenderSelectedDiff(file)
+		function updateVirtualItems() {
+			if (!virtualContainer) return
+			const scrollTop = targetList.scrollTop
+			const clientHeight = targetList.clientHeight || 500
+			const startIdx = Math.max(0, Math.floor(scrollTop / DIFF_ITEM_HEIGHT) - 5)
+			const endIdx = Math.min(count, Math.ceil((scrollTop + clientHeight) / DIFF_ITEM_HEIGHT) + 5)
+
+			let itemsHtml = ""
+			for (let i = startIdx; i < endIdx; i++) {
+				const file = diffFiles[i]
+				if (!file) continue
+				const status = (file.status || "modified").toLowerCase()
+				const isCreated = status === "created" || status === "added"
+				const isDeleted = status === "deleted"
+				const statusClass = isCreated ? "created" : isDeleted ? "deleted" : "modified"
+				const statusChar = isCreated ? "A" : isDeleted ? "D" : "M"
+				const statusTitle = isCreated ? "Created" : isDeleted ? "Deleted" : "Modified"
+				const isSelected = selectedDiffFile === file.filePath
+
+				itemsHtml += `
+					<div class="diff-item ${isSelected ? "selected" : ""}" data-file-path="${escapeHtml(file.filePath)}" style="position: absolute; top: ${i * DIFF_ITEM_HEIGHT}px; left: 0; right: 0; height: 38px;">
+						<div class="diff-item-left">
+							<span class="diff-type-badge ${statusClass}" title="${statusTitle}">${statusChar}</span>
+							<span class="diff-file-path" title="${escapeHtml(file.filePath)}">${escapeHtml(file.filePath)}</span>
+						</div>
+						<div class="diff-stats">
+							<span class="add">+${file.additions || 0}</span>
+							<span class="del">-${file.deletions || 0}</span>
+						</div>
+					</div>
+				`
+			}
+			virtualContainer.innerHTML = itemsHtml
+
+			virtualContainer.querySelectorAll(".diff-item").forEach((itemEl) => {
+				itemEl.addEventListener("click", () => {
+					const fp = itemEl.getAttribute("data-file-path")
+					if (fp) selectDiffFile(fp)
+				})
 			})
-			targetList.appendChild(item)
-		})
+		}
+
+		targetList.onscroll = () => {
+			window.requestAnimationFrame(updateVirtualItems)
+		}
+
+		updateVirtualItems()
 
 		const activeFile = diffFiles.find((f) => f.filePath === selectedDiffFile) || diffFiles[0]
 		if (activeFile) {
@@ -2400,31 +2547,88 @@
 			`
 		}
 
+		// Check in-memory cache first
+		if (diffContentCache.has(file.filePath)) {
+			renderDiffContent(diffContentCache.get(file.filePath))
+			return
+		}
+
 		let diffData = file
 
 		// If diff text or content not already present, fetch from /api/diff
 		if (!diffData.diff && (diffData.newContent === undefined || diffData.oldContent === undefined)) {
+			if (activeDiffAbortController) {
+				activeDiffAbortController.abort()
+			}
+			activeDiffAbortController = new AbortController()
+
 			try {
 				const wsPath = sidebarData.currentWorkspace || currentWorkspace?.path || ""
 				const qParams = new URLSearchParams()
 				qParams.set("path", file.filePath)
 				if (wsPath) qParams.set("workspace", wsPath)
 				if (activeTaskId) qParams.set("taskId", activeTaskId)
-				const res = await fetch(`/api/diff?${qParams.toString()}`)
+				const res = await fetch(`/api/diff?${qParams.toString()}`, {
+					signal: activeDiffAbortController.signal,
+				})
 				if (res.ok) {
 					const data = await res.json()
 					diffData = { ...file, ...data }
+					diffContentCache.set(file.filePath, diffData)
+					if (diffContentCache.size > 50) {
+						const oldestKey = diffContentCache.keys().next().value
+						diffContentCache.delete(oldestKey)
+					}
 				}
 			} catch (e) {
+				if (e.name === "AbortError") return
 				console.warn("Error fetching /api/diff:", e)
 			}
 		}
 
 		renderDiffContent(diffData)
+
+		// Prefetch adjacent 1-2 files in idle time
+		const curIdx = diffFiles.findIndex((f) => f.filePath === file.filePath)
+		if (curIdx >= 0) {
+			const toPrefetch = [diffFiles[curIdx + 1], diffFiles[curIdx + 2]].filter(Boolean)
+			for (const pf of toPrefetch) {
+				if (!diffContentCache.has(pf.filePath) && !pf.diff && pf.newContent === undefined) {
+					const wsPath = sidebarData.currentWorkspace || currentWorkspace?.path || ""
+					const qParams = new URLSearchParams()
+					qParams.set("path", pf.filePath)
+					if (wsPath) qParams.set("workspace", wsPath)
+					if (activeTaskId) qParams.set("taskId", activeTaskId)
+					fetch(`/api/diff?${qParams.toString()}`)
+						.then((r) => (r.ok ? r.json() : null))
+						.then((data) => {
+							if (data) diffContentCache.set(pf.filePath, { ...pf, ...data })
+						})
+						.catch(() => {})
+				}
+			}
+		}
 	}
 
 	function renderDiffContent(file) {
 		if (!diffContentEl) return
+
+		// 0. Handle content unavailable / error state
+		if (file.contentUnavailable) {
+			diffContentEl.innerHTML = `
+				<div class="diff-content-unavailable">
+					<h4>File content not available</h4>
+					<p>${escapeHtml(file.reason || "Unable to display file content.")}</p>
+				</div>
+			`
+			return
+		}
+
+		// 0.5. Handle genuine 0-byte file
+		if (file.isActuallyEmpty) {
+			diffContentEl.innerHTML = `<div class="empty-state">Empty file (0 bytes)</div>`
+			return
+		}
 
 		// 1. If we have unified diff output or SEARCH/REPLACE block
 		if (file.diff && typeof file.diff === "string" && file.diff.trim().length > 0) {
@@ -2511,9 +2715,9 @@
 
 		// 2. If we have oldContent and newContent
 		if (file.oldContent !== undefined && file.newContent !== undefined && file.oldContent !== file.newContent) {
-			const oldLines = file.oldContent.split("\n")
-			const newLines = file.newContent.split("\n")
-			const diffItems = computeLCSDiff(oldLines, newLines)
+			const oldLines = (file.oldContent || "").split("\n")
+			const newLines = (file.newContent || "").split("\n")
+			const diffItems = computeLineDiff(oldLines, newLines)
 			let html = ""
 			diffItems.forEach((item) => {
 				if (item.type === "same") {
@@ -2570,7 +2774,7 @@
 			return
 		}
 
-		diffContentEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("fileContentNotAvailable"))}</div>`
+		diffContentEl.innerHTML = `<div class="empty-state">${escapeHtml(tDesktop("diffEmpty"))}</div>`
 	}
 
 	// ANSI escape sequence parser & converter
@@ -2856,6 +3060,27 @@
 				terminalOutputEl._lastHtml = parsedHtml
 			}
 		}
+
+		if (isNearBottom) {
+			terminalOutputEl.scrollTop = terminalOutputEl.scrollHeight
+		}
+	}
+
+	function appendActiveTerminalChunk(chunk) {
+		if (!terminalOutputEl || !chunk) return
+		let activeSession = terminalSessions.find((s) => s.id === selectedTerminalSessionId) || terminalSessions[0]
+		if (!activeSession) return
+
+		const codeEl = terminalOutputEl.querySelector(".terminal-ansi-pre code")
+		if (!codeEl || terminalOutputEl._lastSessionId !== activeSession.id) {
+			renderActiveTerminalOutput()
+			return
+		}
+
+		const isNearBottom = terminalOutputEl.scrollHeight - terminalOutputEl.scrollTop - terminalOutputEl.clientHeight < 120
+		const chunkHtml = ansiToHtml(chunk)
+
+		codeEl.insertAdjacentHTML("beforeend", chunkHtml)
 
 		if (isNearBottom) {
 			terminalOutputEl.scrollTop = terminalOutputEl.scrollHeight
@@ -3404,14 +3629,14 @@
 					textContent = JSON.stringify(JSON.parse(textContent), null, 2)
 				} catch {}
 			}
-			renderCodeText(textContent)
+			renderCodeText(textContent, msg.filePath)
 		}
 	}
 
 	function renderSvgPreview() {
 		if (!currentPreviewMsg) return
 		if (isSvgSourceView) {
-			renderCodeText(currentPreviewMsg.rawText || "")
+			renderCodeText(currentPreviewMsg.rawText || "", currentPreviewMsg.filePath)
 			previewToggleViewBtn.querySelector("span").textContent = "View Image"
 		} else {
 			previewToggleViewBtn.querySelector("span").textContent = "View Code"
@@ -3434,17 +3659,120 @@
 		}
 	}
 
-	function renderCodeText(text) {
-		const lines = text.split("\n")
+	const codeHighlightCache = new Map()
+
+	const EXTENSION_MAP = {
+		ts: "typescript",
+		tsx: "typescript",
+		js: "javascript",
+		jsx: "javascript",
+		mjs: "javascript",
+		cjs: "javascript",
+		json: "json",
+		py: "python",
+		html: "xml",
+		htm: "xml",
+		xml: "xml",
+		svg: "xml",
+		css: "css",
+		scss: "scss",
+		less: "less",
+		sh: "bash",
+		bash: "bash",
+		zsh: "bash",
+		ps1: "powershell",
+		yaml: "yaml",
+		yml: "yaml",
+		md: "markdown",
+		markdown: "markdown",
+		sql: "sql",
+		rs: "rust",
+		go: "go",
+		java: "java",
+		c: "c",
+		h: "c",
+		cpp: "cpp",
+		hpp: "cpp",
+		cs: "csharp",
+		txt: "plaintext",
+	}
+
+	function detectLanguage(filePath) {
+		if (!filePath) return "plaintext"
+		const ext = filePath.split(".").pop()?.toLowerCase() || ""
+		return EXTENSION_MAP[ext] || "plaintext"
+	}
+
+	function splitHtmlLinesSafely(html) {
+		const lines = html.split("\n")
+		const result = []
+		const openTags = []
+
+		for (const line of lines) {
+			let reconstructed = openTags.join("") + line
+			const tagRegex = /<\/?([a-zA-Z0-9-]+)(?:\s+[^>]*?)?>/g
+			let match
+			while ((match = tagRegex.exec(line)) !== null) {
+				const fullTag = match[0]
+				if (fullTag.startsWith("</")) {
+					openTags.pop()
+				} else if (!fullTag.endsWith("/>")) {
+					openTags.push(fullTag)
+				}
+			}
+			for (let i = openTags.length - 1; i >= 0; i--) {
+				const tagMatch = /<([a-zA-Z0-9-]+)/.exec(openTags[i])
+				if (tagMatch) {
+					reconstructed += `</${tagMatch[1]}>`
+				}
+			}
+			result.push(reconstructed)
+		}
+		return result
+	}
+
+	function renderCodeText(text, filePath) {
+		const targetPath = filePath || currentPreviewMsg?.filePath || ""
+		const lang = detectLanguage(targetPath)
 		const wrapClass = isCodeWrapped ? "wrapped" : ""
+		const isLarge = text.length > 500 * 1024 || text.split("\n").length > 10000
+
+		// Check memory LRU cache
+		const cacheKey = `${targetPath}:${text.length}:${text.slice(0, 100)}`
+		let highlightedLines = codeHighlightCache.get(cacheKey)
+
+		if (!highlightedLines) {
+			if (window.hljs && lang !== "plaintext" && !isLarge) {
+				try {
+					const highlighted = window.hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
+					highlightedLines = splitHtmlLinesSafely(highlighted)
+				} catch (err) {
+					console.warn("[CodeViewer] Highlighting fallback to plain text:", err)
+					highlightedLines = text.split("\n").map((l) => escapeHtml(l) || "&nbsp;")
+				}
+			} else {
+				highlightedLines = text.split("\n").map((l) => escapeHtml(l) || "&nbsp;")
+			}
+			codeHighlightCache.set(cacheKey, highlightedLines)
+			if (codeHighlightCache.size > 50) {
+				const oldestKey = codeHighlightCache.keys().next().value
+				codeHighlightCache.delete(oldestKey)
+			}
+		}
+
 		let linesHtml = ""
-		for (let i = 0; i < lines.length; i++) {
+		for (let i = 0; i < highlightedLines.length; i++) {
 			const lineNum = i + 1
-			const lineContent = escapeHtml(lines[i]) || "&nbsp;"
+			const lineContent = highlightedLines[i] || "&nbsp;"
 			linesHtml += `<div class="code-line"><span class="code-line-num">${lineNum}</span><span class="code-line-text">${lineContent}</span></div>`
 		}
 
+		const largeWarningHtml = isLarge
+			? `<div style="padding: 6px 14px; background: rgba(245, 158, 11, 0.1); border-bottom: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: #f59e0b;">Large file (>500KB or >10k lines): syntax highlighting disabled for performance</div>`
+			: ""
+
 		previewContentAreaEl.innerHTML = `
+			${largeWarningHtml}
 			<div class="code-editor-view ${wrapClass}" id="code-editor-view">
 				${linesHtml}
 			</div>
@@ -3674,6 +4002,28 @@
 
 	let currentSettingsSection = "providers"
 
+	function prewarmSettingsFrame() {
+		if (settingsWebviewFrame && (!settingsWebviewFrame.getAttribute("src") || settingsWebviewFrame.getAttribute("src") === "")) {
+			const theme = localStorage.getItem("roo-theme") || "linear-dark"
+			settingsWebviewFrame.addEventListener("load", () => {
+				try {
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "themeChange", theme }, "*")
+					settingsWebviewFrame.contentWindow?.postMessage({ type: "languageChange", language: currentLanguage }, "*")
+					if (latestExtensionState) {
+						settingsWebviewFrame.contentWindow?.postMessage({ type: "state", state: latestExtensionState }, "*")
+					}
+					settingsWebviewFrame.contentWindow?.postMessage({
+						type: "switchTab",
+						tab: "settings",
+						origin: "sync",
+						values: { section: "providers" },
+					}, "*")
+				} catch {}
+			}, { once: true })
+			settingsWebviewFrame.src = "/webview/index.html?view=settings"
+		}
+	}
+
 	function openSettingsModal(section = "providers") {
 		if (section) {
 			currentSettingsSection = section
@@ -3703,7 +4053,7 @@
 
 			if (!settingsWebviewFrame.getAttribute("src") || settingsWebviewFrame.getAttribute("src") === "") {
 				settingsWebviewFrame.addEventListener("load", () => {
-					setTimeout(sendInitSettings, 50)
+					sendInitSettings()
 				}, { once: true })
 				settingsWebviewFrame.src = "/webview/index.html?view=settings"
 			} else {
@@ -4017,4 +4367,9 @@
 	connectWebSocket()
 	loadWorkspaceFiles()
 	fetchSidebarData()
+	if (typeof requestIdleCallback === "function") {
+		requestIdleCallback(() => prewarmSettingsFrame(), { timeout: 2000 })
+	} else {
+		setTimeout(prewarmSettingsFrame, 1000)
+	}
 })()

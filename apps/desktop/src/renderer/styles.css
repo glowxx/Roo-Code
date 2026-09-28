@@ -2488,6 +2488,154 @@ body.light-theme .code-line:hover {
 }
 
 /* ==========================================================================
+   Syntax Highlighting (hljs) - Roo Code Dark & Light Theme
+   ========================================================================== */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+	color: #ff7b72;
+	font-weight: 500;
+}
+
+.hljs-string,
+.hljs-title.class_.inherited__,
+.hljs-doctag {
+	color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-title.class_,
+.hljs-title.function_ {
+	color: #d2a8ff;
+	font-weight: 500;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+	color: #ffa657;
+}
+
+.hljs-comment,
+.hljs-quote {
+	color: #8b949e;
+	font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal {
+	color: #79c0ff;
+}
+
+.hljs-type,
+.hljs-built_in {
+	color: #ffa657;
+}
+
+.hljs-attr,
+.hljs-attribute {
+	color: #79c0ff;
+}
+
+.hljs-tag,
+.hljs-name {
+	color: #7ee787;
+}
+
+.hljs-symbol,
+.hljs-bullet {
+	color: #f2cc60;
+}
+
+.hljs-meta {
+	color: #8b949e;
+}
+
+.hljs-addition {
+	color: #7ee787;
+	background-color: rgba(46, 160, 67, 0.15);
+}
+
+.hljs-deletion {
+	color: #ffa198;
+	background-color: rgba(248, 81, 73, 0.15);
+}
+
+/* Light theme overrides */
+body.light-theme .hljs-keyword,
+body.light-theme .hljs-selector-tag,
+body.light-theme .hljs-subst {
+	color: #cf222e;
+}
+
+body.light-theme .hljs-string,
+body.light-theme .hljs-title.class_.inherited__,
+body.light-theme .hljs-doctag {
+	color: #0a3069;
+}
+
+body.light-theme .hljs-title,
+body.light-theme .hljs-section,
+body.light-theme .hljs-title.class_,
+body.light-theme .hljs-title.function_ {
+	color: #8250df;
+}
+
+body.light-theme .hljs-variable,
+body.light-theme .hljs-template-variable {
+	color: #953800;
+}
+
+body.light-theme .hljs-comment,
+body.light-theme .hljs-quote {
+	color: #6e7781;
+}
+
+body.light-theme .hljs-number,
+body.light-theme .hljs-literal {
+	color: #0550ae;
+}
+
+body.light-theme .hljs-type,
+body.light-theme .hljs-built_in {
+	color: #953800;
+}
+
+body.light-theme .hljs-attr,
+body.light-theme .hljs-attribute {
+	color: #0550ae;
+}
+
+body.light-theme .hljs-tag,
+body.light-theme .hljs-name {
+	color: #116329;
+}
+
+/* ==========================================================================
+   Diff Virtual Container & Content Unavailable Warning
+   ========================================================================== */
+.diff-virtual-container {
+	position: relative;
+	width: 100%;
+}
+
+.diff-content-unavailable {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 40px 24px;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.diff-content-unavailable h4 {
+	color: var(--text-primary);
+	font-size: 14px;
+	margin-bottom: 6px;
+}
+
+/* ==========================================================================
    Binary & Media Cards
    ========================================================================== */
 .binary-preview-card {
