@@ -44,7 +44,18 @@ let mockSelectedModel = {
 }
 
 vi.mock("@/components/ui/hooks/useSelectedModel", () => ({
-	useSelectedModel: () => mockSelectedModel,
+	useSelectedModel: (config?: any) => {
+		if (config && config.apiModelId) {
+			return {
+				id: config.apiModelId,
+				info: {
+					contextWindow: 128000,
+					maxTokens: 8192,
+				},
+			}
+		}
+		return mockSelectedModel
+	},
 }))
 
 describe("ModelSelector", () => {
@@ -478,5 +489,64 @@ describe("ModelSelector", () => {
 				enableReasoningEffort: true,
 			}),
 		)
+	})
+
+	test("displays active running model and deferred next task badge when models differ", () => {
+		mockExtensionState.activeTaskApiConfiguration = {
+			apiProvider: "anthropic",
+			apiModelId: "anthropic/claude-3.7-sonnet",
+			apiKey: "test-key",
+		}
+		mockExtensionState.apiConfiguration = {
+			apiProvider: "openai",
+			apiModelId: "openai/gpt-5",
+			apiKey: "test-key",
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		expect(trigger).toHaveTextContent("Claude 3.7 Sonnet")
+
+		const nextBadge = screen.getByTestId("next-task-model-badge")
+		expect(nextBadge).toBeInTheDocument()
+		expect(nextBadge).toHaveTextContent("Next: GPT-5")
+	})
+
+	test("displays active task notice in dropdown when task is running", () => {
+		mockExtensionState.activeTaskApiConfiguration = {
+			apiProvider: "anthropic",
+			apiModelId: "anthropic/claude-3.7-sonnet",
+			apiKey: "test-key",
+		}
+		mockExtensionState.apiConfiguration = {
+			apiProvider: "openai",
+			apiModelId: "openai/gpt-5",
+			apiKey: "test-key",
+		}
+
+		render(<ModelSelector />)
+		const trigger = screen.getByTestId("model-selector-trigger")
+		fireEvent.click(trigger)
+
+		const notice = screen.getByTestId("active-task-model-notice")
+		expect(notice).toBeInTheDocument()
+		expect(notice).toHaveTextContent("Claude 3.7 Sonnet")
+		expect(notice).toHaveTextContent("Selection will apply to the next task")
+	})
+
+	test("does not display deferred badge when active task model matches selected model", () => {
+		mockExtensionState.activeTaskApiConfiguration = {
+			apiProvider: "xkiro",
+			apiModelId: "deepseek/deepseek-chat",
+			apiKey: "test-key",
+		}
+		mockExtensionState.apiConfiguration = {
+			apiProvider: "xkiro",
+			apiModelId: "deepseek/deepseek-chat",
+			apiKey: "test-key",
+		}
+
+		render(<ModelSelector />)
+		expect(screen.queryByTestId("next-task-model-badge")).toBeNull()
 	})
 })

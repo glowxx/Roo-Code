@@ -187,6 +187,10 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 		openAiModels: newState.openAiModels ?? prevState.openAiModels ?? [],
 		openAiModelInfos: newState.openAiModelInfos ?? prevState.openAiModelInfos ?? {},
 		commandSafetyConfig: newState.commandSafetyConfig ?? prevState.commandSafetyConfig,
+		activeTaskApiConfiguration:
+			"activeTaskApiConfiguration" in newState
+				? newState.activeTaskApiConfiguration
+				: prevState.activeTaskApiConfiguration,
 	}
 }
 

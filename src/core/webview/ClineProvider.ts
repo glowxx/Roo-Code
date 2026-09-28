@@ -1405,13 +1405,20 @@ export class ClineProvider
 	 */
 	public updateTaskApiHandlerIfNeeded(
 		providerSettings: ProviderSettings,
-		options: { forceRebuild?: boolean; targetTaskId?: string } = {},
+		options: { forceRebuild?: boolean; targetTaskId?: string; allowActiveTaskUpdate?: boolean } = {},
 	): void {
 		const targetTaskId = options.targetTaskId ?? this.foregroundTaskId
 		const task = targetTaskId
 			? (this.runningTasks.get(targetTaskId) ?? (this.foregroundTaskId === targetTaskId ? this.getCurrentTask() : undefined))
 			: this.getCurrentTask()
 		if (!task) return
+
+		// INVARIANT: An active task's worker model is immutable throughout its entire lifecycle.
+		// Model changes occurring while a task is active are deferred to the next task.
+		if (!options.allowActiveTaskUpdate && !task.isTaskCompleted && !task.abort) {
+			this.log(`[TaskModelLock] Task ${task.taskId} is active. Deferring model update to next task.`)
+			return
+		}
 
 		const { forceRebuild = false } = options
 
@@ -1428,7 +1435,7 @@ export class ClineProvider
 			// Use updateApiConfiguration which handles both API handler rebuild and parser sync.
 			// Note: updateApiConfiguration is declared async but has no actual async operations,
 			// so we can safely call it without awaiting.
-			task.updateApiConfiguration(providerSettings)
+			task.updateApiConfiguration(providerSettings, Boolean(options.allowActiveTaskUpdate))
 		} else {
 			// No rebuild needed, just sync apiConfiguration
 			;(task as any).apiConfiguration = providerSettings
@@ -2138,6 +2145,8 @@ export class ClineProvider
 		const mergedDeniedCommands = this.mergeDeniedCommands(deniedCommands)
 		const cwd = this.cwd
 		const currentTask = this.getCurrentTask()
+		const isCurrentTaskActive = Boolean(currentTask && !currentTask.isTaskCompleted && !currentTask.abort)
+		const activeTaskApiConfiguration = isCurrentTaskActive ? currentTask?.apiConfiguration : undefined
 		const cachedOpenAiModels =
 			(this.contextProxy.getValue("openAiModels") as string[] | undefined) ??
 			(await this.getGlobalState("openAiModels")) ??
@@ -2150,6 +2159,7 @@ export class ClineProvider
 		return {
 			version: this.context.extension?.packageJSON?.version ?? Package.version ?? "",
 			apiConfiguration,
+			activeTaskApiConfiguration,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
 			alwaysAllowReadOnlyOutsideWorkspace: alwaysAllowReadOnlyOutsideWorkspace ?? false,

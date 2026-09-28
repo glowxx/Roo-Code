@@ -327,6 +327,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// API
 	apiConfiguration: ProviderSettings
 	api: ApiHandler
+	public readonly taskStartModel?: string
+	public readonly taskStartProvider?: string
+	public readonly taskStartEffort?: string
 	static get lastGlobalApiRequestTime(): number | undefined {
 		return ProviderRequestCoordinator.getInstance().getLastRequestTime()
 	}
@@ -582,7 +585,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			console.error("Failed to initialize RooIgnoreController:", error)
 		})
 
-		this.apiConfiguration = apiConfiguration
+		this.apiConfiguration = structuredClone(apiConfiguration)
+		this.taskStartModel = getModelId(this.apiConfiguration)
+		this.taskStartProvider = this.apiConfiguration.apiProvider
+		this.taskStartEffort = (this.apiConfiguration as any).reasoningEffort
 		this.api = buildApiHandler(this.apiConfiguration)
 		this.autoApprovalHandler = new AutoApprovalHandler()
 
@@ -783,6 +789,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					!("foregroundTaskId" in provider) || (provider as any).foregroundTaskId === this.taskId
 				const isTargeted = payload?.targetTaskId ? payload.targetTaskId === this.taskId : isForeground
 				if (!isTargeted) {
+					return
+				}
+				// INVARIANT: An active task's worker model is immutable throughout its entire lifecycle.
+				// Profile changes occurring while a task is active are deferred to the next task.
+				if (!this.isTaskCompleted && !this.abort) {
 					return
 				}
 				const newState = await provider.getState()
@@ -2584,7 +2595,14 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 	 *
 	 * @param newApiConfiguration - The new API configuration to use
 	 */
-	public updateApiConfiguration(newApiConfiguration: ProviderSettings): void {
+	public updateApiConfiguration(newApiConfiguration: ProviderSettings, force: boolean = false): void {
+		// INVARIANT: An active task's worker model is immutable throughout its entire lifecycle.
+		// Model changes occurring while a task is active are deferred to the next task.
+		if (!force && !this.isTaskCompleted && !this.abort) {
+			console.warn(`[TaskModelLock] Blocked attempt to mutate API configuration of active task ${this.taskId}`)
+			return
+		}
+
 		const prevModelId = this.apiConfiguration?.apiModelId
 		const nextModelId = newApiConfiguration?.apiModelId
 		const prevProvider = this.apiConfiguration?.apiProvider
@@ -2626,13 +2644,8 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 				if (providerProfile) {
 					await provider.setProviderProfile(providerProfile)
-
-					// Update this task's API configuration to match the new profile
-					// This ensures the parser state is synchronized with the selected model
-					const newState = await provider.getState()
-					if (newState?.apiConfiguration) {
-						this.updateApiConfiguration(newState.apiConfiguration)
-					}
+					// Note: Profile change applies to provider for subsequent tasks;
+					// active task execution configuration remains locked.
 				}
 
 				this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
@@ -2676,7 +2689,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		// Get condensing configuration
 		const state = await this.providerRef.deref()?.getState()
 		const customCondensingPrompt = state?.customSupportPrompts?.CONDENSE
-		const { mode, apiConfiguration } = state ?? {}
+		const { mode } = state ?? {}
 
 		const { contextTokens: prevContextTokens } = this.getTokenUsage()
 
@@ -2691,7 +2704,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				mode,
 				customModes: state?.customModes,
 				experiments: state?.experiments,
-				apiConfiguration,
+				apiConfiguration: this.apiConfiguration,
 				disabledTools: state?.disabledTools,
 				modelInfo,
 				includeAllToolsWithRestrictions: false,
@@ -4170,6 +4183,14 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				apiProvider && !isRetiredProvider(apiProvider) ? apiProvider : undefined,
 				modelId,
 			)
+
+			// Invariant verification: ensure worker model has not drifted from taskStartModel
+			const currentHandlerModel = this.api.getModel().id
+			if (this.taskStartModel && currentHandlerModel !== this.taskStartModel) {
+				console.warn(
+					`[TaskModelAudit#${this.taskId}] Model drift detected! Initial: ${this.taskStartModel}, Current: ${currentHandlerModel}. Active tasks must preserve their initial model.`,
+				)
+			}
 
 			// Respect user-configured provider rate limiting BEFORE we emit api_req_started.
 			// This prevents the UI from showing an "API Request..." spinner while we are
@@ -5827,7 +5848,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 	private async handleContextWindowExceededError(): Promise<void> {
 		const state = await this.providerRef.deref()?.getState()
-		const { profileThresholds = {}, mode, apiConfiguration } = state ?? {}
+		const { profileThresholds = {}, mode } = state ?? {}
 
 		const { contextTokens } = this.getTokenUsage()
 		const modelInfo = this.api.getModel().info
@@ -5862,7 +5883,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				mode,
 				customModes: state?.customModes,
 				experiments: state?.experiments,
-				apiConfiguration,
+				apiConfiguration: this.apiConfiguration,
 				disabledTools: state?.disabledTools,
 				modelInfo,
 				includeAllToolsWithRestrictions: false,
@@ -6003,7 +6024,6 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		const state = await this.providerRef.deref()?.getState()
 
 		const {
-			apiConfiguration,
 			autoApprovalEnabled,
 			requestDelaySeconds,
 			mode,
@@ -6114,7 +6134,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 						mode,
 						customModes: state?.customModes,
 						experiments: state?.experiments,
-						apiConfiguration,
+						apiConfiguration: this.apiConfiguration,
 						disabledTools: state?.disabledTools,
 						modelInfo,
 						includeAllToolsWithRestrictions: false,
@@ -6265,7 +6285,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		// but uses allowedFunctionNames to restrict which tools can be called.
 		// Other providers (Anthropic, OpenAI, etc.) don't support this feature yet,
 		// so they continue to receive only the filtered tools for the current mode.
-		const supportsAllowedFunctionNames = apiConfiguration?.apiProvider === "gemini"
+		const supportsAllowedFunctionNames = this.apiConfiguration?.apiProvider === "gemini"
 
 		{
 			const provider = this.providerRef.deref()
@@ -6279,7 +6299,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				mode,
 				customModes: state?.customModes,
 				experiments: state?.experiments,
-				apiConfiguration,
+				apiConfiguration: this.apiConfiguration,
 				disabledTools: state?.disabledTools,
 				modelInfo,
 				includeAllToolsWithRestrictions: supportsAllowedFunctionNames,

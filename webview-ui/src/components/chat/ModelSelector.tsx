@@ -351,6 +351,7 @@ export const ModelSelector = ({
 
 	const {
 		apiConfiguration,
+		activeTaskApiConfiguration,
 		currentApiConfigName: extCurrentApiConfigName,
 		setApiConfiguration,
 		routerModels,
@@ -384,6 +385,21 @@ export const ModelSelector = ({
 
 	const { id: activeModelId, info: activeModelInfo } = useSelectedModel(apiConfiguration)
 	const activeProvider = (apiConfiguration?.apiProvider || "xkiro") as ProviderName
+
+	// Active running task model details (locked to current task)
+	const { id: taskModelId, info: taskModelInfo } = useSelectedModel(activeTaskApiConfiguration)
+	const isTaskRunning = Boolean(activeTaskApiConfiguration)
+	const taskDisplayName = useMemo(() => {
+		return activeTaskApiConfiguration ? cleanModelDisplayName(taskModelId, taskModelInfo) : undefined
+	}, [activeTaskApiConfiguration, taskModelId, taskModelInfo])
+
+	const isModelDeferred = Boolean(
+		isTaskRunning &&
+			(taskModelId !== activeModelId ||
+				(activeTaskApiConfiguration?.apiProvider &&
+					apiConfiguration?.apiProvider &&
+					activeTaskApiConfiguration.apiProvider !== apiConfiguration.apiProvider)),
+	)
 
 	const handleRefreshModels = useCallback(() => {
 		setIsRefreshingModels(true)
@@ -951,6 +967,16 @@ export const ModelSelector = ({
 			<StandardTooltip
 				content={
 					<div className="flex flex-col gap-0.5 text-xs text-left">
+						{isTaskRunning && (
+							<div className="font-semibold text-vscode-charts-orange text-[11px] mb-0.5">
+								⚡ Current task locked to: {taskDisplayName || taskModelId}
+							</div>
+						)}
+						{isModelDeferred && (
+							<div className="text-vscode-charts-blue text-[11px] mb-0.5 font-medium">
+								➔ Next task will use: {activeDisplayName}
+							</div>
+						)}
 						<div className="font-semibold text-vscode-foreground">{activeDisplayName}</div>
 						<div className="text-vscode-descriptionForeground font-mono text-[11px]">Model: {activeModelId}</div>
 						<div className="text-vscode-descriptionForeground text-[11px]">
@@ -971,8 +997,23 @@ export const ModelSelector = ({
 							: "opacity-90 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground/60 hover:border-border/70 cursor-pointer",
 						triggerClassName,
 					)}>
-					<ProviderIcon provider={activeProvider} />
-					<span className="truncate font-medium">{activeDisplayName}</span>
+					<ProviderIcon
+						provider={
+							(isModelDeferred
+								? (activeTaskApiConfiguration?.apiProvider as ProviderName)
+								: activeProvider) || activeProvider
+						}
+					/>
+					<span className="truncate font-medium">
+						{isModelDeferred ? taskDisplayName || taskModelId : activeDisplayName}
+					</span>
+					{isModelDeferred && (
+						<span
+							data-testid="next-task-model-badge"
+							className="text-[10px] bg-vscode-badge-background text-vscode-badge-foreground px-1.5 py-0.5 rounded font-sans shrink-0 font-medium max-w-[120px] truncate">
+							Next: {activeDisplayName}
+						</span>
+					)}
 					<span className="opacity-40 select-none text-[11px] shrink-0">·</span>
 					<span className="truncate text-vscode-descriptionForeground opacity-80 shrink-0">
 						{effectiveProfileName === "default" ? currentProviderLabel : effectiveProfileName}
@@ -987,6 +1028,24 @@ export const ModelSelector = ({
 				container={portalContainer}
 				className="p-0 overflow-hidden w-[330px] bg-vscode-dropdown-background border border-vscode-dropdown-border shadow-xl">
 				<div className="flex flex-col w-full">
+					{/* Active Task Status Notice */}
+					{isTaskRunning && (
+						<div
+							data-testid="active-task-model-notice"
+							className="px-3 py-1.5 bg-vscode-editorInfo-background/15 border-b border-vscode-dropdown-border/60 text-[11px] text-vscode-descriptionForeground">
+							{isModelDeferred ? (
+								<div>
+									Active task is locked to <strong className="text-vscode-foreground">{taskDisplayName || taskModelId}</strong>.
+									<div className="text-vscode-textLink-foreground mt-0.5 font-medium">Selection will apply to the next task.</div>
+								</div>
+							) : (
+								<div>
+									Active task running on <strong className="text-vscode-foreground">{taskDisplayName || taskModelId}</strong>.
+									Changes made here will apply to the next task.
+								</div>
+							)}
+						</div>
+					)}
 					{/* Header: Provider Badge & Search */}
 					<div className="p-2 border-b border-vscode-dropdown-border/60 bg-vscode-dropdown-background space-y-2">
 						<div className="flex items-center justify-between">

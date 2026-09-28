@@ -1356,7 +1356,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							customModePrompts={customModePrompts}
 						/>
 						<ModelSelector
-							disabled={Boolean(isStreaming || selectApiConfigDisabled)}
+							disabled={false}
 							triggerTestId="dropdown-trigger"
 							triggerClassName="min-w-0 max-w-[280px] sm:max-w-[320px] w-auto inline-flex items-center text-ellipsis overflow-hidden px-2.5 py-1"
 							currentConfigId={currentConfigId}
@@ -1368,7 +1368,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							onToggleLockApiConfig={handleToggleLockApiConfig}
 							onApiConfigChange={handleApiConfigChange}
 						/>
-						<ReasoningEffortButton disabled={Boolean(isStreaming || selectApiConfigDisabled)} />
+						<ReasoningEffortButton disabled={false} />
 						<AutoApproveDropdown triggerClassName="min-w-[28px] text-ellipsis overflow-hidden shrink-0" />
 						{!isEditMode && contextWindow > 0 && (
 							<ContextWindowProgress
