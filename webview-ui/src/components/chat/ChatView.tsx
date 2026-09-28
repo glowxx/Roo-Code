@@ -245,6 +245,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const [playProgressLoop] = useSound(`${audioBaseUri}/progress_loop.wav`, { volume, soundEnabled, interrupt: true })
 
 	const lastPlayedRef = useRef<Record<string, number>>({})
+	const lastCelebratedMsgTsRef = useRef<number | null>(null)
 
 	const playSound = useCallback(
 		(audioType: AudioType) => {
@@ -289,11 +290,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		// if user finished a task, then start a new task with a new conversation history since in this moment that the extension is waiting for user response, the user could close the extension and the conversation history would be lost.
 		// basically as long as a task is active, the conversation history will be persisted
 		if (lastMessage) {
+			const isPartial = lastMessage.partial === true
 			switch (lastMessage.type) {
 				case "ask":
 					// Reset user response flag when a new ask arrives to allow auto-approval
 					userRespondedRef.current = false
-					const isPartial = lastMessage.partial === true
 					switch (lastMessage.ask) {
 						case "api_req_failed":
 							playSound("progress_loop")
@@ -448,9 +449,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						}
 						case "completion_result":
 							// Extension waiting for feedback, but we can just present a new task button.
-							// Only play celebration sound if there are no queued messages.
-							if (!isPartial && messageQueue.length === 0) {
-								playSound("celebration")
+							// Only play celebration sound if task completion is confirmed (not evaluating or denied)
+							// and there are no queued messages.
+							if (
+								!isPartial &&
+								messageQueue.length === 0 &&
+								lastMessage.approvalState !== "EVALUATING" &&
+								lastMessage.approvalState !== "DENIED" &&
+								lastMessage.approvalState !== "USER_DECISION_REQUIRED"
+							) {
+								if (!lastMessage.ts || lastCelebratedMsgTsRef.current !== lastMessage.ts) {
+									if (lastMessage.ts) {
+										lastCelebratedMsgTsRef.current = lastMessage.ts
+									}
+									playSound("celebration")
+								}
 							}
 							setSendingDisabled(isPartial)
 							setClineAsk("completion_result")
@@ -505,6 +518,18 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "mcp_server_request_started":
 						case "mcp_server_response":
 						case "completion_result":
+							if (
+								!isPartial &&
+								messageQueue.length === 0 &&
+								lastMessage.approvalState === "AUTO_APPROVED"
+							) {
+								if (!lastMessage.ts || lastCelebratedMsgTsRef.current !== lastMessage.ts) {
+									if (lastMessage.ts) {
+										lastCelebratedMsgTsRef.current = lastMessage.ts
+									}
+									playSound("celebration")
+								}
+							}
 							break
 					}
 					break

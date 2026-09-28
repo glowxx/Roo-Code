@@ -384,10 +384,19 @@ export const ChatRowContent = ({
 					</span>,
 				]
 			case "completion_result": {
+				const isApproved = message.approvalState === "AUTO_APPROVED"
 				const isEvaluating = message.approvalState === "EVALUATING"
 				const isDenied = message.approvalState === "DENIED"
 				const isUserDecision = message.approvalState === "USER_DECISION_REQUIRED"
 
+				if (isApproved) {
+					return [
+						<span
+							className="codicon codicon-check"
+							style={{ color: successColor, marginBottom: "-1.5px" }}></span>,
+						<span style={{ color: successColor, fontWeight: "bold" }}>{t("chat:taskCompleted")}</span>,
+					]
+				}
 				if (isEvaluating) {
 					return [
 						<ProgressIndicator />,
@@ -420,9 +429,11 @@ export const ChatRowContent = ({
 				}
 				return [
 					<span
-						className="codicon codicon-check"
-						style={{ color: successColor, marginBottom: "-1.5px" }}></span>,
-					<span style={{ color: successColor, fontWeight: "bold" }}>{t("chat:taskCompleted")}</span>,
+						className="codicon codicon-question"
+						style={{ color: normalColor, marginBottom: "-1.5px" }}></span>,
+					<span style={{ color: normalColor, fontWeight: "bold" }}>
+						{t("chat:candidateCompletion", { defaultValue: "Proposed Task Completion" })}
+					</span>,
 				]
 			}
 			case "api_req_rate_limit_wait":
@@ -1441,11 +1452,11 @@ export const ChatRowContent = ({
 					)
 				case "completion_result": {
 					const borderColor =
-						message.approvalState === "DENIED"
-							? "border-amber-500/40"
-							: message.approvalState === "EVALUATING"
-								? "border-blue-500/40"
-								: "border-emerald-500/40"
+						message.approvalState === "AUTO_APPROVED"
+							? "border-emerald-500/40"
+							: message.approvalState === "DENIED"
+								? "border-amber-500/40"
+								: "border-blue-500/40"
 					return (
 						<div className="group">
 							<div style={headerStyle}>

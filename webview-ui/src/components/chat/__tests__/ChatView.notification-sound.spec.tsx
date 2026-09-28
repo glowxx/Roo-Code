@@ -16,6 +16,7 @@ interface ClineMessage {
 	ts: number
 	text?: string
 	partial?: boolean
+	approvalState?: string
 }
 
 interface QueuedMessage {
@@ -661,6 +662,84 @@ describe("ChatView - Sound Debounce", () => {
 
 		await waitFor(() => {
 			expect(screen.queryByText("Context condensation timed out after 60 seconds.")).not.toBeInTheDocument()
+		})
+	})
+
+	it("does not play celebration sound when completion_result is EVALUATING or DENIED", async () => {
+		mockPlayFunction.mockClear()
+		renderChatView()
+
+		// Initial task
+		mockPostMessage({
+			soundEnabled: true,
+			messageQueue: [],
+			clineMessages: [{ type: "say", say: "task", ts: Date.now() - 2000, text: "Initial task" }],
+		})
+
+		// Send provisional completion with approvalState EVALUATING
+		mockPostMessage({
+			soundEnabled: true,
+			messageQueue: [],
+			clineMessages: [
+				{ type: "say", say: "task", ts: Date.now() - 2000, text: "Initial task" },
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now(),
+					text: "Candidate completion",
+					partial: false,
+					approvalState: "EVALUATING",
+				},
+			],
+		})
+
+		// Give time for effect to run
+		await new Promise((resolve) => setTimeout(resolve, 200))
+		expect(mockPlayFunction).not.toHaveBeenCalled()
+
+		// Send denial
+		mockPostMessage({
+			soundEnabled: true,
+			messageQueue: [],
+			clineMessages: [
+				{ type: "say", say: "task", ts: Date.now() - 2000, text: "Initial task" },
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now(),
+					text: "Candidate completion",
+					partial: false,
+					approvalState: "DENIED",
+				},
+			],
+		})
+
+		await new Promise((resolve) => setTimeout(resolve, 200))
+		expect(mockPlayFunction).not.toHaveBeenCalled()
+	})
+
+	it("plays celebration sound when completion_result is confirmed with AUTO_APPROVED", async () => {
+		mockPlayFunction.mockClear()
+		renderChatView()
+
+		mockPostMessage({
+			soundEnabled: true,
+			messageQueue: [],
+			clineMessages: [
+				{ type: "say", say: "task", ts: Date.now() - 2000, text: "Initial task" },
+				{
+					type: "say",
+					say: "completion_result",
+					ts: Date.now(),
+					text: "Confirmed completion result",
+					partial: false,
+					approvalState: "AUTO_APPROVED",
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(mockPlayFunction).toHaveBeenCalled()
 		})
 	})
 })
