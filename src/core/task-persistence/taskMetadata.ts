@@ -25,6 +25,10 @@ export type TaskMetadataOptions = {
 	apiConfigName?: string
 	/** Initial status for the task (e.g., "active" for child tasks) */
 	initialStatus?: "active" | "delegated" | "completed"
+	/** Optional pre-generated or user-assigned title */
+	title?: string
+	/** Source of the title */
+	titleSource?: "generated_ai" | "manual" | "fallback"
 }
 
 export async function taskMetadata({
@@ -38,6 +42,8 @@ export async function taskMetadata({
 	mode,
 	apiConfigName,
 	initialStatus,
+	title,
+	titleSource,
 }: TaskMetadataOptions) {
 	const taskDir = await getTaskDirectoryPath(globalStoragePath, id)
 
@@ -70,7 +76,7 @@ export async function taskMetadata({
 			messages[findLastIndex(messages, (m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))] ||
 			taskMessage
 
-		timestamp = lastRelevantMessage.ts
+		timestamp = lastRelevantMessage?.ts ?? Date.now()
 
 		tokenUsage = getApiMetrics(combineApiRequests(combineCommandSequences(messages.slice(1))))
 
@@ -89,6 +95,8 @@ export async function taskMetadata({
 		}
 	}
 
+	const createdAt = hasMessages ? (taskMessage?.ts ?? Date.now()) : Date.now()
+
 	// Create historyItem once with pre-calculated values.
 	// initialStatus is included when provided (e.g., "active" for child tasks)
 	// to ensure the status is set from the very first save, avoiding race conditions
@@ -98,6 +106,7 @@ export async function taskMetadata({
 		rootTaskId,
 		parentTaskId,
 		number: taskNumber,
+		createdAt,
 		ts: timestamp,
 		task: hasMessages
 			? taskMessage!.text?.trim() || t("common:tasks.incomplete", { taskNumber })
@@ -112,6 +121,8 @@ export async function taskMetadata({
 		mode,
 		...(typeof apiConfigName === "string" && apiConfigName.length > 0 ? { apiConfigName } : {}),
 		...(initialStatus && { status: initialStatus }),
+		...(typeof title === "string" && title.length > 0 ? { title } : {}),
+		...(titleSource ? { titleSource } : {}),
 	}
 
 	return { historyItem, tokenUsage }

@@ -8,10 +8,11 @@ import { execSync } from "child_process"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-import { RooCodeEventName, type ExtensionMessage, type WebviewMessage } from "@roo-code/types"
+import { RooCodeEventName, type ExtensionMessage, type WebviewMessage, type TitleSource } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
-import type { AgentStatusType, TerminalLogEntry, DiffFileEntry } from "../shared/types.js"
+import type { AgentStatusType, TerminalLogEntry, DiffFileEntry, SidebarChatEntry } from "../shared/types.js"
 import { canonicalizePath, arePathsEqual, loadDesktopConfig, saveDesktopConfig } from "./config.js"
+import { generateConversationTitle, sanitizeTitle, preprocessTitleInput } from "./title-generator.js"
 
 export interface AgentHostOptions {
 	workspacePath: string
@@ -84,6 +85,26 @@ export function formatChatTitle(task?: unknown, title?: unknown, maxLength = 80)
 	return candidate
 }
 
+/**
+ * Extract creation timestamp in ms from task ID (UUIDv7) or fallback timestamp.
+ */
+export function extractCreationTimestamp(id?: string, fallbackTs?: number): number {
+	if (id && typeof id === "string") {
+		try {
+			// Modern Roo Code task IDs are UUIDv7, where the first 48 bits (12 hex digits)
+			// encode the Unix epoch milliseconds.
+			const hex = id.replace(/-/g, "").substring(0, 12)
+			if (/^[0-9a-fA-F]{12}$/.test(hex)) {
+				const ms = parseInt(hex, 16)
+				if (ms > 1577836800000 && ms < 4102444800000) {
+					return ms
+				}
+			}
+		} catch {}
+	}
+	return typeof fallbackTs === "number" && !isNaN(fallbackTs) ? fallbackTs : 0
+}
+
 export class DesktopAgentHost extends EventEmitter {
 	private vscode: ReturnType<typeof createVSCodeAPI> | null = null
 	private extensionModule: ExtensionModule | null = null
@@ -104,6 +125,8 @@ export class DesktopAgentHost extends EventEmitter {
 	private currentWorkspaceEpoch = 0
 	private pendingWorkspaceChangeAbortController: AbortController | null = null
 	private deletedTaskIds: Set<string> = new Set()
+	private pendingTitleAbortControllers: Map<string, AbortController> = new Map()
+	private titleGenerationTaskIds: Set<string> = new Set()
 
 	constructor(options: AgentHostOptions) {
 		super()
@@ -467,8 +490,16 @@ export class DesktopAgentHost extends EventEmitter {
 		this.unregisterWebviewProvider(_viewId)
 		this.provider = provider
 		if (this.provider && typeof this.provider.on === "function") {
-			const onTaskStarted = () => {
+			const onTaskStarted = (taskId?: string) => {
 				this.emit("taskHistoryChanged")
+				const id = taskId || this.provider?.getCurrentTask?.()?.taskId
+				if (id) {
+					const promptText =
+						this.provider?.getCurrentTask?.()?.task || this.provider?.taskHistoryStore?.get?.(id)?.task
+					if (promptText) {
+						this.triggerBackgroundTitleGeneration(id, promptText)
+					}
+				}
 			}
 			const onTaskCompleted = async (taskId: string) => {
 				await this.handleTaskCompleted(taskId)
@@ -611,17 +642,7 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 	}
 
-	public getChatsByWorkspace(): Record<
-		string,
-		Array<{
-			id: string
-			title: string
-			ts: number
-			status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
-			hasUnread?: boolean
-			lastReadTs?: number
-		}>
-	> {
+	public getChatsByWorkspace(): Record<string, SidebarChatEntry[]> {
 		let items: any[] = []
 
 		// 1. Try in-memory provider.taskHistoryStore
@@ -671,25 +692,13 @@ export class DesktopAgentHost extends EventEmitter {
 			} catch {}
 		}
 
-		const result: Record<
-			string,
-			Array<{
-				id: string
-				title: string
-				ts: number
-				status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
-				hasUnread?: boolean
-				lastReadTs?: number
-			}>
-		> = {}
+		const result: Record<string, SidebarChatEntry[]> = {}
 
 		for (const item of items) {
 			if (!item || !item.id || this.deletedTaskIds.has(String(item.id))) continue
 			let ws = ""
 			if (item.workspace && typeof item.workspace === "string" && item.workspace.trim()) {
 				ws = canonicalizePath(item.workspace.trim())
-			} else if (this.currentWorkspace) {
-				ws = canonicalizePath(this.currentWorkspace)
 			} else {
 				ws = "__unassigned__"
 			}
@@ -771,11 +780,14 @@ export class DesktopAgentHost extends EventEmitter {
 			const isChatActive = String(item.id) === this.activeTaskId
 			const hasUnread = isChatActive ? false : Boolean(item.hasUnread)
 
+			const creationTs = item.createdAt ?? extractCreationTimestamp(String(item.id), typeof item.ts === "number" ? item.ts : 0)
 			const list = result[ws] ?? []
 			list.push({
 				id: String(item.id),
 				title: formatChatTitle(item.task, item.title),
-				ts: typeof item.ts === "number" ? item.ts : Date.now(),
+				titleSource: item.titleSource,
+				createdAt: creationTs,
+				ts: typeof item.ts === "number" ? item.ts : creationTs,
 				status,
 				hasUnread,
 				lastReadTs: typeof item.lastReadTs === "number" ? item.lastReadTs : undefined,
@@ -783,9 +795,15 @@ export class DesktopAgentHost extends EventEmitter {
 			result[ws] = list
 		}
 
-		// Sort each workspace's chats by timestamp descending (newest first)
+		// Sort each workspace's chats strictly by creation timestamp descending (newest first).
+		// Internal agent actions (thinking, tools, diffs, completions) never alter list position.
 		for (const ws of Object.keys(result)) {
-			result[ws]?.sort((a, b) => b.ts - a.ts)
+			result[ws]?.sort((a, b) => {
+				const aOrder = a.createdAt ?? a.ts
+				const bOrder = b.createdAt ?? b.ts
+				if (bOrder !== aOrder) return bOrder - aOrder
+				return String(b.id).localeCompare(String(a.id))
+			})
 		}
 
 		return result
@@ -832,6 +850,150 @@ export class DesktopAgentHost extends EventEmitter {
 		} else {
 			this.sendToExtension({ type: "clearTask" } as any)
 		}
+	}
+
+	/**
+	 * Trigger asynchronous semantic conversation title generation in the background.
+	 * Never blocks the task or worker startup. Runs with timeout, tombstone, and abort safety.
+	 */
+	public triggerBackgroundTitleGeneration(taskId: string, promptText: string): void {
+		if (!taskId || typeof taskId !== "string" || this.deletedTaskIds.has(taskId)) {
+			return
+		}
+		if (this.titleGenerationTaskIds.has(taskId)) {
+			return
+		}
+
+		// Don't generate if task already has a custom/manual title or already generated title
+		const existingItem = this.provider?.taskHistoryStore?.get?.(taskId)
+		if (existingItem?.titleSource === "manual") {
+			return
+		}
+
+		this.titleGenerationTaskIds.add(taskId)
+		const abortController = new AbortController()
+		this.pendingTitleAbortControllers.set(taskId, abortController)
+
+		void (async () => {
+			try {
+				const completeFn = async (p: string, signal?: AbortSignal): Promise<string> => {
+					if (this.provider && typeof this.provider.completePrompt === "function") {
+						return this.provider.completePrompt(p, { signal })
+					}
+					throw new Error("No completion provider available")
+				}
+
+				const res = await generateConversationTitle({
+					taskId,
+					prompt: promptText,
+					completeFn,
+					signal: abortController.signal,
+					onAudit: (audit) => {
+						console.log(
+							`[ConversationTitleAudit] conversationId=${audit.conversationId} status=${audit.status} latency=${audit.latencyMs}ms titleSource=${audit.titleSource}`,
+						)
+					},
+				})
+
+				// Tombstone guard: discard if deleted while generation was in-flight
+				if (abortController.signal.aborted || this.deletedTaskIds.has(taskId)) {
+					return
+				}
+				if (this.provider?.taskHistoryStore?.isDeleted?.(taskId)) {
+					return
+				}
+
+				// Manual title guard: never overwrite a manual rename that happened while in flight
+				const currentItem = this.provider?.taskHistoryStore?.get?.(taskId)
+				if (currentItem?.titleSource === "manual") {
+					return
+				}
+
+				if (this.provider?.taskHistoryStore) {
+					await this.provider.taskHistoryStore.upsert({
+						...(currentItem || { id: taskId, task: promptText, ts: 0 }),
+						title: res.title,
+						titleSource: res.titleSource,
+					})
+				}
+
+				if (this.storageDir) {
+					const candidatePaths = [
+						path.join(this.storageDir, "global-storage", "tasks", taskId, "history_item.json"),
+						path.join(this.storageDir, "tasks", taskId, "history_item.json"),
+						path.join(this.storageDir, "Roo-Code", "tasks", taskId, "history_item.json"),
+					]
+					for (const itemPath of candidatePaths) {
+						if (fs.existsSync(itemPath)) {
+							try {
+								const rawItem = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
+								if (rawItem.titleSource !== "manual") {
+									rawItem.title = res.title
+									rawItem.titleSource = res.titleSource
+									fs.writeFileSync(itemPath, JSON.stringify(rawItem, null, 2), "utf-8")
+								}
+							} catch {}
+						}
+					}
+				}
+
+				// Fine-grained update: notify clients to patch title in-place without sidebar re-sort
+				this.emit("conversationTitleUpdated", { taskId, title: res.title, titleSource: res.titleSource })
+			} catch (err) {
+				console.warn(`[DesktopAgentHost] Background title generation error for ${taskId}:`, err)
+			} finally {
+				this.pendingTitleAbortControllers.delete(taskId)
+			}
+		})()
+	}
+
+	public async renameChat(taskId: string, newTitle: string): Promise<boolean> {
+		if (!taskId || this.deletedTaskIds.has(taskId)) return false
+		const cleanTitle = sanitizeTitle(newTitle, "Untitled Task")
+
+		// Abort any pending AI title generation
+		const controller = this.pendingTitleAbortControllers.get(taskId)
+		if (controller) {
+			controller.abort()
+			this.pendingTitleAbortControllers.delete(taskId)
+		}
+		this.titleGenerationTaskIds.add(taskId)
+
+		let changed = false
+		if (this.provider?.taskHistoryStore) {
+			const item = this.provider.taskHistoryStore.get?.(taskId)
+			if (item) {
+				await this.provider.taskHistoryStore.upsert({
+					...item,
+					title: cleanTitle,
+					titleSource: "manual",
+				})
+				changed = true
+			}
+		}
+
+		if (this.storageDir) {
+			const candidatePaths = [
+				path.join(this.storageDir, "global-storage", "tasks", taskId, "history_item.json"),
+				path.join(this.storageDir, "tasks", taskId, "history_item.json"),
+				path.join(this.storageDir, "Roo-Code", "tasks", taskId, "history_item.json"),
+			]
+			for (const itemPath of candidatePaths) {
+				if (fs.existsSync(itemPath)) {
+					try {
+						const rawItem = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
+						rawItem.title = cleanTitle
+						rawItem.titleSource = "manual"
+						fs.writeFileSync(itemPath, JSON.stringify(rawItem, null, 2), "utf-8")
+						changed = true
+					} catch {}
+				}
+			}
+		}
+
+		this.emit("conversationTitleUpdated", { taskId, title: cleanTitle, titleSource: "manual" })
+		this.emit("taskHistoryChanged")
+		return changed
 	}
 
 	public isTaskDeleted(taskId: string): boolean {
@@ -917,6 +1079,11 @@ export class DesktopAgentHost extends EventEmitter {
 
 		// 1. Mark tombstone to block any late asynchronous callbacks from recreating/touching it
 		this.deletedTaskIds.add(taskId)
+		const pendingTitleController = this.pendingTitleAbortControllers.get(taskId)
+		if (pendingTitleController) {
+			pendingTitleController.abort()
+			this.pendingTitleAbortControllers.delete(taskId)
+		}
 
 		// 2. Identify the workspace for this chat to handle active task fallback selection
 		const chatsByWs = this.getChatsByWorkspace()
@@ -1115,6 +1282,11 @@ export class DesktopAgentHost extends EventEmitter {
 		// 3. Tombstone and delete each chat belonging to this project
 		for (const taskId of allTaskIds) {
 			this.deletedTaskIds.add(taskId)
+			const pendingTitleController = this.pendingTitleAbortControllers.get(taskId)
+			if (pendingTitleController) {
+				pendingTitleController.abort()
+				this.pendingTitleAbortControllers.delete(taskId)
+			}
 			if (this.activeTaskId === taskId) {
 				this.activeTaskId = null
 			}
@@ -1393,6 +1565,10 @@ export class DesktopAgentHost extends EventEmitter {
 				this.updateLatestTerminalOutput(typeof raw.text === "string" ? raw.text : "")
 			} else if (raw.say === "task") {
 				this.setStatus("thinking")
+				const taskId = this.provider?.getCurrentTask?.()?.taskId || this.activeTaskId || (raw as any).taskId
+				if (taskId && typeof raw.text === "string" && raw.text.trim()) {
+					this.triggerBackgroundTitleGeneration(taskId, raw.text.trim())
+				}
 			} else if (raw.say === "completion_result") {
 				this.setStatus("idle")
 				this.finishRunningTerminalLogs()
@@ -1418,7 +1594,6 @@ export class DesktopAgentHost extends EventEmitter {
 
 		if (
 			raw.type === "taskHistoryUpdated" ||
-			raw.type === "taskHistoryItemUpdated" ||
 			raw.type === "relinquishControl" ||
 			(raw.type === "say" && (raw.say === "task" || raw.say === "completion_result"))
 		) {

@@ -818,6 +818,32 @@
 		renderSidebar()
 	}
 
+	function handleConversationTitleUpdated(msg) {
+		const { taskId, title, titleSource } = msg
+		if (!taskId || !title) return
+
+		// Update in-memory sidebarData
+		for (const ws of Object.keys(sidebarData.chats || {})) {
+			const chat = (sidebarData.chats[ws] || []).find((c) => c.id === taskId)
+			if (chat) {
+				chat.title = title
+				if (titleSource) chat.titleSource = titleSource
+			}
+		}
+
+		// Surgical in-place DOM update (flicker-free, jump-free)
+		const chatEl = document.querySelector(`.sidebar-chat-item[data-task-id="${taskId}"]`)
+		if (chatEl) {
+			const titleEl = chatEl.querySelector(".chat-title")
+			if (titleEl) {
+				const formatted = formatChatTitle(title)
+				titleEl.textContent = formatted
+				titleEl.title = formatted
+				titleEl.classList.add("title-updated")
+			}
+		}
+	}
+
 	async function switchChat(taskId, wsPath) {
 		if (!taskId) return
 		if (taskId === activeTaskId) return
@@ -1472,6 +1498,198 @@
 		return html
 	}
 
+	function tryPatchSidebarInPlace(workspaces, curWsNorm) {
+		if (!sidebarProjectsListEl) return false
+		const projectEls = Array.from(sidebarProjectsListEl.children).filter((el) => el.classList.contains("sidebar-project-item"))
+		if (projectEls.length !== workspaces.length) return false
+
+		// Phase 1: Verify exact structural match (workspaces, expanded states, visible chats order)
+		const patchPlan = []
+		for (let i = 0; i < workspaces.length; i++) {
+			const ws = workspaces[i]
+			const pEl = projectEls[i]
+			if (pEl.getAttribute("data-workspace") !== ws) return false
+
+			const isExpanded = projectExpansions.has(ws)
+			const chatsListEl = pEl.querySelector(".project-chats-list")
+			if (!chatsListEl) return false
+			const hasExpandedClass = chatsListEl.classList.contains("expanded")
+			if (isExpanded !== hasExpandedClass) return false
+
+			let chats = []
+			const wsNorm = pathNormalize(ws)
+			for (const [chatWs, chatList] of Object.entries(sidebarData.chats)) {
+				if (pathNormalize(chatWs) === wsNorm) {
+					chats = chatList
+					break
+				}
+			}
+
+			if (!isExpanded) {
+				if (chatsListEl.children.length > 0) return false
+				patchPlan.push({ ws, pEl, isExpanded, wsNorm, visibleChats: [] })
+				continue
+			}
+
+			if (chats.length === 0) {
+				if (!chatsListEl.querySelector(".sidebar-no-chats")) return false
+				patchPlan.push({ ws, pEl, isExpanded, wsNorm, visibleChats: [] })
+				continue
+			}
+
+			const isChatExpanded = projectChatExpansions.has(ws)
+			let visibleChats = chats
+			let isTruncated = false
+			let hiddenChats = []
+
+			if (chats.length > MAX_VISIBLE_CHATS) {
+				if (!isChatExpanded) {
+					isTruncated = true
+					visibleChats = chats.slice(0, MAX_VISIBLE_CHATS)
+					if (activeTaskId) {
+						const activeIdx = chats.findIndex((c) => c.id === activeTaskId)
+						if (activeIdx >= MAX_VISIBLE_CHATS && !visibleChats.some((c) => c.id === activeTaskId)) {
+							visibleChats = [...visibleChats, chats[activeIdx]]
+						}
+					}
+					hiddenChats = chats.filter((c) => !visibleChats.some((v) => v.id === c.id))
+				}
+			}
+
+			const chatEls = Array.from(chatsListEl.children).filter((el) => el.classList.contains("sidebar-chat-item"))
+			if (chatEls.length !== visibleChats.length) return false
+
+			for (let j = 0; j < visibleChats.length; j++) {
+				if (chatEls[j].getAttribute("data-task-id") !== visibleChats[j].id) {
+					return false
+				}
+			}
+
+			const toggleBtn = chatsListEl.querySelector(".sidebar-chat-toggle-btn")
+			const needsToggle = chats.length > MAX_VISIBLE_CHATS
+			if (needsToggle && !toggleBtn) return false
+			if (!needsToggle && toggleBtn) return false
+			if (toggleBtn) {
+				const isBtnExpanded = toggleBtn.getAttribute("aria-expanded") === "true"
+				if (isBtnExpanded !== isChatExpanded) return false
+			}
+
+			patchPlan.push({ ws, pEl, isExpanded, wsNorm, visibleChats, chatEls, isTruncated, hiddenChats, toggleBtn })
+		}
+
+		// Phase 2: Structural match verified! Apply surgical in-place DOM updates
+		for (const item of patchPlan) {
+			const { ws, pEl, isExpanded, wsNorm, visibleChats, chatEls, isTruncated, hiddenChats, toggleBtn } = item
+			const isActive = wsNorm === curWsNorm
+			pEl.classList.toggle("active", isActive)
+
+			// Update header active status dot
+			const headerEl = pEl.querySelector(".project-header")
+			if (headerEl) {
+				let dot = headerEl.querySelector(".project-status-dot")
+				if (isActive && !dot) {
+					const iconBox = headerEl.querySelector(".project-icon-box")
+					dot = document.createElement("span")
+					dot.className = "project-status-dot"
+					dot.title = tDesktop("activeProject")
+					if (iconBox && iconBox.nextSibling) {
+						headerEl.insertBefore(dot, iconBox.nextSibling)
+					} else {
+						headerEl.appendChild(dot)
+					}
+				} else if (!isActive && dot) {
+					dot.remove()
+				}
+			}
+
+			if (!isExpanded || !chatEls) continue
+
+			for (let j = 0; j < visibleChats.length; j++) {
+				const chat = visibleChats[j]
+				const chatEl = chatEls[j]
+				const isChatActive = activeTaskId === chat.id
+
+				chatEl.classList.toggle("active", isChatActive)
+
+				let statusSlotHtml = ""
+				let statusAria = tDesktop("chatStatusCompleted")
+
+				if (chat.status === "running") {
+					statusSlotHtml = `<span class="chat-spinner" role="status" aria-label="${escapeHtml(tDesktop("chatStatusRunning"))}"></span>`
+					statusAria = tDesktop("chatStatusRunning")
+				} else if (chat.status === "needs_attention") {
+					statusSlotHtml = `<span class="chat-status-badge needs-attention" role="status" aria-label="${escapeHtml(tDesktop("chatStatusNeedsAttention"))}">!</span>`
+					statusAria = tDesktop("chatStatusNeedsAttention")
+				} else if (chat.hasUnread) {
+					statusSlotHtml = `<span class="chat-unread-dot" role="status" aria-label="${escapeHtml(tDesktop("chatStatusCompletedUnread"))}"></span>`
+					statusAria = tDesktop("chatStatusCompletedUnread")
+				}
+
+				const chatDisplayTitle = formatChatTitle(chat.title || chat.id)
+				const itemAriaLabel = `${chatDisplayTitle} - ${statusAria}`
+				if (chatEl.getAttribute("aria-label") !== itemAriaLabel) {
+					chatEl.setAttribute("aria-label", itemAriaLabel)
+				}
+
+				const titleEl = chatEl.querySelector(".chat-title")
+				if (titleEl && titleEl.textContent !== chatDisplayTitle) {
+					titleEl.textContent = chatDisplayTitle
+					titleEl.title = chatDisplayTitle
+				}
+
+				const statusSlot = chatEl.querySelector(".chat-status-slot")
+				if (statusSlot) {
+					if (statusSlot.innerHTML !== statusSlotHtml) {
+						statusSlot.innerHTML = statusSlotHtml
+					}
+					if (statusSlot.title !== statusAria) {
+						statusSlot.title = statusAria
+					}
+				}
+
+				const timeEl = chatEl.querySelector(".chat-time")
+				const timeText = formatTimeAgo(chat.ts)
+				if (timeEl && timeEl.textContent !== timeText) {
+					timeEl.textContent = timeText
+				}
+			}
+
+			// Update toggle button indicators if truncated
+			if (toggleBtn && isTruncated && hiddenChats.length > 0) {
+				const hiddenRunning = hiddenChats.filter((c) => c.status === "running").length
+				const hiddenAttention = hiddenChats.filter((c) => c.status === "needs_attention").length
+				const hiddenUnread = hiddenChats.filter((c) => c.hasUnread).length
+
+				let indicatorsHtml = ""
+				if (hiddenRunning > 0) {
+					indicatorsHtml += `<span class="chat-spinner" role="status" title="${hiddenRunning} active"></span>`
+				}
+				if (hiddenAttention > 0) {
+					indicatorsHtml += `<span class="chat-status-badge needs-attention" role="status" title="${hiddenAttention} needs attention">!</span>`
+				}
+				if (hiddenUnread > 0) {
+					indicatorsHtml += `<span class="chat-unread-dot" role="status" title="${hiddenUnread} unread"></span>`
+				}
+
+				let indContainer = toggleBtn.querySelector(".chat-toggle-indicators")
+				if (indicatorsHtml) {
+					if (!indContainer) {
+						indContainer = document.createElement("div")
+						indContainer.className = "chat-toggle-indicators"
+						toggleBtn.appendChild(indContainer)
+					}
+					if (indContainer.innerHTML !== indicatorsHtml) {
+						indContainer.innerHTML = indicatorsHtml
+					}
+				} else if (indContainer) {
+					indContainer.remove()
+				}
+			}
+		}
+
+		return true
+	}
+
 	function renderSidebar() {
 		if (!sidebarProjectsListEl) return
 
@@ -1504,6 +1722,11 @@
 			document.getElementById("sidebar-open-first-btn")?.addEventListener("click", () => {
 				openFolderDialog()
 			})
+			return
+		}
+
+		// Try surgical in-place DOM patching if workspace & chat structure has not changed
+		if (tryPatchSidebarInPlace(workspaces, curWsNorm)) {
 			return
 		}
 
@@ -2061,6 +2284,10 @@
 				updateSidebarData(msg.data)
 				break
 
+			case "conversationTitleUpdated":
+				handleConversationTitleUpdated(msg)
+				break
+
 			case "extensionMessage":
 				forwardToWebview(msg.message)
 				if (msg.message?.type === "terminalSessionStarted") {
@@ -2105,11 +2332,7 @@
 						renderSidebar()
 					}
 				}
-				if (
-					msg.message?.type === "taskHistoryUpdated" ||
-					msg.message?.type === "taskHistoryItemUpdated" ||
-					(msg.message?.type === "say" && msg.message?.say === "completion_result")
-				) {
+				if (msg.message?.type === "taskHistoryUpdated") {
 					fetchSidebarData()
 				}
 				if (msg.message?.type === "showTaskWithId" && msg.message.text) {
@@ -4418,9 +4641,7 @@
 	connectWebSocket()
 	loadWorkspaceFiles()
 	fetchSidebarData()
-	if (typeof requestIdleCallback === "function") {
-		requestIdleCallback(() => prewarmSettingsFrame(), { timeout: 2000 })
-	} else {
-		setTimeout(prewarmSettingsFrame, 1000)
-	}
+	// Memory optimization: do not prewarm settings frame on startup to prevent running two heavy React apps concurrently.
+	// The settings iframe is lazily loaded when the user opens settings or hovers over the settings button.
+	openSettingsBtn?.addEventListener("pointerenter", prewarmSettingsFrame, { once: true })
 })()

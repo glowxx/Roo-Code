@@ -5,13 +5,19 @@ import { queuedMessageSchema } from "./message.js"
  * HistoryItem
  */
 
+export const titleSourceSchema = z.enum(["generated_ai", "manual", "fallback"])
+export type TitleSource = z.infer<typeof titleSourceSchema>
+
 export const historyItemSchema = z.object({
 	id: z.string(),
 	rootTaskId: z.string().optional(),
 	parentTaskId: z.string().optional(),
 	number: z.number(),
+	createdAt: z.number().optional(),
 	ts: z.number(),
 	task: z.string(),
+	title: z.string().optional(),
+	titleSource: titleSourceSchema.optional(),
 	tokensIn: z.number(),
 	tokensOut: z.number(),
 	cacheWrites: z.number().optional(),

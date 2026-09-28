@@ -41,10 +41,31 @@ export interface TaskHistoryStoreOptions {
 	onWrite?: (items: HistoryItem[]) => Promise<void>
 }
 
+/**
+ * Extract creation timestamp in ms from task ID (UUIDv7) or fallback timestamp.
+ */
+export function extractCreationTimestamp(id?: string, fallbackTs?: number): number {
+	if (id && typeof id === "string") {
+		try {
+			// Modern Roo Code task IDs are UUIDv7, where the first 48 bits (12 hex digits)
+			// encode the Unix epoch milliseconds.
+			const hex = id.replace(/-/g, "").substring(0, 12)
+			if (/^[0-9a-fA-F]{12}$/.test(hex)) {
+				const ms = parseInt(hex, 16)
+				if (ms > 1577836800000 && ms < 4102444800000) {
+					return ms
+				}
+			}
+		} catch {}
+	}
+	return typeof fallbackTs === "number" && !isNaN(fallbackTs) ? fallbackTs : 0
+}
+
 export class TaskHistoryStore {
 	private readonly globalStoragePath: string
 	private readonly onWrite?: (items: HistoryItem[]) => Promise<void>
 	private cache: Map<string, HistoryItem> = new Map()
+	private deletedTaskIds: Set<string> = new Set()
 	private writeLock: Promise<void> = Promise.resolve()
 	private indexWriteTimer: ReturnType<typeof setTimeout> | null = null
 	private fsWatcher: fsSync.FSWatcher | null = null
@@ -139,10 +160,19 @@ export class TaskHistoryStore {
 	}
 
 	/**
-	 * Get all history items, sorted by timestamp descending (newest first).
+	 * Get all history items, sorted by creation timestamp descending (newest first).
+	 * Preserves stable physical ordering regardless of internal agent activity.
 	 */
 	getAll(): HistoryItem[] {
-		return Array.from(this.cache.values()).sort((a, b) => b.ts - a.ts)
+		return Array.from(this.cache.values()).sort((a, b) => {
+			const aCreated = a.createdAt ?? extractCreationTimestamp(a.id, a.ts)
+			const bCreated = b.createdAt ?? extractCreationTimestamp(b.id, b.ts)
+			if (bCreated !== aCreated) return bCreated - aCreated
+			const aNum = Number(a.number) || 0
+			const bNum = Number(b.number) || 0
+			if (bNum !== aNum) return bNum - aNum
+			return String(b.id).localeCompare(String(a.id))
+		})
 	}
 
 	/**
@@ -150,6 +180,13 @@ export class TaskHistoryStore {
 	 */
 	getByWorkspace(workspace: string): HistoryItem[] {
 		return this.getAll().filter((item) => item.workspace === workspace)
+	}
+
+	/**
+	 * Check if a task has been deleted and tombstoned in this session.
+	 */
+	isDeleted(taskId: string): boolean {
+		return this.deletedTaskIds.has(taskId)
 	}
 
 	// ────────────────────────────── Mutations ──────────────────────────────
@@ -162,10 +199,38 @@ export class TaskHistoryStore {
 	 */
 	async upsert(item: HistoryItem): Promise<HistoryItem[]> {
 		return this.withLock(async () => {
+			// Tombstone safety: never resurrect a task that was deleted
+			if (this.deletedTaskIds.has(item.id)) {
+				return this.getAll()
+			}
+
 			const existing = this.cache.get(item.id)
 
-			// Merge: preserve existing metadata unless explicitly overwritten
-			const merged = existing ? { ...existing, ...item } : item
+			// Precedence and merge: preserve existing metadata, immutable createdAt, and enforce manual title locks
+			let resolvedTitle = item.title !== undefined ? item.title : existing?.title
+			let resolvedSource = item.titleSource !== undefined ? item.titleSource : existing?.titleSource
+			const resolvedCreatedAt = item.createdAt ?? existing?.createdAt ?? extractCreationTimestamp(item.id, item.ts)
+
+			// Manual title lock: AI generation can never overwrite a manual rename
+			if (existing?.titleSource === "manual" && item.titleSource === "generated_ai") {
+				resolvedTitle = existing.title
+				resolvedSource = "manual"
+			}
+
+			const merged: HistoryItem = existing
+				? {
+						...existing,
+						...item,
+						createdAt: resolvedCreatedAt,
+						...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
+						...(resolvedSource !== undefined ? { titleSource: resolvedSource } : {}),
+					}
+				: {
+						...item,
+						createdAt: resolvedCreatedAt,
+						...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
+						...(resolvedSource !== undefined ? { titleSource: resolvedSource } : {}),
+					}
 
 			// Write per-task file (source of truth)
 			await this.writeTaskFile(merged)
@@ -192,6 +257,7 @@ export class TaskHistoryStore {
 	 */
 	async delete(taskId: string): Promise<void> {
 		return this.withLock(async () => {
+			this.deletedTaskIds.add(taskId)
 			this.cache.delete(taskId)
 
 			// Remove per-task file (best-effort)
@@ -217,6 +283,7 @@ export class TaskHistoryStore {
 	async deleteMany(taskIds: string[]): Promise<void> {
 		return this.withLock(async () => {
 			for (const taskId of taskIds) {
+				this.deletedTaskIds.add(taskId)
 				this.cache.delete(taskId)
 
 				try {

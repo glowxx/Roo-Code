@@ -33,6 +33,8 @@ export type AgentStatusType = "idle" | "thinking" | "executing" | "waiting_appro
 export interface SidebarChatEntry {
 	id: string
 	title: string
+	titleSource?: "generated_ai" | "manual" | "fallback"
+	createdAt?: number
 	ts: number
 	status?: "running" | "needs_attention" | "queued" | "completed" | "failed"
 	hasUnread?: boolean
@@ -71,6 +73,7 @@ export type DesktopClientMessage =
 	| { type: "deleteChat"; taskId: string; forceStop?: boolean }
 	| { type: "removeProject"; path: string; forceStop?: boolean }
 	| { type: "openProjectFolder"; path: string }
+	| { type: "renameChat"; taskId: string; title: string }
 
 export type DesktopServerMessage =
 	| { type: "extensionMessage"; message: ExtensionMessage }
@@ -107,4 +110,5 @@ export type DesktopServerMessage =
 	  }
 	| { type: "chatDeleted"; taskId: string; success: boolean; error?: string; requiresStop?: boolean }
 	| { type: "projectRemoved"; path: string; success: boolean; error?: string; requiresStop?: boolean; activeTasksCount?: number }
+	| { type: "conversationTitleUpdated"; taskId: string; title: string; titleSource?: "generated_ai" | "manual" | "fallback" }
 	| { type: "error"; message: string }
