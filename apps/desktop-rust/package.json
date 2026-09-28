@@ -1,0 +1,12 @@
+{
+  "name": "@roo-code/desktop-rust",
+  "version": "1.0.0",
+  "description": "Roo Code Desktop - Rust + System WebView Platform",
+  "private": true,
+  "scripts": {
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build",
+    "check": "cargo check",
+    "test": "cargo test"
+  }
+}
