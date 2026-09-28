@@ -2022,7 +2022,16 @@ window.addEventListener("keydown", function(e) {
 				} else if (clientMsg.type === "openProjectFolder") {
 					const p = clientMsg.path
 					if (p && typeof p === "string" && fs.existsSync(p)) {
-						const norm = path.normalize(path.resolve(p))
+						const norm = canonicalizePath(p)
+						const allowedWorkspaces = [
+							agentHost.getWorkspace(),
+							...(loadDesktopConfig().recentWorkspaces || [])
+						].filter(Boolean).map(canonicalizePath)
+						const isAuthorized = allowedWorkspaces.some(w => arePathsEqual(w, norm))
+						if (!isAuthorized) {
+							safeSend(ws, { type: "error", message: "Forbidden: folder is not an authorized workspace" })
+							return
+						}
 						try {
 							if (process.versions?.electron) {
 								try {
