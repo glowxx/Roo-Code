@@ -479,9 +479,11 @@ export class ApprovalOrchestrator {
 			const inProgress = (target.todoListSnapshot || []).filter(
 				(t) => t.status === "in_progress"
 			)
+			const isMutatingTask = (content: string) =>
+				/implement|edit|modify|fix|polish|write|patch|create\s+file|delete|build|add|ensure|verify|test|setup/i.test(content)
+
 			const actionableInProgress = inProgress.filter((t) => {
-				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
-				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isMutatingTask(t.content)) {
 					return false
 				}
 				return true
@@ -496,7 +498,8 @@ export class ApprovalOrchestrator {
 					unresolvedItems: actionableInProgress.map((t) => ({
 						type: "in_progress_todo",
 						content: t.content,
-						guidance: "Finish this in-progress item, or if blocked by constraints/dependencies, use update_todo_list to mark it [!] (blocked).",
+						guidance:
+							"Finish this in-progress item, or if out of scope or no longer applicable, use update_todo_list to mark it [c] (cancelled).",
 					})),
 				}
 			}
@@ -506,8 +509,7 @@ export class ApprovalOrchestrator {
 				(t) => t.status === "pending"
 			)
 			const actionablePending = pending.filter((t) => {
-				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
-				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isMutatingTask(t.content)) {
 					return false
 				}
 				return true
@@ -522,7 +524,7 @@ export class ApprovalOrchestrator {
 					unresolvedItems: actionablePending.map((t) => ({
 						type: "pending_todo",
 						content: t.content,
-						guidance: "Complete pending item, or update todo list to [!] (blocked) / [c] (cancelled) if no longer applicable.",
+						guidance: "Complete pending item, or update todo list to [c] (cancelled) if no longer applicable.",
 					})),
 				}
 			}
@@ -535,8 +537,7 @@ export class ApprovalOrchestrator {
 				(t) => t.status === "blocked"
 			)
 			const actionableBlocked = blocked.filter((t) => {
-				const isCodeModification = /implement|edit|modify|fix|polish|write|patch|create\s+file|delete/i.test(t.content)
-				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isCodeModification) {
+				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isMutatingTask(t.content)) {
 					return false
 				}
 				return true
@@ -631,24 +632,7 @@ export class ApprovalOrchestrator {
 
 		// File modifications
 		if (actionType === "write_to_file" || actionType === "replace_file_content" || actionType === "delete_file") {
-			// Check explicit negative constraint on modifying code
-			const hasNoModifyConstraint = (request.taskContext.explicitConstraints || []).some((c) =>
-				/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
-			)
-			if (hasNoModifyConstraint) {
-				return {
-					decision: "DENY_AND_REPLAN",
-					risk: "medium",
-					reason: "The current task is strictly read-only by user constraint ('DO NOT modify code'). Modifying source files is forbidden.",
-					taskAligned: false,
-					hardBoundaryViolation: false,
-					isUserConstraintViolation: true,
-					violatedConstraint: "DO NOT modify code (READ-ONLY)",
-					replanGuidance: "The current task is explicitly read-only. Do not modify source code or attempt to make failing tests pass by editing implementation. Continue the review using read-only inspection or test runs only.",
-				}
-			}
-
-			// Hard-block writes to protected files (rules, configs, keys)
+			// Hard-block writes to protected files (rules, configs, keys) - System Safety P0 (Non-overridable)
 			if (target.isProtected) {
 				return {
 					decision: "HARD_BLOCK",
@@ -660,7 +644,7 @@ export class ApprovalOrchestrator {
 				}
 			}
 
-			// Hard-block writes outside workspace in autonomous mode
+			// Hard-block writes outside workspace in autonomous mode - System Safety P0 (Non-overridable)
 			if (target.isOutsideWorkspace) {
 				return {
 					decision: "HARD_BLOCK",
@@ -669,6 +653,137 @@ export class ApprovalOrchestrator {
 					taskAligned: false,
 					hardBoundaryViolation: true,
 					replanGuidance: "Restrict all file modifications to the current workspace root.",
+				}
+			}
+
+			const explicitConstraints = request.taskContext.explicitConstraints || []
+			const latestInstruction = request.taskContext.latestUserInstruction || ""
+			const substantiveInstruction = request.taskContext.latestSubstantiveInstruction || latestInstruction
+			const activeGoal = request.taskContext.activeGoal || ""
+			const normTarget = (target.filePath || "").replace(/\\/g, "/").toLowerCase()
+
+			// Extract scoped write allowances and denials
+			const scopedAllows: string[] = [
+				...(request.taskContext.scopedWriteAllows || []).map((s) => s.replace(/\\/g, "/").toLowerCase().trim()),
+			]
+			const scopedDenies: string[] = [
+				...(request.taskContext.scopedWriteDenies || []).map((s) => s.replace(/\\/g, "/").toLowerCase().trim()),
+			]
+
+			for (const c of explicitConstraints) {
+				const allowMatch = c.match(
+					/(?:ALLOWED\s+to\s+modify|możesz\s+modyfikować|modyfikuj\s+wyłącznie|modify\s+only)\s*(.+)/i
+				)
+				if (allowMatch && allowMatch[1]) {
+					const cleanScope = allowMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
+					if (cleanScope && !/^(kodu|code|all\s+files|wszystko)$/i.test(cleanScope)) {
+						scopedAllows.push(cleanScope)
+					}
+				}
+				const denyMatch = c.match(
+					/(?:DO\s+NOT\s+modify(?:\s+files\s+in|\s+code\s+in)?|nie\s+modyfikuj(?:\s+plików\s+w|\s+kodu\s+w)?)\s*(.+)/i
+				)
+				if (denyMatch && denyMatch[1]) {
+					const cleanScope = denyMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
+					if (cleanScope && !/^(kodu|code|all\s+files|wszystko)$/i.test(cleanScope)) {
+						scopedDenies.push(cleanScope)
+					}
+				}
+			}
+
+			// Also parse prompt text if scopes are not explicitly extracted in explicitConstraints
+			const promptText = `${substantiveInstruction}\n${latestInstruction}\n${activeGoal}`
+			const promptAllowMatch = promptText.match(
+				/(?:modify\s+only|you\s+may\s+modify\s+only|modyfikuj\s+wyłącznie)\s*([^\n.;]+)/i
+			)
+			if (promptAllowMatch && promptAllowMatch[1]) {
+				const scope = promptAllowMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
+				if (scope && !/^(kodu|code|all\s+files|wszystko)$/i.test(scope) && !scopedAllows.includes(scope)) {
+					scopedAllows.push(scope)
+				}
+			}
+			const promptDenyMatch = promptText.match(
+				/(?:do\s+not\s+modify\s+(?:files\s+in|code\s+in)|nie\s+modyfikuj\s+(?:plików\s+w|kodu\s+w))\s*([^\n.;]+)/i
+			)
+			if (promptDenyMatch && promptDenyMatch[1]) {
+				const scope = promptDenyMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
+				if (scope && !/^(kodu|code|all\s+files|wszystko)$/i.test(scope) && !scopedDenies.includes(scope)) {
+					scopedDenies.push(scope)
+				}
+			}
+
+			// Helper to check scope match
+			const isScopeMatch = (filePath: string, scopePattern: string) => {
+				const clean = scopePattern.replace(/^\.?\//, "").replace(/\/$/, "")
+				return filePath.includes(clean)
+			}
+
+			// 1. Check scoped denials
+			const forbiddenScope = scopedDenies.find((d) => isScopeMatch(normTarget, d))
+			if (forbiddenScope) {
+				return {
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: `The user explicitly forbade modifying files in scope '${forbiddenScope}'.`,
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: `DO NOT modify files in ${forbiddenScope}`,
+					replanGuidance: `Do not modify files in forbidden scope '${forbiddenScope}'. Only work within authorized scopes.`,
+				}
+			}
+
+			// 2. Check scoped allowances
+			const matchingAllowScope = scopedAllows.find((a) => isScopeMatch(normTarget, a))
+			if (matchingAllowScope) {
+				return {
+					decision: "ALLOW_AUTO",
+					risk: "low",
+					reason: `File modification matches explicitly authorized scope '${matchingAllowScope}'.`,
+					taskAligned: true,
+				}
+			}
+
+			// 3. If explicit scoped allows exist but this target does NOT match any of them
+			if (scopedAllows.length > 0) {
+				return {
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: `Target file is outside the explicitly authorized modification scope (${scopedAllows.join(", ")}).`,
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: `modify only ${scopedAllows.join(", ")}`,
+					replanGuidance: `Do not modify files outside authorized scope (${scopedAllows.join(", ")}). Work only in allowed scopes.`,
+				}
+			}
+
+			// 4. Affirmative override checking on latest instructions
+			const hasAffirmativeModifyOverride =
+				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować)/i.test(
+					substantiveInstruction
+				) ||
+				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować)/i.test(
+					latestInstruction
+				)
+
+			// 5. Global negative constraint check
+			const hasNoModifyConstraint =
+				!hasAffirmativeModifyOverride &&
+				explicitConstraints.some((c) =>
+					/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
+				)
+			if (hasNoModifyConstraint) {
+				return {
+					decision: "DENY_AND_REPLAN",
+					risk: "medium",
+					reason: "The current task is strictly read-only by user constraint ('DO NOT modify code'). Modifying source files is forbidden.",
+					taskAligned: false,
+					hardBoundaryViolation: false,
+					isUserConstraintViolation: true,
+					violatedConstraint: "DO NOT modify code (READ-ONLY)",
+					replanGuidance:
+						"The current task is explicitly read-only. Do not modify source code or attempt to make failing tests pass by editing implementation. Continue the review using read-only inspection or test runs only.",
 				}
 			}
 
@@ -689,45 +804,80 @@ export class ApprovalOrchestrator {
 			if (/^git\s+(commit|add|push)/i.test(cmd)) {
 				const explicitConstraints = request.taskContext.explicitConstraints || []
 				const latestInstruction = request.taskContext.latestUserInstruction || ""
+				const substantiveInstruction = request.taskContext.latestSubstantiveInstruction || latestInstruction
 				const activeGoal = request.taskContext.activeGoal || ""
 
-				// 1. Check affirmative user override in latest user instruction
+				// 1. Check affirmative user override in latest or substantive user instruction
 				const hasAffirmativeOverride =
+					/(?:proceed\s+with|tak|yes|potwierdzam|confirm|allow|permit|go\s+ahead|approved?|możesz|you\s+can|you\s+may).*(?:commit|add|staging)/i.test(
+						substantiveInstruction
+					) ||
 					/(?:proceed\s+with|tak|yes|potwierdzam|confirm|allow|permit|go\s+ahead|approved?|możesz|you\s+can|you\s+may).*(?:commit|add|staging)/i.test(
 						latestInstruction
 					)
 
 				// 2. Extract scoped permissions and prohibitions
-				const scopedAllows: string[] = []
-				const scopedDenies: string[] = []
+				const scopedAllows: string[] = [
+					...(request.taskContext.scopedWriteAllows || []).map((s) => s.replace(/\\/g, "/").toLowerCase().trim()),
+				]
+				const scopedDenies: string[] = [
+					...(request.taskContext.scopedWriteDenies || []).map((s) => s.replace(/\\/g, "/").toLowerCase().trim()),
+				]
 
 				for (const c of explicitConstraints) {
-					const allowMatch = c.match(/(?:ALLOWED\s+to\s+commit|commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|możesz\s+commitować)\s*(.+)/i)
+					const allowMatch = c.match(
+						/(?:ALLOWED\s+to\s+commit|commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|możesz\s+commitować)\s*(.+)/i
+					)
 					if (allowMatch && allowMatch[1]) {
-						scopedAllows.push(...allowMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+						scopedAllows.push(
+							...allowMatch[1]
+								.split(/[\s,;/]+/)
+								.map((s) => s.trim().toLowerCase())
+								.filter(Boolean)
+						)
 					}
-					const denyMatch = c.match(/(?:DO\s+NOT\s+commit(?:\s+changes)?(?:\s+to)?|nie\s+commituj(?:\s+zmian)?)\s*(.+)/i)
+					const denyMatch = c.match(
+						/(?:DO\s+NOT\s+commit(?:\s+changes)?(?:\s+to)?|nie\s+commituj(?:\s+zmian)?)\s*(.+)/i
+					)
 					if (denyMatch && denyMatch[1]) {
 						const rawScope = denyMatch[1].replace(/\(nie\s+commituj\)/i, "").trim()
 						if (rawScope && !/^(changes|kodu|files)?$/i.test(rawScope)) {
-							scopedDenies.push(...rawScope.split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+							scopedDenies.push(
+								...rawScope
+									.split(/[\s,;/]+/)
+									.map((s) => s.trim().toLowerCase())
+									.filter(Boolean)
+							)
 						}
 					}
 				}
 
 				// Also inspect prompt text for scoped rules if not in explicitConstraints
-				const promptText = `${latestInstruction}\n${activeGoal}`
-				const promptAllowMatch = promptText.match(/(?:commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|you\s+(?:may|can)\s+commit\s+only)\s*([^\n.;]+)/i)
+				const promptText = `${substantiveInstruction}\n${latestInstruction}\n${activeGoal}`
+				const promptAllowMatch = promptText.match(
+					/(?:commit\s+wyłącznie|masz\s+pozwolenie\s+na:\s*commit\s+wyłącznie|you\s+(?:may|can)\s+commit\s+only)\s*([^\n.;]+)/i
+				)
 				if (promptAllowMatch && promptAllowMatch[1]) {
-					scopedAllows.push(...promptAllowMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+					scopedAllows.push(
+						...promptAllowMatch[1]
+							.split(/[\s,;/]+/)
+							.map((s) => s.trim().toLowerCase())
+							.filter(Boolean)
+					)
 				}
-				const promptDenyMatch = promptText.match(/(?:nie\s+commituj\s+zmian|do\s+not\s+commit\s+changes\s+to)\s*([^\n.;]+)/i)
+				const promptDenyMatch = promptText.match(
+					/(?:nie\s+commituj\s+zmian|do\s+not\s+commit\s+changes\s+to)\s*([^\n.;]+)/i
+				)
 				if (promptDenyMatch && promptDenyMatch[1]) {
-					scopedDenies.push(...promptDenyMatch[1].split(/[\s,;/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+					scopedDenies.push(
+						...promptDenyMatch[1]
+							.split(/[\s,;/]+/)
+							.map((s) => s.trim().toLowerCase())
+							.filter(Boolean)
+					)
 				}
 
 				// Parse target paths from git command (e.g., git add -- velune-website/)
-				// Parse target paths from git command without stripping hyphens inside folder names (e.g. velune-website/)
 				const rawTokens = cmd
 					.replace(/"[^"]*"/g, "")
 					.replace(/'[^']*'/g, "")
@@ -763,7 +913,8 @@ export class ApprovalOrchestrator {
 					return {
 						decision: "DENY_AND_REPLAN",
 						risk: "medium",
-						reason: "Cannot stage all files globally with 'git add .' when prohibited scopes exist. Stage only the allowed scope.",
+						reason:
+							"Cannot stage all files globally with 'git add .' when prohibited scopes exist. Stage only the allowed scope.",
 						taskAligned: false,
 						hardBoundaryViolation: false,
 						isUserConstraintViolation: true,
@@ -773,15 +924,16 @@ export class ApprovalOrchestrator {
 				}
 
 				// Check if the target explicitly matches an allowed scope
-				const matchesAllowedScope = scopedAllows.length > 0 && scopedAllows.some((allowedScope) =>
-					pathArgs.some((p) => p.toLowerCase().includes(allowedScope))
-				)
+				const matchesAllowedScope =
+					scopedAllows.length > 0 &&
+					(pathArgs.some((p) => scopedAllows.some((allowedScope) => p.toLowerCase().includes(allowedScope))) ||
+						(/^git\s+commit/i.test(cmd) && pathArgs.length === 0))
 
 				if (matchesAllowedScope || hasAffirmativeOverride) {
 					return {
 						decision: "ALLOW_AUTO",
 						risk: "low",
-						reason: `Git operation scoped to authorized path (${pathArgs.join(", ") || "authorized scope"}) per user instruction.`,
+						reason: `Git operation scoped to authorized path (${pathArgs.join(", ") || scopedAllows.join(", ") || "authorized scope"}) per user instruction.`,
 						taskAligned: true,
 					}
 				}
@@ -794,12 +946,14 @@ export class ApprovalOrchestrator {
 					return {
 						decision: "DENY_AND_REPLAN",
 						risk: "medium",
-						reason: "The user explicitly forbade git commits/modifications ('NIE commituj'). Staging or committing code is forbidden.",
+						reason:
+							"The user explicitly forbade git commits/modifications ('NIE commituj'). Staging or committing code is forbidden.",
 						taskAligned: false,
 						hardBoundaryViolation: false,
 						isUserConstraintViolation: true,
 						violatedConstraint: "NIE commituj",
-						replanGuidance: "Do not stage or commit files. Keep changes unstaged or work strictly read-only per user instructions.",
+						replanGuidance:
+							"Do not stage or commit files. Keep changes unstaged or work strictly read-only per user instructions.",
 					}
 				}
 			}

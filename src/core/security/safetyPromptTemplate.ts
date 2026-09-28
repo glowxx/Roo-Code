@@ -310,9 +310,12 @@ Evaluate the proposed action in the context of the user's actual task and execut
    - Host process escapes or breakouts to Windows host binaries without explicit justification.
    - Tampering with OS credentials, private keys, certificates, or secrets.
 
-5. Explicit User Constraints (MUST RETURN DENY_AND_REPLAN or HARD_BLOCK):
-   - If explicitConstraints are defined in taskContext, actions violating user negative prohibitions (e.g. "NIE modyfikuj kodu" / "DO NOT modify code", "NIE commituj", "do not activate", read-only review constraints) MUST be denied autonomously.
-   - Set "decision": "DENY_AND_REPLAN", "isUserConstraintViolation": true, specify "violatedConstraint", and provide clear actionable replan guidance reminding the worker agent to adhere to the constraint without modifying code or executing forbidden actions.
+5. Explicit User Constraints & Scoped Permission Precedence:
+   - Non-overridable system safety boundaries (protected rules/configs/secrets, host filesystem escapes) ALWAYS take precedence over any user request (MUST RETURN HARD_BLOCK).
+   - For user-defined constraints (such as read-only review, no modify, or no commit):
+     * If the user in a subsequent message (latestUserInstruction / latestSubstantiveInstruction) explicitly lifts, disables, or grants permissions (e.g., "Disable the read-only constraint", "You may now modify X", "WRITE AUTHORIZATION"), the NEWER explicit instruction supersedes prior negative constraints for that authorized scope.
+     * Scoped allowances (scopedWriteAllows / scoped commit permissions) explicitly authorize actions within that specific directory or file scope even if a general read-only constraint existed previously.
+     * If an action is forbidden by an active negative constraint and has NOT been superseded or scoped-allowed, deny autonomously: set "decision": "DENY_AND_REPLAN", "isUserConstraintViolation": true, specify "violatedConstraint", and provide clear actionable replan guidance.
 
 ### Decision Schema:
 - ALLOW_AUTO: Safe, scoped, and aligned with user intent. May execute automatically without human intervention.
@@ -340,9 +343,12 @@ export interface BuildAutonomousApprovalPromptOptions {
 	taskContext: {
 		userTask?: string
 		latestUserInstruction: string
+		latestSubstantiveInstruction?: string
 		activeGoal: string
 		currentStep?: string
 		explicitConstraints?: string[]
+		scopedWriteAllows?: string[]
+		scopedWriteDenies?: string[]
 		workspacePath: string
 		isWithinWorkspace: boolean
 		recentActionSignatures?: string[]
@@ -386,6 +392,7 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 	const payload = {
 		userTask: options.taskContext.userTask || options.taskContext.activeGoal,
 		latestUserInstruction: options.taskContext.latestUserInstruction,
+		latestSubstantiveInstruction: options.taskContext.latestSubstantiveInstruction,
 		activeGoal: options.taskContext.activeGoal,
 		currentStep: options.taskContext.currentStep || "Not specified",
 		action: {
@@ -404,6 +411,8 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 		},
 		riskFindings: options.stage1Reason ? [options.stage1Reason] : [],
 		explicitUserConstraints: options.taskContext.explicitConstraints || [],
+		scopedWriteAllows: options.taskContext.scopedWriteAllows || [],
+		scopedWriteDenies: options.taskContext.scopedWriteDenies || [],
 		previousDenial: options.previousDenial || null,
 	}
 

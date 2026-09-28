@@ -311,6 +311,22 @@ export const orchestratorDecisionSchema = z.enum([
 	"CONTINUE_WORK",
 ])
 
+export type ConstraintAction = "modify_file" | "execute_command" | "commit" | "build" | "sign" | "activate" | "promote" | "file_write" | "git_commit"
+export type ConstraintDecision = "ALLOW" | "DENY"
+export type ConstraintPriority = 0 | 1 | 2 | 3 | "SYSTEM_SAFETY" | "LATEST_SCOPED_USER" | "USER_SCOPED" | "USER_GENERAL" | "DEFAULT"
+
+export interface CanonicalConstraint {
+	id?: string
+	action: ConstraintAction
+	scope?: string
+	decision: ConstraintDecision
+	sourceInstruction?: string
+	source?: "initial_goal" | "user_feedback" | "system_policy"
+	timestamp?: number
+	reason: string
+	priority: ConstraintPriority
+}
+
 export interface CompactApprovalContext {
 	userTask?: string
 	latestUserInstruction: string
@@ -340,6 +356,10 @@ export interface CompactApprovalContext {
 	}
 	riskFindings?: string[]
 	explicitConstraints?: string[]
+	latestSubstantiveInstruction?: string
+	scopedWriteAllows?: string[]
+	scopedWriteDenies?: string[]
+	canonicalConstraints?: CanonicalConstraint[]
 	workspacePath: string
 	isWithinWorkspace: boolean
 	recentActionSignatures?: string[]
@@ -379,6 +399,10 @@ export const compactApprovalContextSchema = z.object({
 		.optional(),
 	riskFindings: z.array(z.string()).optional(),
 	explicitConstraints: z.array(z.string()).optional(),
+	latestSubstantiveInstruction: z.string().optional(),
+	scopedWriteAllows: z.array(z.string()).optional(),
+	scopedWriteDenies: z.array(z.string()).optional(),
+	canonicalConstraints: z.array(z.any()).optional(),
 	workspacePath: z.string(),
 	isWithinWorkspace: z.boolean(),
 	recentActionSignatures: z.array(z.string()).optional(),

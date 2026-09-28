@@ -644,6 +644,112 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.taskAligned).toBe(true)
 		})
 
+		it("AUTO + scoped allow on velune-website + global read-only -> write_to_file on velune-website/index.html is ALLOW_AUTO", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-write-scoped-allow-1",
+				taskId: "task-write-scoped-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: {
+					filePath: "velune-website/index.html",
+				},
+				taskContext: {
+					latestUserInstruction: "Inspect app/public/ READ-ONLY. You may modify ONLY velune-website/.",
+					activeGoal: "Redesign velune website",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: [
+						"DO NOT modify code (READ-ONLY review)",
+						"ALLOWED to modify velune-website",
+					],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.taskAligned).toBe(true)
+			expect(result.isUserConstraintViolation).toBeFalsy()
+		})
+
+		it("AUTO + scoped deny on app/public -> write_to_file on app/public/index.html is DENIED and replanned", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-write-scoped-deny-1",
+				taskId: "task-write-scoped-2",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: {
+					filePath: "app/public/index.html",
+				},
+				taskContext: {
+					latestUserInstruction: "You may modify ONLY velune-website/. Do NOT modify app/public/.",
+					activeGoal: "Redesign velune website",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: [
+						"DO NOT modify files in app/public",
+						"ALLOWED to modify velune-website",
+					],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("DENY_AND_REPLAN")
+			expect(result.isUserConstraintViolation).toBe(true)
+			expect(result.violatedConstraint).toContain("app/public")
+		})
+
+		it("AUTO + protected file is HARD_BLOCK even if user granted ALLOWED to modify all files (System Safety P0 invariant)", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-write-protected-1",
+				taskId: "task-write-protected-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: {
+					filePath: ".roomodes",
+					isProtected: true,
+				},
+				taskContext: {
+					latestUserInstruction: "You may modify all files including configurations.",
+					activeGoal: "Modify configuration",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: ["ALLOWED to modify all files"],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("HARD_BLOCK")
+			expect(result.hardBoundaryViolation).toBe(true)
+			expect(result.risk).toBe("critical")
+		})
+
+		it("AUTO + git commit succeeds when scoped allow is active and latest substantive instruction was affirmative override even if latestUserInstruction is 'continue'", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-commit-substantive-1",
+				taskId: "task-commit-substantive-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: "git commit -m 'feat(website): redesign page'",
+				},
+				taskContext: {
+					latestUserInstruction: "continue",
+					latestSubstantiveInstruction: "Yes, proceed with git add and commit for velune-website/ only.",
+					activeGoal: "Frontend polish and commit",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					explicitConstraints: [
+						"DO NOT commit changes (NIE commituj)",
+						"ALLOWED to commit velune-website",
+					],
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, mockState)
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.taskAligned).toBe(true)
+		})
+
 		it("Read-only test runner: node tests/test.js and npm test are ALLOW_AUTO under read-only constraint", async () => {
 			const nodeTestRequest: UnifiedApprovalRequest = {
 				id: "req-node-test-1",
