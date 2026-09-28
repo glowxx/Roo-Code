@@ -165,6 +165,7 @@
 	const confirmationModalCloseBtn = document.getElementById("confirmation-modal-close-btn")
 	let activeContextMenuTrigger = null
 	let confirmationAction = null
+	let lastFocusedElement = null
 
 	let sidebarData = {
 		recentWorkspaces: [],
@@ -842,10 +843,62 @@
 		}
 	}
 
+	function formatChatTitle(task, title, maxLength = 80) {
+		const raw =
+			typeof title === "string" && title.trim()
+				? title.trim()
+				: typeof task === "string" && task.trim()
+					? task.trim()
+					: ""
+
+		if (!raw) return "Untitled Task"
+
+		const lines = raw.split(/\r?\n/)
+		let candidate = ""
+
+		for (const line of lines) {
+			let cleaned = line.trim()
+			if (!cleaned) continue
+
+			if (/^```[a-zA-Z0-9_-]*$/.test(cleaned)) continue
+
+			cleaned = cleaned.replace(/^#+\s*/, "")
+			cleaned = cleaned.replace(/^>\s*/, "")
+			cleaned = cleaned.replace(/^([-*+]|\d+\.)\s*(\[[ xX]\]\s*)?/, "")
+			cleaned = cleaned.replace(/(\*\*|__|\*|_|~~)(.*?)\1/g, "$2")
+			cleaned = cleaned.replace(/`([^`]+)`/g, "$1")
+			cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+			cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+			cleaned = cleaned.replace(/<[^>]+>/g, "")
+			cleaned = cleaned.replace(/\s+/g, " ").trim()
+
+			if (cleaned) {
+				candidate = cleaned
+				break
+			}
+		}
+
+		if (!candidate) return "Untitled Task"
+
+		const chars = Array.from(candidate)
+		if (chars.length > maxLength) {
+			return chars.slice(0, maxLength - 3).join("").trimEnd() + "..."
+		}
+		return candidate
+	}
+
 	function showConfirmationModal({ title, subtitle, icon, message, confirmText, confirmClass, onConfirm }) {
 		if (!confirmationModalBackdrop) return
+		lastFocusedElement = document.activeElement
+
+		const cleanSubtitle = formatChatTitle(subtitle, undefined, 80)
+
 		if (confirmationModalTitle) confirmationModalTitle.textContent = title || "Confirm"
-		if (confirmationModalSubtitle) confirmationModalSubtitle.textContent = subtitle || ""
+		if (confirmationModalSubtitle) {
+			confirmationModalSubtitle.textContent = cleanSubtitle || ""
+			confirmationModalSubtitle.title =
+				(typeof subtitle === "string" ? subtitle.replace(/\s+/g, " ").trim() : "") || cleanSubtitle
+		}
 		if (confirmationModalIcon) confirmationModalIcon.textContent = icon || "⚠️"
 		if (confirmationModalBody) confirmationModalBody.textContent = message || ""
 		if (confirmationModalConfirmBtn) {
@@ -859,7 +912,7 @@
 		confirmationAction = onConfirm
 		confirmationModalBackdrop.classList.remove("hidden")
 		confirmationModalBackdrop.style.display = "flex"
-		confirmationModalConfirmBtn?.focus()
+		confirmationModalCancelBtn?.focus()
 	}
 
 	function closeConfirmationModal() {
@@ -867,6 +920,16 @@
 		confirmationModalBackdrop.classList.add("hidden")
 		confirmationModalBackdrop.style.display = "none"
 		confirmationAction = null
+
+		if (lastFocusedElement && typeof lastFocusedElement.focus === "function" && document.contains(lastFocusedElement)) {
+			try {
+				lastFocusedElement.focus()
+			} catch (e) {}
+		} else {
+			const projectList = document.getElementById("sidebar-projects-list")
+			projectList?.focus?.()
+		}
+		lastFocusedElement = null
 	}
 
 	function closeSidebarContextMenu() {
@@ -1063,11 +1126,12 @@
 		const chatList = sidebarData.chats[ws] || []
 		const chat = chatList.find((c) => c.id === taskId)
 		const isRunning = chat?.status === "running"
+		const displayTitle = formatChatTitle(chat?.title || taskId)
 
 		if (isRunning) {
 			showConfirmationModal({
 				title: tDesktop("deleteChatTitle"),
-				subtitle: chat?.title || taskId,
+				subtitle: displayTitle,
 				icon: "⚠️",
 				message: tDesktop("deleteChatConfirmRunning"),
 				confirmText: tDesktop("stopTaskAndDelete"),
@@ -1079,7 +1143,7 @@
 		} else {
 			showConfirmationModal({
 				title: tDesktop("deleteChatTitle"),
-				subtitle: chat?.title || taskId,
+				subtitle: displayTitle,
 				icon: "🗑️",
 				message: tDesktop("deleteChatConfirmIdle"),
 				confirmText: tDesktop("confirmDelete"),
@@ -1256,7 +1320,8 @@
 				statusAria = tDesktop("chatStatusCompletedUnread")
 			}
 
-			const itemAriaLabel = `${chat.title} - ${statusAria}`
+			const chatDisplayTitle = formatChatTitle(chat.title || chat.id)
+			const itemAriaLabel = `${chatDisplayTitle} - ${statusAria}`
 			html += `
 				<div class="sidebar-chat-item ${isChatActive ? "active" : ""}" 
 				     data-task-id="${escapeHtml(chat.id)}" 
@@ -1269,7 +1334,7 @@
 					</svg>
 					<div class="chat-meta">
 						<div class="chat-title-row">
-							<span class="chat-title" title="${escapeHtml(chat.title)}">${escapeHtml(chat.title)}</span>
+							<span class="chat-title" title="${escapeHtml(chatDisplayTitle)}">${escapeHtml(chatDisplayTitle)}</span>
 							<span class="chat-status-slot" title="${escapeHtml(statusAria)}">${statusSlotHtml}</span>
 						</div>
 						<span class="chat-time">${escapeHtml(formatTimeAgo(chat.ts))}</span>
@@ -3872,6 +3937,32 @@
 	confirmationModalBackdrop?.addEventListener("click", (e) => {
 		if (e.target === confirmationModalBackdrop) {
 			closeConfirmationModal()
+		}
+	})
+	confirmationModalBackdrop?.addEventListener("keydown", (e) => {
+		if (e.key === "Tab") {
+			const focusableEls = [
+				confirmationModalCloseBtn,
+				confirmationModalCancelBtn,
+				confirmationModalConfirmBtn,
+			].filter((el) => el && !el.disabled && el.offsetParent !== null)
+
+			if (focusableEls.length === 0) return
+
+			const firstEl = focusableEls[0]
+			const lastEl = focusableEls[focusableEls.length - 1]
+
+			if (e.shiftKey) {
+				if (document.activeElement === firstEl) {
+					e.preventDefault()
+					lastEl.focus()
+				}
+			} else {
+				if (document.activeElement === lastEl) {
+					e.preventDefault()
+					firstEl.focus()
+				}
+			}
 		}
 	})
 

@@ -24,6 +24,66 @@ interface ExtensionModule {
 	deactivate?: () => Promise<void>
 }
 
+/**
+ * Canonical helper to sanitize and format a conversation title from task prompt / item metadata.
+ * Strips markdown syntax, extracts the first meaningful line, clamps to maxLength (default 80),
+ * and handles multi-line/huge prompts safely.
+ */
+export function formatChatTitle(task?: unknown, title?: unknown, maxLength = 80): string {
+	const raw =
+		typeof title === "string" && title.trim()
+			? title.trim()
+			: typeof task === "string" && task.trim()
+				? task.trim()
+				: ""
+
+	if (!raw) return "Untitled Task"
+
+	const lines = raw.split(/\r?\n/)
+	let candidate = ""
+
+	for (const line of lines) {
+		let cleaned = line.trim()
+		if (!cleaned) continue
+
+		// Skip code fences like ```typescript
+		if (/^```[a-zA-Z0-9_-]*$/.test(cleaned)) continue
+
+		// Strip markdown headers: #, ##, ###, etc.
+		cleaned = cleaned.replace(/^#+\s*/, "")
+		// Strip blockquotes: >
+		cleaned = cleaned.replace(/^>\s*/, "")
+		// Strip list markers and checkboxes: *, -, +, 1., [ ], [x], [X]
+		cleaned = cleaned.replace(/^([-*+]|\d+\.)\s*(\[[ xX]\]\s*)?/, "")
+		// Strip bold, italic, strikethrough: **text**, *text*, __text__, _text_, ~~text~~
+		cleaned = cleaned.replace(/(\*\*|__|\*|_|~~)(.*?)\1/g, "$2")
+		// Strip inline code backticks: `code`
+		cleaned = cleaned.replace(/`([^`]+)`/g, "$1")
+		// Strip markdown links: [text](url) -> text
+		cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+		// Strip markdown images: ![alt](url) -> alt
+		cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+		// Strip HTML/XML tags: <tag> -> ""
+		cleaned = cleaned.replace(/<[^>]+>/g, "")
+		// Collapse multiple consecutive spaces/tabs
+		cleaned = cleaned.replace(/\s+/g, " ").trim()
+
+		if (cleaned) {
+			candidate = cleaned
+			break
+		}
+	}
+
+	if (!candidate) return "Untitled Task"
+
+	// Code point / surrogate safe slicing for emoji and unicode
+	const chars = Array.from(candidate)
+	if (chars.length > maxLength) {
+		return chars.slice(0, maxLength - 3).join("").trimEnd() + "..."
+	}
+	return candidate
+}
+
 export class DesktopAgentHost extends EventEmitter {
 	private vscode: ReturnType<typeof createVSCodeAPI> | null = null
 	private extensionModule: ExtensionModule | null = null
@@ -709,7 +769,7 @@ export class DesktopAgentHost extends EventEmitter {
 			const list = result[ws] ?? []
 			list.push({
 				id: String(item.id),
-				title: typeof item.task === "string" && item.task.trim() ? item.task.trim() : "Untitled Task",
+				title: formatChatTitle(item.task, item.title),
 				ts: typeof item.ts === "number" ? item.ts : Date.now(),
 				status,
 				hasUnread,

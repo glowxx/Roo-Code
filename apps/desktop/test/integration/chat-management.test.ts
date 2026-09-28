@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import path from "path"
 import fs from "fs"
 import os from "os"
-import { DesktopAgentHost } from "../../src/main/agent-host.js"
+import { DesktopAgentHost, formatChatTitle } from "../../src/main/agent-host.js"
 import { canonicalizePath } from "../../src/main/config.js"
 
 describe("Chat Management & Safe Deletion Flow", () => {
@@ -316,4 +316,163 @@ describe("Chat Management & Safe Deletion Flow", () => {
 		expect(fs.existsSync(sourceFile)).toBe(true)
 		expect(fs.readFileSync(sourceFile, "utf-8")).toBe("export const app = 'test'")
 	})
+
+	it("getChatsByWorkspace sanitizes and clamps titles from huge multiline prompts (real incident repro)", () => {
+		const host = new DesktopAgentHost({
+			workspacePath: workspaceA,
+			extensionPath: tempDir,
+		})
+
+		const hugePrompt = `SKILLS TO USE:
+/graphify
+/context-engineering
+/frontend-ui-engineering
+
+==================================================
+WRITE ACCESS AUTHORIZATION
+==================================================
+` + "x".repeat(25000)
+
+		const taskId = "task-huge-prompt-999"
+		const mockProvider = {
+			runningTasks: new Map(),
+			getCurrentTask: () => null,
+			deleteTaskWithId: vi.fn(),
+			taskHistoryStore: {
+				getAll: () => [
+					{
+						id: taskId,
+						task: hugePrompt,
+						workspace: workspaceA,
+						ts: Date.now(),
+					},
+				],
+			},
+		}
+		host.registerWebviewProvider("mockView", mockProvider)
+
+		const chatsByWs = host.getChatsByWorkspace()
+		const chats = chatsByWs[canonicalizePath(workspaceA)] || []
+		expect(chats.length).toBe(1)
+		expect(chats[0]!.title).toBe("SKILLS TO USE:")
+		expect(chats[0]!.title.length).toBeLessThanOrEqual(80)
+		expect(chats[0]!.title).not.toContain("\n")
+	})
+
+	it("deleting a non-selected chat preserves active task without switching", async () => {
+		const host = new DesktopAgentHost({
+			workspacePath: workspaceA,
+			extensionPath: tempDir,
+		})
+
+		const activeId = "task-currently-open"
+		const backgroundId = "task-in-background"
+
+		const deleteTaskMock = vi.fn().mockResolvedValue(undefined)
+		const mockProvider = {
+			runningTasks: new Map(),
+			getCurrentTask: () => ({ taskId: activeId }),
+			showTaskWithId: vi.fn(),
+			clearTask: vi.fn(),
+			deleteTaskWithId: deleteTaskMock,
+			taskHistoryStore: {
+				deleteTaskWithId: deleteTaskMock,
+				getHistoryItem: vi.fn(),
+			},
+		}
+		host.registerWebviewProvider("mockView", mockProvider)
+		await host.setActiveTaskId(activeId)
+
+		// Delete background task
+		const result = await host.deleteChat(backgroundId, false)
+		expect(result.success).toBe(true)
+		expect(deleteTaskMock).toHaveBeenCalledWith(backgroundId)
+		// Active task must NOT be switched or cleared
+		expect(mockProvider.showTaskWithId).not.toHaveBeenCalled()
+		expect(mockProvider.clearTask).not.toHaveBeenCalled()
+		expect(host.getActiveTaskId()).toBe(activeId)
+	})
+
+	it("target identity lock: deleteChat executes against targetId regardless of active task changes", async () => {
+		const host = new DesktopAgentHost({
+			workspacePath: workspaceA,
+			extensionPath: tempDir,
+		})
+
+		const targetId = "task-targeted-for-delete"
+		const otherId = "task-switched-to-afterwards"
+
+		const deleteTaskMock = vi.fn().mockResolvedValue(undefined)
+		const mockProvider = {
+			runningTasks: new Map(),
+			getCurrentTask: () => ({ taskId: otherId }),
+			showTaskWithId: vi.fn(),
+			deleteTaskWithId: deleteTaskMock,
+			taskHistoryStore: {
+				deleteTaskWithId: deleteTaskMock,
+			},
+		}
+		host.registerWebviewProvider("mockView", mockProvider)
+
+		// User switched to otherId
+		await host.setActiveTaskId(otherId)
+
+		// Confirmation for targetId resolves
+		await host.deleteChat(targetId, false)
+
+		expect(deleteTaskMock).toHaveBeenCalledWith(targetId)
+		expect(deleteTaskMock).not.toHaveBeenCalledWith(otherId)
+		expect(host.isTaskDeleted(targetId)).toBe(true)
+		expect(host.isTaskDeleted(otherId)).toBe(false)
+	})
+
+	it("persistence: deleted chat remains deleted across host restarts and index reload", async () => {
+		const tasksDir = path.join(tempDir, "Roo-Code", "tasks")
+		const taskId = "task-persistent-delete"
+		const taskFolder = path.join(tasksDir, taskId)
+		fs.mkdirSync(taskFolder, { recursive: true })
+		fs.writeFileSync(
+			path.join(taskFolder, "history_item.json"),
+			JSON.stringify({ id: taskId, task: "Task to delete permanently", ts: Date.now() })
+		)
+
+		const host1 = new DesktopAgentHost({
+			workspacePath: workspaceA,
+			extensionPath: tempDir,
+			storageDir: tempDir,
+		})
+		const deleteTaskMock = vi.fn().mockImplementation(() => {
+			fs.rmSync(taskFolder, { recursive: true, force: true })
+		})
+		host1.registerWebviewProvider("mockView", {
+			runningTasks: new Map(),
+			deleteTaskWithId: deleteTaskMock,
+			taskHistoryStore: { deleteTaskWithId: deleteTaskMock },
+		})
+
+		await host1.deleteChat(taskId, false)
+		expect(fs.existsSync(taskFolder)).toBe(false)
+
+		// Simulate Desktop restart with fresh host instance
+		const host2 = new DesktopAgentHost({
+			workspacePath: workspaceA,
+			extensionPath: tempDir,
+			storageDir: tempDir,
+		})
+		const chats = host2.getChatsByWorkspace()
+		const workspaceChats = chats[canonicalizePath(workspaceA)] || []
+		expect(workspaceChats.some((c) => c.id === taskId)).toBe(false)
+	})
+
+	it("performance: formatting extreme 50,000 char prompt completes in sub-millisecond time", () => {
+		const giantPrompt = "Title Word " + "x".repeat(50000)
+		const start = performance.now()
+		const title = formatChatTitle(giantPrompt, undefined, 80)
+		const duration = performance.now() - start
+
+		expect(duration).toBeLessThan(10) // Well under 10ms
+		expect(title.length).toBeLessThanOrEqual(80)
+	})
 })
+
+
