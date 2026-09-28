@@ -72,6 +72,21 @@ async function runBuild() {
 		})
 	}
 
+	// 2.6. Build standalone bridge.bundle.js for platform-neutral desktop integration
+	const bridgeEntry = path.join(__dirname, "src/renderer/bridge/index.ts")
+	if (fs.existsSync(bridgeEntry)) {
+		console.log("🌉 Bundling DesktopBridge into src/renderer/bridge.bundle.js...")
+		await build({
+			entryPoints: [bridgeEntry],
+			outfile: path.join(__dirname, "src/renderer/bridge.bundle.js"),
+			bundle: true,
+			format: "iife",
+			globalName: "DesktopBridgeModule",
+			sourcemap: true,
+			target: "es2020",
+		})
+	}
+
 	// 3. Copy renderer files
 	const rendererSrc = path.join(__dirname, "src/renderer")
 	const rendererDist = path.join(outDir, "renderer")

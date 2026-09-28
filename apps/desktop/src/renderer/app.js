@@ -18,6 +18,16 @@
 	let isSvgSourceView = false
 	let currentDesktopTab = "chat"
 	let latestExtensionState = null
+
+	// Platform-neutral DesktopBridge (Tauri 2 / Electron / Web)
+	const desktopBridge = (typeof window !== "undefined" && window.DesktopBridgeModule?.getDesktopBridge)
+		? window.DesktopBridgeModule.getDesktopBridge((msg) => {
+				if (socket && socket.readyState === WebSocket.OPEN) {
+					socket.send(JSON.stringify(msg))
+				}
+		  })
+		: null
+
 	try {
 		const saved = localStorage.getItem("roo-quick-api-config")
 		if (saved) currentApiConfig = JSON.parse(saved)
@@ -612,13 +622,25 @@
 
 	// Window Controls (Minimize, Maximize, Close)
 	windowMinimizeBtn?.addEventListener("click", () => {
-		window.__desktopAPI?.minimize?.()
+		if (desktopBridge?.window?.minimize) {
+			desktopBridge.window.minimize()
+		} else {
+			window.__desktopAPI?.minimize?.()
+		}
 	})
 	windowMaximizeBtn?.addEventListener("click", () => {
-		window.__desktopAPI?.maximize?.()
+		if (desktopBridge?.window?.maximize) {
+			desktopBridge.window.maximize()
+		} else {
+			window.__desktopAPI?.maximize?.()
+		}
 	})
 	windowCloseBtn?.addEventListener("click", () => {
-		window.__desktopAPI?.close?.()
+		if (desktopBridge?.window?.close) {
+			desktopBridge.window.close()
+		} else {
+			window.__desktopAPI?.close?.()
+		}
 	})
 
 	// ==========================================
@@ -665,6 +687,25 @@
 	})
 
 	async function openFolderDialog() {
+		if (desktopBridge?.shell?.selectFolder) {
+			try {
+				const newPath = await desktopBridge.shell.selectFolder()
+				if (newPath) {
+					const normNew = pathNormalize(newPath)
+					const curWsNorm = pathNormalize(sidebarData.currentWorkspace || currentWorkspace?.path || "")
+					if (normNew === curWsNorm) {
+						projectExpansions.add(newPath)
+						renderSidebar()
+						return
+					}
+					await selectWorkspaceFolder(newPath)
+					fetchSidebarData()
+				}
+			} catch (err) {
+				console.error("Failed to select folder via DesktopBridge:", err)
+			}
+			return
+		}
 		if (window.__desktopAPI?.selectFolder) {
 			try {
 				const newPath = await window.__desktopAPI.selectFolder()
@@ -1270,14 +1311,18 @@
 	}
 
 	function handleOpenProjectFolder(ws) {
-		if (window.__desktopAPI?.openPath) {
+		if (desktopBridge?.shell?.openPath) {
+			desktopBridge.shell.openPath(ws)
+		} else if (window.__desktopAPI?.openPath) {
 			window.__desktopAPI.openPath(ws)
 		}
 		sendToServer({ type: "openProjectFolder", path: ws })
 	}
 
 	function handleCopyProjectPath(ws) {
-		if (navigator.clipboard?.writeText) {
+		if (desktopBridge?.clipboard?.writeText) {
+			desktopBridge.clipboard.writeText(ws).catch(() => {})
+		} else if (navigator.clipboard?.writeText) {
 			navigator.clipboard.writeText(ws).catch(() => {})
 		}
 	}
@@ -1915,7 +1960,14 @@
 		}
 	}
 
-	// Listen to Electron IPC messages if running inside Electron
+	// Listen to Desktop messages if running inside DesktopBridge / Electron
+	if (desktopBridge?.ipc?.onMessage) {
+		desktopBridge.ipc.onMessage((msg) => {
+			if (msg && typeof msg === "object") {
+				handleServerMessage(msg)
+			}
+		})
+	}
 	if (window.__desktopAPI?.onExtensionMessage) {
 		window.__desktopAPI.onExtensionMessage((msg) => {
 			if (msg && typeof msg === "object") {
@@ -1956,6 +2008,7 @@
 			showWebviewSuccess()
 			sendToServer({ type: "getWorkspaceInfo" })
 			sendToServer({ type: "getDiffs", taskId: activeTaskId })
+			sendToServer({ type: "getTerminalLogs" })
 		}
 
 		socket.onmessage = (event) => {
@@ -1989,6 +2042,10 @@
 	}
 
 	function sendToServer(msg) {
+		if (desktopBridge?.capabilities?.runtime === "electron" && msg.type === "webviewMessage") {
+			desktopBridge.ipc.send(msg)
+			return
+		}
 		if (window.__desktopAPI?.isElectron && msg.type === "webviewMessage") {
 			window.__desktopAPI.sendToExtension(msg.message)
 			return
@@ -3781,7 +3838,9 @@
 
 	function revealCurrentFile() {
 		if (!selectedPreviewFile) return
-		if (window.__desktopAPI?.showItemInFolder) {
+		if (desktopBridge?.shell?.showItemInFolder) {
+			desktopBridge.shell.showItemInFolder(selectedPreviewFile)
+		} else if (window.__desktopAPI?.showItemInFolder) {
 			window.__desktopAPI.showItemInFolder(selectedPreviewFile)
 		} else {
 			sendToServer({ type: "showItem", filePath: selectedPreviewFile })
@@ -4354,14 +4413,6 @@
 	// Initial pill sync
 	updateApiPill(currentApiConfig)
 
-	// Electron IPC Bridge
-	if (window.__desktopAPI?.onExtensionMessage) {
-		window.__desktopAPI.onExtensionMessage((_event, msg) => {
-			if (msg && typeof msg === "object") {
-				handleServerMessage(msg)
-			}
-		})
-	}
 
 	// Initialize
 	connectWebSocket()
