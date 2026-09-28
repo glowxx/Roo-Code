@@ -99,6 +99,7 @@ export class DesktopAgentHost extends EventEmitter {
 	private archivedTerminalLogs: Array<{ workspace: string; timestamp: number; logs: TerminalLogEntry[] }> = []
 	private diffFiles: Map<string, DiffFileEntry> = new Map()
 	private diffFilesByWorkspace: Map<string, Map<string, DiffFileEntry>> = new Map()
+	private diffFilesByTask: Map<string, Map<string, DiffFileEntry>> = new Map()
 	private provider: any = null
 	private currentWorkspaceEpoch = 0
 	private pendingWorkspaceChangeAbortController: AbortController | null = null
@@ -233,9 +234,16 @@ export class DesktopAgentHost extends EventEmitter {
 		return Array.from(this.diffFiles.values())
 	}
 
+	public getDiffFilesForTask(taskId?: string): DiffFileEntry[] {
+		if (taskId && this.diffFilesByTask.has(taskId)) {
+			return Array.from(this.diffFilesByTask.get(taskId)!.values())
+		}
+		return this.getDiffFiles()
+	}
+
 	public refreshDiffsFromGit(): void {
-		this.diffFiles.clear()
 		if (!this.currentWorkspace || !fs.existsSync(this.currentWorkspace)) {
+			this.diffFiles.clear()
 			this.emit("diffsUpdated", this.getDiffFiles())
 			return
 		}
@@ -246,80 +254,77 @@ export class DesktopAgentHost extends EventEmitter {
 				encoding: "utf-8",
 				timeout: 5000,
 				stdio: ["ignore", "pipe", "ignore"],
-			}).trim()
+			})
 
-			if (statusOutput) {
-				const lines = statusOutput.split("\n")
-				for (const line of lines) {
-					if (!line || line.length < 4) continue
-					const statusCode = line.substring(0, 2).trim()
-					let relPath = line.substring(3).trim()
-					if (relPath.startsWith('"') && relPath.endsWith('"')) {
-						relPath = relPath.slice(1, -1)
-					}
-					if (relPath.includes(" -> ")) {
-						relPath = relPath.split(" -> ")[1]!.trim()
-					}
-					const absPath = path.join(this.currentWorkspace, relPath)
-
-					let oldContent: string | undefined = undefined
-					let newContent: string | undefined = undefined
-					let fileStatus: "modified" | "added" | "deleted" = "modified"
-
-					if (statusCode === "??" || statusCode === "A") {
-						fileStatus = "added"
-						if (fs.existsSync(absPath)) {
-							try {
-								const stat = fs.statSync(absPath)
-								if (stat.size < 1024 * 1024) {
-									newContent = fs.readFileSync(absPath, "utf-8")
-								}
-							} catch {}
-						}
-					} else if (statusCode === "D") {
-						fileStatus = "deleted"
-						try {
-							oldContent = execSync(`git show HEAD:"${relPath.replace(/\\/g, "/")}"`, {
-								cwd: this.currentWorkspace,
-								encoding: "utf-8",
-								timeout: 3000,
-								stdio: ["ignore", "pipe", "ignore"],
-							})
-						} catch {}
-					} else {
-						fileStatus = "modified"
-						if (fs.existsSync(absPath)) {
-							try {
-								const stat = fs.statSync(absPath)
-								if (stat.size < 1024 * 1024) {
-									newContent = fs.readFileSync(absPath, "utf-8")
-								}
-							} catch {}
-						}
-						try {
-							oldContent = execSync(`git show HEAD:"${relPath.replace(/\\/g, "/")}"`, {
-								cwd: this.currentWorkspace,
-								encoding: "utf-8",
-								timeout: 3000,
-								stdio: ["ignore", "pipe", "ignore"],
-							})
-						} catch {}
-					}
-
-					const oldLines = oldContent ? oldContent.split("\n").length : 0
-					const newLines = newContent ? newContent.split("\n").length : 0
-
-					const entry: DiffFileEntry = {
-						filePath: relPath.replace(/\\/g, "/"),
-						oldContent,
-						newContent,
-						status: fileStatus,
-						additions: fileStatus === "added" ? Math.max(1, newLines) : Math.max(1, newLines >= oldLines ? newLines - oldLines : 1),
-						deletions: fileStatus === "deleted" ? Math.max(1, oldLines) : (oldLines > newLines ? oldLines - newLines : 0),
-					}
-					this.diffFiles.set(entry.filePath, entry)
-				}
+			if (!statusOutput || !statusOutput.trim()) {
+				this.diffFiles.clear()
+				this.emit("diffsUpdated", this.getDiffFiles())
+				return
 			}
+
+			// Single batch git diff --numstat HEAD query for additions/deletions
+			const numstatMap = new Map<string, { additions: number; deletions: number }>()
+			try {
+				const numstatOutput = execSync("git diff --numstat HEAD", {
+					cwd: this.currentWorkspace,
+					encoding: "utf-8",
+					timeout: 5000,
+					stdio: ["ignore", "pipe", "ignore"],
+				})
+				if (numstatOutput && numstatOutput.trim()) {
+					for (const line of numstatOutput.split(/\r?\n/)) {
+						const parts = line.split("\t")
+						if (parts.length >= 3) {
+							const add = parseInt(parts[0]!, 10)
+							const del = parseInt(parts[1]!, 10)
+							const p = parts.slice(2).join("\t").trim().replace(/\\/g, "/")
+							numstatMap.set(p, {
+								additions: isNaN(add) ? 1 : add,
+								deletions: isNaN(del) ? 0 : del,
+							})
+						}
+					}
+				}
+			} catch {}
+
+			const newDiffFiles = new Map<string, DiffFileEntry>()
+			const lines = statusOutput.split(/\r?\n/)
+			for (const line of lines) {
+				if (!line || line.length < 4) continue
+				const statusCode = line.substring(0, 2).trim()
+				let relPath = line.substring(3).trim()
+				if (relPath.startsWith('"') && relPath.endsWith('"')) {
+					relPath = relPath.slice(1, -1)
+				}
+				if (relPath.includes(" -> ")) {
+					relPath = relPath.split(" -> ")[1]!.trim()
+				}
+				const normRel = relPath.replace(/\\/g, "/")
+
+				let fileStatus: "modified" | "added" | "deleted" = "modified"
+				if (statusCode === "??" || statusCode === "A") {
+					fileStatus = "added"
+				} else if (statusCode === "D") {
+					fileStatus = "deleted"
+				}
+
+				const numstat = numstatMap.get(normRel)
+				const additions = numstat ? numstat.additions : fileStatus === "added" ? 1 : 1
+				const deletions = numstat ? numstat.deletions : fileStatus === "deleted" ? 1 : 0
+
+				const existing = this.diffFiles.get(normRel)
+				const entry: DiffFileEntry = {
+					filePath: normRel,
+					oldContent: existing?.oldContent,
+					newContent: existing?.newContent,
+					status: fileStatus,
+					additions: numstat?.additions ?? existing?.additions ?? additions,
+					deletions: numstat?.deletions ?? existing?.deletions ?? deletions,
+				}
+				newDiffFiles.set(normRel, entry)
+			}
+
+			this.diffFiles = newDiffFiles
 		} catch {
 			// Not a git repository or git command failed
 		}
@@ -1238,9 +1243,9 @@ export class DesktopAgentHost extends EventEmitter {
 				session = this.terminalLogs[this.terminalLogs.length - 1]
 			}
 			if (session) {
-				session.output = (session.output || "") + data
+				const combined = (session.output || "") + data
+				session.output = combined.length > 1024 * 1024 ? combined.slice(-1024 * 1024) : combined
 				this.emit("terminalOutput", { id: session.id, data })
-				this.emit("terminalLog", session)
 			}
 		} else if (raw.type === "terminalSessionEnded") {
 			const id = String(raw.id || "")
@@ -1286,22 +1291,23 @@ export class DesktopAgentHost extends EventEmitter {
 						this.emit("terminalLog", session)
 					}
 				} else if (statusObj.status === "output") {
+					const outData = statusObj.output || ""
 					if (!session) {
 						session = {
 							id: execId,
 							command: "",
 							cwd: this.currentWorkspace || "",
 							timestamp: Date.now(),
-							output: statusObj.output || "",
+							output: outData,
 							status: "running",
 						}
 						this.terminalLogs.push(session)
 						if (this.terminalLogs.length > 200) this.terminalLogs.shift()
 					} else {
-						session.output = statusObj.output || session.output
+						const combined = (session.output || "") + outData
+						session.output = combined.length > 1024 * 1024 ? combined.slice(-1024 * 1024) : combined
 					}
-					this.emit("terminalOutput", { id: execId, data: statusObj.output || "" })
-					this.emit("terminalLog", session)
+					this.emit("terminalOutput", { id: execId, data: outData })
 				} else if (statusObj.status === "exited") {
 					const exitCode = typeof statusObj.exitCode === "number" ? statusObj.exitCode : 0
 					if (session) {
@@ -1351,32 +1357,36 @@ export class DesktopAgentHost extends EventEmitter {
 			}
 			this.emit("workspaceFilesChanged", raw.files)
 			this.emit("diffsUpdated", this.getDiffFiles())
-			this.refreshGitDiffs().catch(() => {})
 		}
 
 		// Detect agent status transitions
-		if (raw.type === "say") {
-			if (raw.say === "tool") {
+		const isTool = (raw.type === "say" && raw.say === "tool") || (raw.type === "ask" && raw.ask === "tool")
+		if (isTool) {
+			if (raw.type === "ask") {
+				this.setStatus("waiting_approval")
+			} else {
 				this.setStatus("executing")
-				try {
-					const toolData = typeof raw.text === "string" ? JSON.parse(raw.text) : raw.text
-					if (toolData && toolData.tool === "execute_command") {
-						this.recordTerminalLog(toolData.command || "")
-					}
-					if (
-						toolData &&
-						(toolData.tool === "write_to_file" ||
-							toolData.tool === "apply_diff" ||
-							toolData.tool === "editedExistingFile" ||
-							toolData.tool === "newFileCreated" ||
-							toolData.tool === "appliedDiff")
-					) {
-						this.handleToolFileChange(toolData)
-					}
-				} catch {
-					// text wasn't JSON
+			}
+			try {
+				const toolData = typeof raw.text === "string" ? JSON.parse(raw.text) : raw.text
+				if (toolData && toolData.tool === "execute_command") {
+					this.recordTerminalLog(toolData.command || "")
 				}
-			} else if (raw.say === "command") {
+				if (
+					toolData &&
+					(toolData.tool === "write_to_file" ||
+						toolData.tool === "apply_diff" ||
+						toolData.tool === "editedExistingFile" ||
+						toolData.tool === "newFileCreated" ||
+						toolData.tool === "appliedDiff")
+				) {
+					this.handleToolFileChange(toolData)
+				}
+			} catch {
+				// text wasn't JSON
+			}
+		} else if (raw.type === "say") {
+			if (raw.say === "command") {
 				this.setStatus("executing")
 				this.recordTerminalLog(typeof raw.text === "string" ? raw.text : "")
 			} else if (raw.say === "command_output") {
@@ -1550,6 +1560,14 @@ export class DesktopAgentHost extends EventEmitter {
 		}
 
 		this.diffFiles.set(relPath, entry)
+		if (this.activeTaskId) {
+			let taskMap = this.diffFilesByTask.get(this.activeTaskId)
+			if (!taskMap) {
+				taskMap = new Map()
+				this.diffFilesByTask.set(this.activeTaskId, taskMap)
+			}
+			taskMap.set(relPath, entry)
+		}
 		this.emit("diffsUpdated", this.getDiffFiles())
 		this.emit("workspaceFilesChanged", [
 			{
@@ -1560,101 +1578,9 @@ export class DesktopAgentHost extends EventEmitter {
 				deletions: entry.deletions,
 			},
 		])
-		this.refreshGitDiffs().catch(() => {})
 	}
 
 	public async refreshGitDiffs(): Promise<void> {
-		if (!this.currentWorkspace) return
-		try {
-			const statusOutput = execSync("git status --porcelain", {
-				cwd: this.currentWorkspace,
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "ignore"],
-				timeout: 5000,
-			})
-
-			if (!statusOutput || !statusOutput.trim()) {
-				return
-			}
-
-			const lines = statusOutput.split("\n").filter((l) => l.trim().length > 0)
-			for (const line of lines) {
-				const statusCode = line.substring(0, 2)
-				let relPath = line.substring(3).trim()
-				if (relPath.startsWith('"') && relPath.endsWith('"')) {
-					relPath = relPath.slice(1, -1)
-				}
-				if (relPath.includes(" -> ")) {
-					relPath = relPath.split(" -> ")[1]?.trim() || relPath
-				}
-				const cleanRelPath = relPath.replace(/\\/g, "/")
-				const absPath = path.resolve(this.currentWorkspace, cleanRelPath)
-
-				const isDeleted = statusCode.includes("D")
-				const isUntracked = statusCode === "??"
-				const isAdded = statusCode.includes("A") || isUntracked
-
-				let status: "modified" | "added" | "deleted" = "modified"
-				if (isDeleted) status = "deleted"
-				else if (isAdded) status = "added"
-
-				let oldContent: string | undefined = undefined
-				let newContent: string | undefined = undefined
-				let additions = 0
-				let deletions = 0
-
-				if (!isDeleted && fs.existsSync(absPath)) {
-					try {
-						newContent = fs.readFileSync(absPath, "utf-8")
-					} catch {}
-				}
-
-				if (!isUntracked) {
-					try {
-						oldContent = execSync(`git show HEAD:"${cleanRelPath}"`, {
-							cwd: this.currentWorkspace,
-							encoding: "utf-8",
-							stdio: ["ignore", "pipe", "ignore"],
-							timeout: 3000,
-						})
-					} catch {}
-
-					try {
-						const numstat = execSync(`git diff --numstat HEAD -- "${cleanRelPath}"`, {
-							cwd: this.currentWorkspace,
-							encoding: "utf-8",
-							stdio: ["ignore", "pipe", "ignore"],
-							timeout: 3000,
-						}).trim()
-						if (numstat) {
-							const parts = numstat.split(/\s+/)
-							if (parts[0]) additions = parseInt(parts[0], 10) || 0
-							if (parts[1]) deletions = parseInt(parts[1], 10) || 0
-						}
-					} catch {}
-				}
-
-				if (isAdded && newContent) {
-					additions = newContent.split("\n").length
-					deletions = 0
-				} else if (isDeleted && oldContent) {
-					additions = 0
-					deletions = oldContent.split("\n").length
-				}
-
-				const existing = this.diffFiles.get(cleanRelPath)
-				this.diffFiles.set(cleanRelPath, {
-					filePath: cleanRelPath,
-					oldContent: oldContent ?? existing?.oldContent,
-					newContent: newContent ?? existing?.newContent,
-					status,
-					additions: additions || existing?.additions || 0,
-					deletions: deletions || existing?.deletions || 0,
-				})
-			}
-			this.emit("diffsUpdated", this.getDiffFiles())
-		} catch {
-			// Git error or not a git repository
-		}
+		this.refreshDiffsFromGit()
 	}
 }

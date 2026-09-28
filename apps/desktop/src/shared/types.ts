@@ -61,7 +61,7 @@ export type DesktopClientMessage =
 	| { type: "readFile"; filePath: string }
 	| { type: "showItem"; filePath: string }
 	| { type: "openFile"; filePath: string }
-	| { type: "getDiffs" }
+	| { type: "getDiffs"; taskId?: string }
 	| { type: "clearTerminalLogs" }
 	| { type: "getSidebarData" }
 	| { type: "switchChat"; taskId: string; workspacePath?: string }

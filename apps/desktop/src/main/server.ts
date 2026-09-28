@@ -615,6 +615,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 						await agentHost.showTaskWithId(taskId)
 						broadcastSidebarData()
+						broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(taskId) })
 
 						res.writeHead(200, { "Content-Type": "application/json" })
 						res.end(JSON.stringify({ success: true, taskId }))
@@ -818,9 +819,9 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 		if (pathname === "/api/diffs") {
 			const taskId = parsedUrl.searchParams.get("taskId")
-			const files = [...agentHost.getDiffFiles()]
+			const files = [...agentHost.getDiffFilesForTask(taskId || undefined)]
 
-			// If taskId provided, ensure files modified in this task are included
+			// If taskId provided, ensure mutating tool files in this task are included
 			if (taskId) {
 				try {
 					const storageDir =
@@ -828,12 +829,20 @@ export function createDesktopServer(options: DesktopServerOptions): {
 						path.join(process.env.USERPROFILE || process.env.HOME || "", ".roo-desktop-data")
 					const uiMsgsPath = path.join(storageDir, "global-storage", "tasks", taskId, "ui_messages.json")
 					if (fs.existsSync(uiMsgsPath)) {
+						const MUTATING_TOOLS = new Set([
+							"writeToFile",
+							"write_to_file",
+							"apply_diff",
+							"newFileCreated",
+							"editedExistingFile",
+							"appliedDiff",
+						])
 						const msgs = JSON.parse(fs.readFileSync(uiMsgsPath, "utf-8"))
 						for (const m of msgs) {
 							if (m.ask === "tool" || m.say === "tool") {
 								try {
 									const toolData = typeof m.text === "string" ? JSON.parse(m.text) : m.text
-									if (toolData && toolData.path) {
+									if (toolData && toolData.path && MUTATING_TOOLS.has(toolData.tool)) {
 										const normPath = toolData.path.replace(/\\/g, "/").replace(/^\.\//, "")
 										if (!files.some((f) => f.filePath.replace(/\\/g, "/") === normPath)) {
 											const status: "modified" | "added" | "deleted" =
@@ -885,7 +894,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			}
 
 			const normTarget = targetFilePath.replace(/\\/g, "/").replace(/^\.\//, "")
-			const diffFiles = agentHost.getDiffFiles()
+			const diffFiles = agentHost.getDiffFilesForTask(taskId || undefined)
 			const entry = diffFiles.find((f) => f.filePath.replace(/\\/g, "/") === normTarget)
 
 			let oldContent = entry?.oldContent
@@ -938,10 +947,25 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				} catch {}
 			}
 
-			// Try git diff if we have a workspace
-			if (curWs && fs.existsSync(curWs)) {
-				const absPath = path.isAbsolute(targetFilePath) ? targetFilePath : path.resolve(curWs, normTarget)
+			const absPath = curWs && fs.existsSync(curWs)
+				? (path.isAbsolute(targetFilePath) ? targetFilePath : path.resolve(curWs, normTarget))
+				: (path.isAbsolute(targetFilePath) ? targetFilePath : "")
+			const fileExists = absPath ? fs.existsSync(absPath) : false
+			let diskStat: fs.Stats | null = null
+			if (fileExists) {
+				try {
+					diskStat = fs.statSync(absPath)
+				} catch {}
+			}
 
+			if (newContent === undefined && fileExists && diskStat?.isFile()) {
+				try {
+					newContent = fs.readFileSync(absPath, "utf-8")
+				} catch {}
+			}
+
+			// Try git diff / git status / git check-ignore if we have a workspace
+			if (curWs && fs.existsSync(curWs)) {
 				if (!diffText) {
 					try {
 						diffText = execSync(`git diff HEAD -- "${normTarget}"`, {
@@ -973,32 +997,56 @@ export function createDesktopServer(options: DesktopServerOptions): {
 							timeout: 3000,
 						})
 					} catch {
-						if (fs.existsSync(absPath)) {
+						if (fileExists) {
+							// Check if ignored or untracked
+							let isIgnored = false
+							try {
+								const ignoredCheck = execSync(`git check-ignore "${normTarget}"`, {
+									cwd: curWs,
+									encoding: "utf-8",
+									stdio: ["ignore", "pipe", "ignore"],
+									timeout: 2000,
+								}).trim()
+								if (ignoredCheck.length > 0) isIgnored = true
+							} catch {}
+
 							try {
 								const gitStatus = execSync(`git status --porcelain -- "${normTarget}"`, {
 									cwd: curWs,
 									encoding: "utf-8",
 									stdio: ["ignore", "pipe", "ignore"],
-									timeout: 3000,
+									timeout: 2000,
 								}).trim()
-								if (gitStatus.startsWith("??") || gitStatus.startsWith("A")) {
+								if (isIgnored || gitStatus.startsWith("??") || gitStatus.startsWith("A")) {
 									resolvedStatus = "added"
 									oldContent = ""
 								}
-							} catch {}
+							} catch {
+								if (isIgnored) {
+									resolvedStatus = "added"
+									oldContent = ""
+								}
+							}
 						}
 					}
 				}
 
-				if (newContent === undefined && fs.existsSync(absPath)) {
-					try {
-						newContent = fs.readFileSync(absPath, "utf-8")
-					} catch {}
-				}
-
-				if (!fs.existsSync(absPath) && oldContent) {
+				if (!fileExists && oldContent) {
 					resolvedStatus = "deleted"
+					newContent = ""
 				}
+			}
+
+			const isActuallyEmpty = fileExists && diskStat?.size === 0
+			let contentUnavailable = false
+			let reason: string | undefined = undefined
+
+			if (!fileExists && oldContent === undefined && (newContent === undefined || newContent === "")) {
+				contentUnavailable = true
+				reason = "File does not exist on disk"
+			} else if (fileExists && newContent === undefined && !isActuallyEmpty) {
+				contentUnavailable = true
+				reason = "Unable to read file content (may be binary or permission error)"
 			}
 
 			let additions = entry?.additions ?? 0
@@ -1027,11 +1075,14 @@ export function createDesktopServer(options: DesktopServerOptions): {
 				JSON.stringify({
 					filePath: normTarget,
 					status: resolvedStatus,
-					oldContent: oldContent ?? "",
-					newContent: newContent ?? "",
+					oldContent: oldContent ?? (resolvedStatus === "added" ? "" : null),
+					newContent: newContent ?? (isActuallyEmpty ? "" : null),
 					diff: diffText,
 					additions,
 					deletions,
+					isActuallyEmpty,
+					contentUnavailable,
+					reason,
 				}),
 			)
 			return
@@ -1866,12 +1917,13 @@ window.addEventListener("keydown", function(e) {
 					if (typeof (agentHost as any).refreshDiffsFromGit === "function") {
 						;(agentHost as any).refreshDiffsFromGit()
 					}
-					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+					const taskId = clientMsg.taskId
+					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(taskId) })
 				} else if (clientMsg.type === "clearTerminalLogs") {
 					if (typeof (agentHost as any).clearTerminalLogs === "function") {
 						;(agentHost as any).clearTerminalLogs()
 					}
-					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+					safeSend(ws, { type: "terminalLogsCleared" } as any)
 				} else if (clientMsg.type === "getSidebarData") {
 					safeSend(ws, { type: "sidebarData", data: getSidebarData() })
 				} else if (clientMsg.type === "markChatRead") {
@@ -1904,6 +1956,7 @@ window.addEventListener("keydown", function(e) {
 					}
 					await agentHost.showTaskWithId(clientMsg.taskId)
 					broadcastSidebarData()
+					broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(clientMsg.taskId) })
 				} else if (clientMsg.type === "newChat") {
 					if (clientMsg.workspacePath && fs.existsSync(clientMsg.workspacePath)) {
 						try {
