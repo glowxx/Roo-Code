@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Roo Code",
+  "version": "1.0.0",
+  "identifier": "com.roocode.desktop",
+  "build": {
+    "frontendDist": "../desktop/dist/renderer"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Roo Code",
+        "width": 1300,
+        "height": 880,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": false,
+        "resizable": true,
+        "fullscreen": false,
+        "backgroundColor": "#090a0f",
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' tauri: http://127.0.0.1:*; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: asset:; font-src 'self' data: https:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* https:; frame-src 'self' http://127.0.0.1:*; object-src 'none';"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "../desktop/assets/icon.ico"
+    ],
+    "resources": [
+      "../desktop/dist/**/*"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  }
+}
