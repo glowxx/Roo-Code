@@ -54,6 +54,24 @@ async function runBuild() {
 		sourcemap: true,
 	})
 
+	// 2.5. Build standalone highlight.bundle.js for offline renderer syntax highlighting
+	const hljsCommon = path.resolve(__dirname, "../../node_modules/.pnpm/highlight.js@11.11.1/node_modules/highlight.js/lib/common.js").replace(/\\/g, "/")
+	const hljsPs = path.resolve(__dirname, "../../node_modules/.pnpm/highlight.js@11.11.1/node_modules/highlight.js/lib/languages/powershell.js").replace(/\\/g, "/")
+	if (fs.existsSync(hljsCommon)) {
+		await build({
+			stdin: {
+				contents: `import hljs from "${hljsCommon}"; import powershell from "${hljsPs}"; hljs.registerLanguage("powershell", powershell); window.hljs = hljs;`,
+				resolveDir: __dirname,
+				sourcefile: "highlight-entry.js",
+				loader: "js",
+			},
+			outfile: path.join(__dirname, "src/renderer/highlight.bundle.js"),
+			bundle: true,
+			minify: true,
+			format: "iife",
+		})
+	}
+
 	// 3. Copy renderer files
 	const rendererSrc = path.join(__dirname, "src/renderer")
 	const rendererDist = path.join(outDir, "renderer")
