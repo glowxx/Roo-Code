@@ -1,4 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
+import { TodoItem } from "@roo-code/types"
 import { ApiHandler, ApiHandlerCreateMessageMetadata } from "../../api"
 import { ApiMessage } from "../task-persistence/apiMessages"
 import { RooIgnoreController } from "../ignore/RooIgnoreController"
@@ -10,6 +11,7 @@ export const STATE_HANDOFF_HEADER = "### CONTEXT COMPACTION HANDOFF"
 export const STATE_HANDOFF_TEMPLATE = `### CONTEXT COMPACTION HANDOFF
 - **Primary Objective**: {primaryObjective}
 - **Active Goal & Latest User Instruction**: {activeGoal}
+- **Scoped Permissions & Constraints**: {scopedPermissions}
 - **Completion Criteria & Required Report Structure**: {completionCriteria}
 - **Work Completed**: {workCompleted}
 - **Current State & Obstacles**: {currentStateAndObstacles}
@@ -25,6 +27,7 @@ Provide a comprehensive, highly technical, and structured Markdown summary follo
 ### CONTEXT COMPACTION HANDOFF
 - **Primary Objective**: [State the overall task goal and original scope]
 - **Active Goal & Latest User Instruction**: [State the most recent user prompt/instructions and the current active objective that must be fulfilled now]
+- **Scoped Permissions & Constraints**: [Detail any scoped authorizations granted (e.g. ALLOWED to modify X, ALLOWED to commit Y) or lifted restrictions. Note if read-only constraints were superseded or revoked]
 - **Completion Criteria & Required Report Structure**: [Explicit checklist of requirements, flags, deliverables, and final report format required by user]
 - **Work Completed**: [Detail all modified/created files with exact paths, functions/components updated, key bugs resolved, and tests run]
 - **Current State & Obstacles**: [What the agent was working on immediately before compaction, current error logs or test results]
@@ -34,6 +37,7 @@ Provide a comprehensive, highly technical, and structured Markdown summary follo
 CRITICAL INSTRUCTIONS:
 - You must output ONLY valid Markdown adhering strictly to the format above starting with "### CONTEXT COMPACTION HANDOFF".
 - Maintain high information density and preserve exact technical terms, identifiers, and file paths.
+- Accurately preserve user-granted scoped permissions and explicit constraint changes. Never reduce a specific scoped allowance back to a general ban.
 - Keep the summary concise, dense, and focused: maximum 1,500 words / ~2,000 tokens. Do not include raw source file dumps, massive terminal logs, or repetitive listings. Focus strictly on architectural facts and active state.`
 
 export interface CompactHistoryOptions {
@@ -47,6 +51,11 @@ export interface CompactHistoryOptions {
 	rooIgnoreController?: RooIgnoreController
 	metadata?: ApiHandlerCreateMessageMetadata
 	abortSignal?: AbortSignal
+	scopedAllows?: string[]
+	scopedDenies?: string[]
+	activeGoal?: string
+	todoList?: TodoItem[]
+	workspacePath?: string
 }
 
 export interface CompactHistoryResult {
@@ -298,6 +307,9 @@ export function extractCleanInitialBlocks(
  * Ignores synthetic summary messages.
  */
 export function findLatestUserInstruction(messages: ApiMessage[]): string | undefined {
+	const trivialPattern = /^(?:continue|ok|proceed|idź dalej|dalej|tak|yes|go)\.?$/i
+	let fallbackFound: string | undefined = undefined
+
 	for (let i = messages.length - 1; i >= 1; i--) {
 		const msg = messages[i]
 		if (msg.role === "user" && !msg.isSummary) {
@@ -315,11 +327,17 @@ export function findLatestUserInstruction(messages: ApiMessage[]): string | unde
 				!text.includes("[Context Compacted Summary]") &&
 				!text.includes(STATE_HANDOFF_HEADER)
 			) {
-				return text.trim()
+				const trimmed = text.trim()
+				if (!fallbackFound) {
+					fallbackFound = trimmed
+				}
+				if (!trivialPattern.test(trimmed)) {
+					return trimmed
+				}
 			}
 		}
 	}
-	return undefined
+	return fallbackFound
 }
 
 /**
@@ -648,10 +666,38 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		formattedSummary = `### CONTEXT COMPACTION HANDOFF\n\n${formattedSummary}`
 	}
 
+	// Build machine-readable canonical state snapshot to guarantee structured intent survives
+	let structuredStateBlock = ""
+	const stateLines: string[] = []
+	if (options.workspacePath) {
+		stateLines.push(`- **Workspace Root**: ${options.workspacePath}`)
+	}
+	if (options.activeGoal) {
+		stateLines.push(`- **Active Substantive Goal**: ${options.activeGoal}`)
+	}
+	if (options.scopedAllows && options.scopedAllows.length > 0) {
+		stateLines.push(`- **Scoped Modification Authorizations (ALLOW)**: ${options.scopedAllows.join(", ")}`)
+	}
+	if (options.scopedDenies && options.scopedDenies.length > 0) {
+		stateLines.push(`- **Scoped Modification Denials (DENY)**: ${options.scopedDenies.join(", ")}`)
+	}
+	if (options.todoList && options.todoList.length > 0) {
+		const completed = options.todoList.filter((t) => t.status === "completed").length
+		stateLines.push(`- **TodoList Progress**: ${completed}/${options.todoList.length} completed`)
+	}
+	if (stateLines.length > 0) {
+		structuredStateBlock = `\n\n### CANONICAL STATE SNAPSHOT (ACTIVE CONSTRAINTS & PERMISSIONS)\n${stateLines.join("\n")}\n*(Note: This canonical snapshot and recent instructions take precedence over initial prompt constraints)*\n`
+	}
+
 	// Construct synthetic summary message
 	const summaryMessage: ApiMessage = {
 		role: "user",
-		content: [{ type: "text", text: `[Context Compacted Summary]\n\n${formattedSummary}` }],
+		content: [
+			{
+				type: "text",
+				text: `[Context Compacted Summary]\n\n[ACTIVE CANONICAL STATE & RECENT INSTRUCTIONS PREVAIL OVER ORIGINAL PROMPT]\n\n${formattedSummary}${structuredStateBlock}`,
+			},
+		],
 		ts: Date.now(),
 		isSummary: true,
 	}

@@ -773,5 +773,44 @@ describe("ContextCompactor", () => {
 			expect(mockApiHandler.lastSystemPrompt).toContain("- **Active Goal & Latest User Instruction**:")
 			expect(mockApiHandler.lastSystemPrompt).toContain("- **Completion Criteria & Required Report Structure**:")
 		})
+
+		it("preserves scoped permissions and canonical state snapshot across compaction", async () => {
+			const messages: ApiMessage[] = [
+				{ role: "user", content: "Initial goal: inspect app/public read-only", ts: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "Inspecting..." }], ts: 2 },
+				{ role: "user", content: "WRITE AUTHORIZATION: You may modify ONLY velune-website/. Do NOT modify app/public/.", ts: 3 },
+				{ role: "assistant", content: [{ type: "text", text: "Working on velune-website" }], ts: 4 },
+				{ role: "user", content: "continue", ts: 5 },
+				{ role: "assistant", content: [{ type: "text", text: "Continuing..." }], ts: 6 },
+			]
+
+			const result = await compactHistory({
+				messages,
+				apiHandler: mockApiHandler,
+				systemPrompt,
+				taskId,
+				preserveTurns: 1,
+				scopedAllows: ["velune-website/"],
+				scopedDenies: ["app/public/"],
+				activeGoal: "Frontend polish on velune-website",
+				workspacePath: "/workspace/project",
+				todoList: [
+					{ id: "1", content: "Inspect public", status: "completed" },
+					{ id: "2", content: "Redesign velune website", status: "in_progress" },
+				] as any,
+			})
+
+			const firstMessage = result.newHistory[0]
+			const blocks = firstMessage.content as Anthropic.Messages.ContentBlockParam[]
+			const summaryText = (blocks[1] as any).text
+
+			expect(summaryText).toContain("### CANONICAL STATE SNAPSHOT (ACTIVE CONSTRAINTS & PERMISSIONS)")
+			expect(summaryText).toContain("- **Workspace Root**: /workspace/project")
+			expect(summaryText).toContain("- **Active Substantive Goal**: Frontend polish on velune-website")
+			expect(summaryText).toContain("- **Scoped Modification Authorizations (ALLOW)**: velune-website/")
+			expect(summaryText).toContain("- **Scoped Modification Denials (DENY)**: app/public/")
+			expect(summaryText).toContain("- **TodoList Progress**: 1/2 completed")
+			expect(summaryText).toContain("[ACTIVE CANONICAL STATE & RECENT INSTRUCTIONS PREVAIL OVER ORIGINAL PROMPT]")
+		})
 	})
 })
