@@ -188,7 +188,7 @@ export interface TaskOptions extends CreateTaskOptions {
 	initialTodos?: TodoItem[]
 	workspacePath?: string
 	/** Initial status for the task's history item (e.g., "active" for child tasks) */
-	initialStatus?: "active" | "delegated" | "completed"
+	initialStatus?: "active" | "delegated" | "completed" | "interrupted"
 }
 
 export class Task extends EventEmitter<TaskEvents> implements TaskLike {
@@ -513,7 +513,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Cloud Sync Tracking
 	// Initial status for the task's history item (set at creation time to avoid race conditions)
-	private readonly initialStatus?: "active" | "delegated" | "completed"
+	private readonly initialStatus?: "active" | "delegated" | "completed" | "interrupted"
 	public historyItem?: HistoryItem
 
 	// MessageManager for high-level message operations (lazy initialized)
@@ -6845,8 +6845,14 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 	}
 
 	// Getters
+	public get isStarted(): boolean {
+		return this._started
+	}
 
 	public get taskStatus(): TaskStatus {
+		if (!this._started) {
+			return TaskStatus.Idle
+		}
 		if (this.interactiveAsk) {
 			return TaskStatus.Interactive
 		}

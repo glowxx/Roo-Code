@@ -606,6 +606,7 @@ export class DesktopAgentHost extends EventEmitter {
 					const updated = {
 						...item,
 						status: "completed" as const,
+						needsAttention: false,
 						hasUnread: isBackground,
 						lastAssistantMessageTs: Date.now(),
 						...(isBackground ? {} : { lastReadTs: Date.now() }),
@@ -625,6 +626,7 @@ export class DesktopAgentHost extends EventEmitter {
 					const raw = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
 					if (raw) {
 						raw.status = "completed"
+						raw.needsAttention = false
 						raw.hasUnread = isBackground
 						raw.lastAssistantMessageTs = Date.now()
 						if (!isBackground) {
@@ -771,9 +773,12 @@ export class DesktopAgentHost extends EventEmitter {
 						status = isUserDecisionRequired ? "needs_attention" : (runningTask.taskStatus === "idle" ? "completed" : "running")
 					}
 				}
+				if (runningTask.isStarted === false && !runningTask.isStreaming) {
+					status = item.status === "interrupted" ? "needs_attention" : "completed"
+				}
 			} else if (item.status === "failed") {
 				status = "failed"
-			} else if (item.status === "interrupted" || (item as any).needsAttention === true) {
+			} else if (item.status === "interrupted" || item.status === "active" || (item as any).needsAttention === true) {
 				status = "needs_attention"
 			} else {
 				status = "completed"
