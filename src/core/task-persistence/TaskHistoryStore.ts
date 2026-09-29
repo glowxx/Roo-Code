@@ -371,6 +371,7 @@ export class TaskHistoryStore {
 					const updatedItem: HistoryItem = {
 						...item,
 						status: "interrupted",
+						needsAttention: true,
 					}
 					this.cache.set(taskId, updatedItem)
 					await this.writeTaskFile(updatedItem).catch((err) => {

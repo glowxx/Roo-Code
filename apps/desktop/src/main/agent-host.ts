@@ -773,6 +773,8 @@ export class DesktopAgentHost extends EventEmitter {
 				}
 			} else if (item.status === "failed") {
 				status = "failed"
+			} else if (item.status === "interrupted" || (item as any).needsAttention === true) {
+				status = "needs_attention"
 			} else {
 				status = "completed"
 			}

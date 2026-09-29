@@ -29,6 +29,12 @@ export type TaskMetadataOptions = {
 	title?: string
 	/** Source of the title */
 	titleSource?: "generated_ai" | "manual" | "fallback"
+	/** Per-chat preferred model ID */
+	chatModelId?: string
+	/** Per-chat preferred provider */
+	chatProvider?: string
+	/** Per-chat preferred reasoning effort */
+	chatReasoningEffort?: string
 }
 
 export async function taskMetadata({
@@ -44,6 +50,9 @@ export async function taskMetadata({
 	initialStatus,
 	title,
 	titleSource,
+	chatModelId,
+	chatProvider,
+	chatReasoningEffort,
 }: TaskMetadataOptions) {
 	const taskDir = await getTaskDirectoryPath(globalStoragePath, id)
 
@@ -97,6 +106,25 @@ export async function taskMetadata({
 
 	const createdAt = hasMessages ? (taskMessage?.ts ?? Date.now()) : Date.now()
 
+	let needsAttention = false
+	if (hasMessages) {
+		const lastAskIdx = findLastIndex(messages, (m) => m.type === "ask")
+		if (lastAskIdx !== -1) {
+			const lastSayIdx = findLastIndex(messages, (m) => m.type === "say")
+			const lastAsk = messages[lastAskIdx]
+			if (
+				lastAskIdx > lastSayIdx ||
+				lastAsk.ask === "followup" ||
+				lastAsk.approvalState === "USER_DECISION_REQUIRED" ||
+				lastAsk.ask === "command" ||
+				lastAsk.ask === "tool" ||
+				lastAsk.ask === "resume_task"
+			) {
+				needsAttention = true
+			}
+		}
+	}
+
 	// Create historyItem once with pre-calculated values.
 	// initialStatus is included when provided (e.g., "active" for child tasks)
 	// to ensure the status is set from the very first save, avoiding race conditions
@@ -119,6 +147,10 @@ export async function taskMetadata({
 		size: taskDirSize,
 		workspace,
 		mode,
+		needsAttention,
+		...(chatModelId ? { chatModelId } : {}),
+		...(chatProvider ? { chatProvider } : {}),
+		...(chatReasoningEffort ? { chatReasoningEffort } : {}),
 		...(typeof apiConfigName === "string" && apiConfigName.length > 0 ? { apiConfigName } : {}),
 		...(initialStatus && { status: initialStatus }),
 		...(typeof title === "string" && title.length > 0 ? { title } : {}),
