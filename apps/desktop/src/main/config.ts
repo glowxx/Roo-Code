@@ -169,9 +169,11 @@ export function saveDesktopConfig(updates: Partial<DesktopConfig>): DesktopConfi
 			recent = [finalWorkspacePath]
 		}
 
-		// If a new non-empty lastWorkspacePath was explicitly updated, ensure it's at the front of recentWorkspaces
+		// If a new non-empty lastWorkspacePath was explicitly updated, ensure it is in recentWorkspaces without disrupting manual order
 		if (updates.lastWorkspacePath && finalWorkspacePath && Array.isArray(updates.recentWorkspaces) === false) {
-			recent = [finalWorkspacePath, ...recent.filter((p) => !arePathsEqual(p, finalWorkspacePath!))]
+			if (!recent.some((p) => arePathsEqual(p, finalWorkspacePath!))) {
+				recent.push(finalWorkspacePath)
+			}
 		}
 
 		// Deduplicate recentWorkspaces using arePathsEqual

@@ -746,6 +746,11 @@
 			await selectWorkspaceFolder(workspacePath)
 		}
 		activeTaskId = null
+		if (latestExtensionState) {
+			latestExtensionState.currentTaskId = undefined
+			latestExtensionState.currentTaskItem = undefined
+			latestExtensionState.clineMessages = []
+		}
 		renderSidebar()
 
 		// Reset active terminal logs and diffs for completed task
@@ -847,7 +852,8 @@
 
 	async function switchChat(taskId, wsPath) {
 		if (!taskId) return
-		if (taskId === activeTaskId) return
+		const webviewTaskId = latestExtensionState?.currentTaskId
+		if (taskId === activeTaskId && webviewTaskId === taskId) return
 		const thisEpoch = ++currentSelectionEpoch
 		activeTaskId = taskId
 
@@ -1316,6 +1322,14 @@
 			}
 		}
 
+		try {
+			const saved = JSON.parse(localStorage.getItem("roo-desktop-workspaces-order") || "[]")
+			if (Array.isArray(saved)) {
+				const filtered = saved.filter((p) => pathNormalize(p) !== wsNorm)
+				localStorage.setItem("roo-desktop-workspaces-order", JSON.stringify(filtered))
+			}
+		} catch {}
+
 		const isCurrentActive =
 			pathNormalize(sidebarData.currentWorkspace || "") === wsNorm ||
 			pathNormalize(currentWorkspace?.path || "") === wsNorm
@@ -1693,15 +1707,34 @@
 		return true
 	}
 
+	let isDraggingProject = false
+	let draggedProjectWs = null
+	let dragOverProjectWs = null
+	let dragDropPosition = null
+
+	function cleanupDragState() {
+		isDraggingProject = false
+		draggedProjectWs = null
+		dragOverProjectWs = null
+		dragDropPosition = null
+		if (sidebarProjectsListEl) {
+			sidebarProjectsListEl.classList.remove("reorder-mode")
+			sidebarProjectsListEl.querySelectorAll(".sidebar-project-item").forEach((el) => {
+				el.classList.remove("is-dragging", "drop-before", "drop-after")
+			})
+		}
+	}
+
 	function renderSidebar() {
 		if (!sidebarProjectsListEl) return
+		if (isDraggingProject) return
 
 		const curWsNorm = pathNormalize(sidebarData.currentWorkspace || currentWorkspace?.path || "")
 		let workspaces = [...sidebarData.recentWorkspaces]
 
-		// Ensure current workspace is present
+		// Ensure current workspace is present (append to end if new)
 		if (sidebarData.currentWorkspace && !workspaces.some((w) => pathNormalize(w) === curWsNorm)) {
-			workspaces.unshift(sidebarData.currentWorkspace)
+			workspaces.push(sidebarData.currentWorkspace)
 		}
 
 		// Also check if there are chats for workspaces not currently in recentWorkspaces
@@ -1710,6 +1743,29 @@
 				workspaces.push(wsKey)
 			}
 		}
+
+		// Reconcile with manual order if saved in localStorage
+		try {
+			const savedOrderJson = localStorage.getItem("roo-desktop-workspaces-order")
+			if (savedOrderJson) {
+				const savedOrder = JSON.parse(savedOrderJson)
+				if (Array.isArray(savedOrder) && savedOrder.length > 0) {
+					const ordered = []
+					for (const savedWs of savedOrder) {
+						const found = workspaces.find((w) => pathNormalize(w) === pathNormalize(savedWs))
+						if (found && !ordered.some((o) => pathNormalize(o) === pathNormalize(found))) {
+							ordered.push(found)
+						}
+					}
+					for (const ws of workspaces) {
+						if (!ordered.some((o) => pathNormalize(o) === pathNormalize(ws))) {
+							ordered.push(ws)
+						}
+					}
+					workspaces = ordered
+				}
+			}
+		} catch {}
 
 		if (sidebarProjectsCountEl) {
 			sidebarProjectsCountEl.textContent = String(workspaces.length)
@@ -1756,6 +1812,16 @@
 			html += `
 				<div class="sidebar-project-item ${isActive ? "active" : ""}" data-workspace="${escapeHtml(ws)}">
 					<div class="project-header" data-workspace="${escapeHtml(ws)}">
+						<button class="project-drag-handle" data-action="drag-project" data-workspace="${escapeHtml(ws)}" draggable="true" title="Przeciągnij, aby zmienić kolejność" aria-label="Drag project to reorder" tabindex="0">
+							<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+								<circle cx="3" cy="2.5" r="1.2"/>
+								<circle cx="7" cy="2.5" r="1.2"/>
+								<circle cx="3" cy="7" r="1.2"/>
+								<circle cx="7" cy="7" r="1.2"/>
+								<circle cx="3" cy="11.5" r="1.2"/>
+								<circle cx="7" cy="11.5" r="1.2"/>
+							</svg>
+						</button>
 						<button class="project-chevron-btn" data-action="toggle-project" data-workspace="${escapeHtml(ws)}" title="Toggle chats">
 							<svg class="chevron-icon ${isExpanded ? "expanded" : ""}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
 								<polyline points="9 18 15 12 9 6"></polyline>
@@ -1911,6 +1977,145 @@
 				e.stopPropagation()
 				const ws = btn.getAttribute("data-workspace")
 				if (ws) startNewChat(ws)
+			})
+		})
+
+		// Wire project drag-and-drop reordering
+		sidebarProjectsListEl.querySelectorAll(".project-drag-handle").forEach((handle) => {
+			handle.addEventListener("mousedown", (e) => {
+				e.stopPropagation()
+			})
+			handle.addEventListener("click", (e) => {
+				e.stopPropagation()
+				e.preventDefault()
+			})
+			handle.addEventListener("dragstart", (e) => {
+				e.stopPropagation()
+				const ws = handle.getAttribute("data-workspace")
+				if (!ws) return
+
+				isDraggingProject = true
+				draggedProjectWs = ws
+				e.dataTransfer.effectAllowed = "move"
+				e.dataTransfer.setData("text/plain", ws)
+
+				// Create elevated drag ghost
+				const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+				const ghost = document.createElement("div")
+				ghost.className = "project-drag-ghost"
+				ghost.style.cssText = "position:absolute; top:-1000px; left:-1000px; padding:6px 12px; background:var(--bg-surface-elevated, #252526); color:var(--text-primary, #ffffff); border:1px solid var(--accent, #3b82f6); border-radius:6px; font-size:12px; font-weight:600; box-shadow:0 4px 12px rgba(0,0,0,0.4); pointer-events:none; z-index:9999; max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+				ghost.textContent = wsName
+				document.body.appendChild(ghost)
+				e.dataTransfer.setDragImage(ghost, 20, 15)
+				setTimeout(() => ghost.remove(), 0)
+
+				const projectItem = handle.closest(".sidebar-project-item")
+				if (projectItem) {
+					projectItem.classList.add("is-dragging")
+				}
+
+				// Ephemeral visual mode: collapse/hide chats during reorder
+				sidebarProjectsListEl.classList.add("reorder-mode")
+			})
+			handle.addEventListener("dragend", () => {
+				cleanupDragState()
+			})
+		})
+
+		sidebarProjectsListEl.querySelectorAll(".sidebar-project-item").forEach((item) => {
+			item.addEventListener("dragover", (e) => {
+				if (!isDraggingProject || !draggedProjectWs) return
+				const targetWs = item.getAttribute("data-workspace")
+				if (!targetWs || pathNormalize(targetWs) === pathNormalize(draggedProjectWs)) {
+					item.classList.remove("drop-before", "drop-after")
+					return
+				}
+				e.preventDefault()
+				e.stopPropagation()
+				e.dataTransfer.dropEffect = "move"
+
+				const rect = item.getBoundingClientRect()
+				const midY = rect.top + rect.height / 2
+				const position = e.clientY < midY ? "before" : "after"
+
+				dragOverProjectWs = targetWs
+				dragDropPosition = position
+
+				if (position === "before") {
+					item.classList.add("drop-before")
+					item.classList.remove("drop-after")
+				} else {
+					item.classList.add("drop-after")
+					item.classList.remove("drop-before")
+				}
+
+				// Controlled auto-scroll on sidebar scroll container
+				const scrollContainer = sidebarProjectsListEl.closest(".sidebar-scroll-content") || sidebarProjectsListEl
+				if (scrollContainer) {
+					const scrollRect = scrollContainer.getBoundingClientRect()
+					if (e.clientY < scrollRect.top + 40) {
+						scrollContainer.scrollTop -= 8
+					} else if (e.clientY > scrollRect.bottom - 40) {
+						scrollContainer.scrollTop += 8
+					}
+				}
+			})
+
+			item.addEventListener("dragleave", (e) => {
+				if (!item.contains(e.relatedTarget)) {
+					item.classList.remove("drop-before", "drop-after")
+				}
+			})
+
+			item.addEventListener("drop", (e) => {
+				if (!isDraggingProject || !draggedProjectWs) return
+				e.preventDefault()
+				e.stopPropagation()
+
+				const targetWs = item.getAttribute("data-workspace")
+				const fromWs = draggedProjectWs
+				const pos = dragDropPosition
+
+				cleanupDragState()
+
+				if (!targetWs || !fromWs || pathNormalize(fromWs) === pathNormalize(targetWs)) return
+
+				// Calculate new order
+				const currentList = [...workspaces]
+				const fromIndex = currentList.findIndex((w) => pathNormalize(w) === pathNormalize(fromWs))
+				if (fromIndex === -1) return
+
+				currentList.splice(fromIndex, 1)
+
+				let toIndex = currentList.findIndex((w) => pathNormalize(w) === pathNormalize(targetWs))
+				if (toIndex === -1) {
+					currentList.push(fromWs)
+				} else {
+					if (pos === "after") {
+						toIndex++
+					}
+					currentList.splice(toIndex, 0, fromWs)
+				}
+
+				// Deduplicate
+				const deduped = []
+				for (const w of currentList) {
+					if (!deduped.some((existing) => pathNormalize(existing) === pathNormalize(w))) {
+						deduped.push(w)
+					}
+				}
+
+				// Update sidebarData & localStorage
+				sidebarData.recentWorkspaces = deduped
+				try {
+					localStorage.setItem("roo-desktop-workspaces-order", JSON.stringify(deduped))
+				} catch {}
+
+				// Send to server to persist to desktop-config.json
+				sendToServer({ type: "reorderWorkspaces", workspaces: deduped })
+
+				// Re-render
+				renderSidebar()
 			})
 		})
 	}
@@ -2112,6 +2317,11 @@
 						origin: "sync",
 						values: { section: currentSettingsSection || "providers" },
 					}, "*")
+				}
+				if (isFromMainWebview && data.type === "webviewDidLaunch") {
+					if (activeTaskId && (!latestExtensionState || !latestExtensionState.currentTaskId)) {
+						switchChat(activeTaskId, sidebarData.currentWorkspace)
+					}
 				}
 				if (data.type === "languageChange" && data.language) {
 					const newLang = (data.language === "pl" || data.language.startsWith("pl")) ? "pl" : "en"
@@ -2330,11 +2540,10 @@
 					if (msg.message.state.currentApiConfigName) {
 						currentApiProfileName = msg.message.state.currentApiConfigName
 					}
-					if (msg.message.state.currentTaskId) {
-						if (!activeTaskId || msg.message.state.currentTaskId === activeTaskId) {
-							activeTaskId = msg.message.state.currentTaskId
-							renderSidebar()
-						}
+					const webviewTaskId = msg.message.state.currentTaskId ?? null
+					if (webviewTaskId !== undefined && webviewTaskId !== activeTaskId) {
+						activeTaskId = webviewTaskId
+						renderSidebar()
 					}
 				}
 				if (msg.message?.type === "taskHistoryUpdated") {

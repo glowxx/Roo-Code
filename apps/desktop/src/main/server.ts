@@ -403,7 +403,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		if (curWs) {
 			const canonCur = canonicalizePath(curWs)
 			if (!recent.some((p) => arePathsEqual(p, canonCur))) {
-				recent.unshift(canonCur)
+				recent.push(canonCur)
 			}
 		}
 		const chats = agentHost.getChatsByWorkspace()
@@ -2071,6 +2071,18 @@ window.addEventListener("keydown", function(e) {
 					if (taskId && title) {
 						await agentHost.renameChat(taskId, title)
 					}
+				} else if (clientMsg.type === "reorderWorkspaces") {
+					const incoming = Array.isArray(clientMsg.workspaces) ? clientMsg.workspaces : []
+					const deduped: string[] = []
+					for (const p of incoming) {
+						if (!p || typeof p !== "string" || !p.trim()) continue
+						const canon = canonicalizePath(p)
+						if (!deduped.some((existing) => arePathsEqual(existing, canon))) {
+							deduped.push(canon)
+						}
+					}
+					saveDesktopConfig({ recentWorkspaces: deduped })
+					broadcastSidebarData()
 				}
 			} catch (err) {
 				safeSend(ws, { type: "error", message: String(err) })

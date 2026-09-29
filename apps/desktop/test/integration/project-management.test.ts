@@ -515,4 +515,83 @@ describe("Project Management & Sidebar Creation Flow (TDD)", () => {
 			expect(fs.readFileSync(gitHead, "utf-8")).toBe(gitContent)
 		})
 	})
+
+	describe("8. Persistent Drag Reordering & Manual Order Invariants (TDD)", () => {
+		it("preserves manual order when switching active project and appends new projects to end", () => {
+			const projA = path.join(tempDir, "ProjectA")
+			const projB = path.join(tempDir, "ProjectB")
+			const projC = path.join(tempDir, "ProjectC")
+			const projD = path.join(tempDir, "ProjectD")
+
+			// Initialize manual order: A, B, C
+			saveDesktopConfig({
+				lastWorkspacePath: projA,
+				recentWorkspaces: [projA, projB, projC],
+			})
+
+			let config = loadDesktopConfig()
+			expect(config.recentWorkspaces?.map(canonicalizePath)).toEqual([projA, projB, projC].map(canonicalizePath))
+
+			// Switching active project to B must NOT shuffle B to index 0
+			saveDesktopConfig({
+				lastWorkspacePath: projB,
+			})
+
+			config = loadDesktopConfig()
+			expect(config.recentWorkspaces?.map(canonicalizePath)).toEqual([projA, projB, projC].map(canonicalizePath))
+			expect(arePathsEqual(config.lastWorkspacePath!, projB)).toBe(true)
+
+			// Switching active project to C must NOT shuffle C to index 0
+			saveDesktopConfig({
+				lastWorkspacePath: projC,
+			})
+
+			config = loadDesktopConfig()
+			expect(config.recentWorkspaces?.map(canonicalizePath)).toEqual([projA, projB, projC].map(canonicalizePath))
+
+			// Opening a brand new project D must append it to the end without shuffling existing
+			saveDesktopConfig({
+				lastWorkspacePath: projD,
+			})
+
+			config = loadDesktopConfig()
+			expect(config.recentWorkspaces?.map(canonicalizePath)).toEqual([projA, projB, projC, projD].map(canonicalizePath))
+
+			// Explicit manual reorder [C, A, B, D] must be persisted as-is
+			saveDesktopConfig({
+				recentWorkspaces: [projC, projA, projB, projD],
+			})
+
+			config = loadDesktopConfig()
+			expect(config.recentWorkspaces?.map(canonicalizePath)).toEqual([projC, projA, projB, projD].map(canonicalizePath))
+		})
+
+		it("verifies drag handle, ephemeral reorder mode, and drop indicators in renderer and styles", () => {
+			const appJsPath = path.resolve(__dirname, "../../src/renderer/app.js")
+			const stylesPath = path.resolve(__dirname, "../../src/renderer/styles.css")
+
+			const appJs = fs.readFileSync(appJsPath, "utf-8")
+			const styles = fs.readFileSync(stylesPath, "utf-8")
+
+			// Dedicated drag handle exists with draggable attribute
+			expect(appJs).toContain("project-drag-handle")
+			expect(appJs).toContain('draggable="true"')
+			expect(appJs).toContain('data-action="drag-project"')
+
+			// Drag events wired
+			expect(appJs).toContain('addEventListener("dragstart"')
+			expect(appJs).toContain('addEventListener("dragover"')
+			expect(appJs).toContain('addEventListener("drop"')
+			expect(appJs).toContain('reorderWorkspaces')
+
+			// Ephemeral reorder mode hides chats during reorder
+			expect(styles).toContain("#sidebar-projects-list.reorder-mode .project-chats-list")
+			expect(styles).toContain("display: none !important")
+
+			// Precise drop indicators exist
+			expect(styles).toContain(".sidebar-project-item.drop-before::before")
+			expect(styles).toContain(".sidebar-project-item.drop-after::after")
+			expect(styles).toContain(".project-drag-handle")
+		})
+	})
 })

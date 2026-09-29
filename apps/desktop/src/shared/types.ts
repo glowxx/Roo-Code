@@ -74,6 +74,7 @@ export type DesktopClientMessage =
 	| { type: "removeProject"; path: string; forceStop?: boolean }
 	| { type: "openProjectFolder"; path: string }
 	| { type: "renameChat"; taskId: string; title: string }
+	| { type: "reorderWorkspaces"; workspaces: string[] }
 
 export type DesktopServerMessage =
 	| { type: "extensionMessage"; message: ExtensionMessage }

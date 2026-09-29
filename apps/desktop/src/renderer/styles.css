@@ -796,6 +796,76 @@ body.light-theme .header-action-btn:hover {
 	background: rgba(59, 130, 246, 0.16);
 }
 
+/* Drag handle */
+.project-drag-handle {
+	width: 14px;
+	height: 18px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	opacity: 0.35;
+	cursor: grab;
+	flex-shrink: 0;
+	transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+	border-radius: 3px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	user-select: none;
+}
+
+.project-drag-handle:hover {
+	opacity: 1;
+	color: var(--text-primary);
+	background: var(--bg-hover);
+}
+
+.project-drag-handle:active {
+	cursor: grabbing;
+}
+
+/* Ephemeral reorder mode: hide chats smoothly and instantly */
+#sidebar-projects-list.reorder-mode .project-chats-list {
+	display: none !important;
+}
+
+#sidebar-projects-list.reorder-mode .sidebar-project-item {
+	transition: opacity 0.15s ease;
+}
+
+.sidebar-project-item.is-dragging {
+	opacity: 0.35;
+}
+
+.sidebar-project-item.drop-before::before {
+	content: "";
+	position: absolute;
+	top: -2px;
+	left: 4px;
+	right: 4px;
+	height: 2px;
+	background: var(--accent, #3b82f6);
+	border-radius: 2px;
+	box-shadow: 0 0 6px var(--accent, #3b82f6);
+	z-index: 10;
+	pointer-events: none;
+}
+
+.sidebar-project-item.drop-after::after {
+	content: "";
+	position: absolute;
+	bottom: -2px;
+	left: 4px;
+	right: 4px;
+	height: 2px;
+	background: var(--accent, #3b82f6);
+	border-radius: 2px;
+	box-shadow: 0 0 6px var(--accent, #3b82f6);
+	z-index: 10;
+	pointer-events: none;
+}
+
 .project-chevron-btn {
 	width: 18px;
 	height: 18px;
