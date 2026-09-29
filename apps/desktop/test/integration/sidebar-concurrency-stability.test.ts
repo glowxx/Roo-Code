@@ -124,11 +124,12 @@ describe("Sidebar Concurrency & Spatial Stability (Problem 2)", () => {
 		const item3 = { id: "task-3", task: "Initial prompt 3", workspace: workspaceA, createdAt: t3, ts: t3 }
 
 		const storedItems = [item1, item2, item3]
+		const completePrompt = vi.fn().mockResolvedValue("Generated Semantic Title")
+		const currentTask = { taskId: "task-1", api: { completePrompt }, isStreaming: false, taskStatus: "idle" }
 
 		const mockProvider = {
-			runningTasks: new Map(),
-			getCurrentTask: () => null,
-			completePrompt: vi.fn().mockResolvedValue("Generated Semantic Title"),
+			runningTasks: new Map([["task-1", currentTask]]),
+			getCurrentTask: () => currentTask,
 			taskHistoryStore: {
 				getAll: () => [...storedItems],
 				get: (id: string) => storedItems.find((i) => i.id === id),
@@ -151,7 +152,7 @@ describe("Sidebar Concurrency & Spatial Stability (Problem 2)", () => {
 		host.triggerBackgroundTitleGeneration("task-1", "Initial prompt 1")
 
 		await vi.waitFor(() => {
-			expect(mockProvider.completePrompt).toHaveBeenCalled()
+			expect(completePrompt).toHaveBeenCalled()
 			expect((storedItems[0] as any).title).toBe("Generated Semantic Title")
 		})
 

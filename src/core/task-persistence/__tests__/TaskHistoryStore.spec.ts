@@ -135,6 +135,15 @@ describe("TaskHistoryStore", () => {
 	})
 
 	describe("upsert()", () => {
+		it("never replaces a manual title with a late fallback or AI title", async () => {
+			await store.initialize()
+			const manual = makeHistoryItem({ id: "manual-title", title: "My chosen title", titleSource: "manual" })
+			await store.upsert(manual)
+			await store.upsert({ ...manual, title: "Automatic fallback title", titleSource: "fallback" })
+			await store.upsert({ ...manual, title: "Generated model title", titleSource: "generated_ai" })
+			expect(store.get("manual-title")).toMatchObject({ title: "My chosen title", titleSource: "manual" })
+		})
+
 		it("writes per-task file and updates cache", async () => {
 			await store.initialize()
 

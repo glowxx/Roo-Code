@@ -212,7 +212,7 @@ export class TaskHistoryStore {
 			const resolvedCreatedAt = item.createdAt ?? existing?.createdAt ?? extractCreationTimestamp(item.id, item.ts)
 
 			// Manual title lock: AI generation can never overwrite a manual rename
-			if (existing?.titleSource === "manual" && item.titleSource === "generated_ai") {
+			if (existing?.titleSource === "manual" && item.titleSource !== "manual") {
 				resolvedTitle = existing.title
 				resolvedSource = "manual"
 			}

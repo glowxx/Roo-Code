@@ -12,7 +12,7 @@ import { RooCodeEventName, type ExtensionMessage, type WebviewMessage, type Titl
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
 import type { AgentStatusType, TerminalLogEntry, DiffFileEntry, SidebarChatEntry } from "../shared/types.js"
 import { canonicalizePath, arePathsEqual, loadDesktopConfig, saveDesktopConfig } from "./config.js"
-import { generateConversationTitle, sanitizeTitle, preprocessTitleInput } from "./title-generator.js"
+import { generateConversationTitle, sanitizeTitle, semanticFallbackTitle, isBadAutoTitle } from "./title-generator.js"
 
 export interface AgentHostOptions {
 	workspacePath: string
@@ -127,6 +127,8 @@ export class DesktopAgentHost extends EventEmitter {
 	private deletedTaskIds: Set<string> = new Set()
 	private pendingTitleAbortControllers: Map<string, AbortController> = new Map()
 	private titleGenerationTaskIds: Set<string> = new Set()
+	private titleAiAttemptedTaskIds: Set<string> = new Set()
+	private titleRepairScheduled = false
 
 	constructor(options: AgentHostOptions) {
 		super()
@@ -489,6 +491,7 @@ export class DesktopAgentHost extends EventEmitter {
 	public registerWebviewProvider(_viewId: string, provider: unknown): void {
 		this.unregisterWebviewProvider(_viewId)
 		this.provider = provider
+		void this.repairExistingBadAutoTitles()
 		if (this.provider && typeof this.provider.on === "function") {
 			const onTaskStarted = (taskId?: string) => {
 				this.emit("taskHistoryChanged")
@@ -642,6 +645,8 @@ export class DesktopAgentHost extends EventEmitter {
 		if (changed) {
 			this.emit("taskHistoryChanged")
 		}
+		const item = this.provider?.taskHistoryStore?.get?.(taskId)
+		if (item?.titleSource === "fallback" && item.task) this.triggerBackgroundTitleGeneration(taskId, item.task)
 	}
 
 	public getChatsByWorkspace(): Record<string, SidebarChatEntry[]> {
@@ -671,6 +676,9 @@ export class DesktopAgentHost extends EventEmitter {
 					}
 				}
 			} catch {}
+		}
+		if (!this.titleRepairScheduled && items.length > 0 && this.provider?.taskHistoryStore) {
+			void this.repairExistingBadAutoTitles()
 		}
 
 		// 3. Fallback to reading task folders on disk
@@ -789,9 +797,14 @@ export class DesktopAgentHost extends EventEmitter {
 
 			const creationTs = item.createdAt ?? extractCreationTimestamp(String(item.id), typeof item.ts === "number" ? item.ts : 0)
 			const list = result[ws] ?? []
+			const displayTitle = item.titleSource === "manual"
+				? formatChatTitle(item.task, item.title)
+				: (!item.title || isBadAutoTitle(item.title, item.titleSource))
+					? semanticFallbackTitle(item.task)
+					: formatChatTitle(item.task, item.title)
 			list.push({
 				id: String(item.id),
-				title: formatChatTitle(item.task, item.title),
+				title: displayTitle,
 				titleSource: item.titleSource,
 				createdAt: creationTs,
 				ts: typeof item.ts === "number" ? item.ts : creationTs,
@@ -870,12 +883,8 @@ export class DesktopAgentHost extends EventEmitter {
 		if (this.titleGenerationTaskIds.has(taskId)) {
 			return
 		}
-
-		// Don't generate if task already has a custom/manual title or already generated title
 		const existingItem = this.provider?.taskHistoryStore?.get?.(taskId)
-		if (existingItem?.titleSource === "manual") {
-			return
-		}
+		if (!existingItem || existingItem.titleSource === "manual" || existingItem.titleSource === "generated_ai") return
 
 		this.titleGenerationTaskIds.add(taskId)
 		const abortController = new AbortController()
@@ -883,11 +892,22 @@ export class DesktopAgentHost extends EventEmitter {
 
 		void (async () => {
 			try {
+				// Make the sidebar useful immediately; the auxiliary request can finish later.
+				if (!existingItem.title || isBadAutoTitle(existingItem.title, existingItem.titleSource)) {
+					await this.applyConversationTitle(taskId, semanticFallbackTitle(promptText), "fallback", abortController.signal)
+				}
+				const task = this.provider?.runningTasks?.get?.(taskId) ??
+					(this.provider?.getCurrentTask?.()?.taskId === taskId ? this.provider.getCurrentTask() : undefined)
+				// One low-priority request, only when the worker is not actively streaming.
+				if (this.titleAiAttemptedTaskIds.has(taskId) || task?.isStreaming ||
+					(task?.isStarted === false && !task?.isTaskCompleted) ||
+					(task?.taskStatus === "running" && !task?.isTaskCompleted)) return
+				const completion = task?.api?.completePrompt
+				if (typeof completion !== "function") return
+				this.titleAiAttemptedTaskIds.add(taskId)
 				const completeFn = async (p: string, signal?: AbortSignal): Promise<string> => {
-					if (this.provider && typeof this.provider.completePrompt === "function") {
-						return this.provider.completePrompt(p, { signal })
-					}
-					throw new Error("No completion provider available")
+					if (signal?.aborted) throw new Error("Title request aborted")
+					return completion.call(task.api, p)
 				}
 
 				const res = await generateConversationTitle({
@@ -895,63 +915,50 @@ export class DesktopAgentHost extends EventEmitter {
 					prompt: promptText,
 					completeFn,
 					signal: abortController.signal,
+					provider: task?.apiConfiguration?.apiProvider,
+					model: task?.historyItem?.chatModelId,
 					onAudit: (audit) => {
 						console.log(
 							`[ConversationTitleAudit] conversationId=${audit.conversationId} status=${audit.status} latency=${audit.latencyMs}ms titleSource=${audit.titleSource}`,
 						)
 					},
 				})
-
-				// Tombstone guard: discard if deleted while generation was in-flight
-				if (abortController.signal.aborted || this.deletedTaskIds.has(taskId)) {
-					return
-				}
-				if (this.provider?.taskHistoryStore?.isDeleted?.(taskId)) {
-					return
-				}
-
-				// Manual title guard: never overwrite a manual rename that happened while in flight
-				const currentItem = this.provider?.taskHistoryStore?.get?.(taskId)
-				if (currentItem?.titleSource === "manual") {
-					return
-				}
-
-				if (this.provider?.taskHistoryStore) {
-					await this.provider.taskHistoryStore.upsert({
-						...(currentItem || { id: taskId, task: promptText, ts: 0 }),
-						title: res.title,
-						titleSource: res.titleSource,
-					})
-				}
-
-				if (this.storageDir) {
-					const candidatePaths = [
-						path.join(this.storageDir, "global-storage", "tasks", taskId, "history_item.json"),
-						path.join(this.storageDir, "tasks", taskId, "history_item.json"),
-						path.join(this.storageDir, "Roo-Code", "tasks", taskId, "history_item.json"),
-					]
-					for (const itemPath of candidatePaths) {
-						if (fs.existsSync(itemPath)) {
-							try {
-								const rawItem = JSON.parse(fs.readFileSync(itemPath, "utf-8"))
-								if (rawItem.titleSource !== "manual") {
-									rawItem.title = res.title
-									rawItem.titleSource = res.titleSource
-									fs.writeFileSync(itemPath, JSON.stringify(rawItem, null, 2), "utf-8")
-								}
-							} catch {}
-						}
-					}
-				}
-
-				// Fine-grained update: notify clients to patch title in-place without sidebar re-sort
-				this.emit("conversationTitleUpdated", { taskId, title: res.title, titleSource: res.titleSource })
+				if (res.titleSource === "generated_ai") await this.applyConversationTitle(taskId, res.title, res.titleSource, abortController.signal)
 			} catch (err) {
 				console.warn(`[DesktopAgentHost] Background title generation error for ${taskId}:`, err)
 			} finally {
 				this.pendingTitleAbortControllers.delete(taskId)
+				this.titleGenerationTaskIds.delete(taskId)
 			}
 		})()
+	}
+
+	private async applyConversationTitle(taskId: string, title: string, titleSource: TitleSource, signal?: AbortSignal): Promise<void> {
+		const store = this.provider?.taskHistoryStore
+		if (signal?.aborted || this.deletedTaskIds.has(taskId) || store?.isDeleted?.(taskId)) return
+		const current = store?.get?.(taskId)
+		if (!current || current.titleSource === "manual") return
+		await store.upsert({ ...current, title, titleSource })
+		const saved = store.get?.(taskId)
+		if (signal?.aborted || this.deletedTaskIds.has(taskId) || !saved || saved.titleSource === "manual" || saved.title !== title) return
+		this.emit("conversationTitleUpdated", { taskId, title, titleSource })
+	}
+
+	private async repairExistingBadAutoTitles(): Promise<void> {
+		const store = this.provider?.taskHistoryStore
+		const items = store?.getAll?.()
+		if (!Array.isArray(items) || items.length === 0 || this.titleRepairScheduled) return
+		this.titleRepairScheduled = true
+		for (const item of items) {
+			if (!isBadAutoTitle(item.title, item.titleSource) || !item.task) continue
+			const title = semanticFallbackTitle(item.task)
+			if (title === "New conversation task") continue
+			try {
+				await this.applyConversationTitle(item.id, title, "fallback")
+			} catch (error) {
+				console.warn(`[DesktopAgentHost] Failed to repair title for ${item.id}:`, error)
+			}
+		}
 	}
 
 	public async renameChat(taskId: string, newTitle: string): Promise<boolean> {
