@@ -83,6 +83,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	const {
 		clineMessages: messages,
+		currentTaskId,
 		currentTaskItem,
 		currentTaskTodos,
 		taskHistory,
@@ -1933,6 +1934,17 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	const areButtonsVisible = showScrollToBottom || primaryButtonText || secondaryButtonText
 
+	const isHydratingPersistedTask =
+		!task &&
+		Boolean(
+			(currentTaskId &&
+				!currentTaskId.startsWith("provisional_") &&
+				(!taskHistory.length || taskHistory.some((h) => h.id === currentTaskId))) ||
+				(currentTaskItem?.id &&
+					!currentTaskItem.id.startsWith("provisional_") &&
+					(!taskHistory.length || taskHistory.some((h) => h.id === currentTaskItem.id))),
+		)
+
 	return (
 		<div
 			data-testid="chat-view"
@@ -1992,14 +2004,20 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						isTaskActive={isTaskActive}
 						isStopping={isStopping}
 						onStop={handleStopTask}
+						onNewChat={startNewTask}
 					/>
 
 					{checkpointWarning && (
-						<div className="w-full canvas-narrative px-3 sm:px-4">
+						<div className="w-full canvas-narrative">
 							<CheckpointWarning warning={checkpointWarning} />
 						</div>
 					)}
 				</>
+			) : isHydratingPersistedTask ? (
+				<div className="flex flex-col h-full items-center justify-center p-6 min-h-0 overflow-y-auto gap-3 text-vscode-descriptionForeground">
+					<span className="codicon codicon-loading codicon-modifier-spin text-2xl" />
+					<span className="text-sm">{t("chat:loadingTask", "Loading conversation...")}</span>
+				</div>
 			) : (
 				<div className="flex flex-col h-full justify-center p-6 min-h-0 overflow-y-auto gap-4 relative">
 					<div className="flex flex-col items-start gap-2 justify-center h-full min-[400px]:px-6">
@@ -2014,7 +2032,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				</div>
 			)}
 
-			{!task && showWorktreesInHomeScreen && <WorktreeSelector />}
+			{!task && !isHydratingPersistedTask && showWorktreesInHomeScreen && <WorktreeSelector />}
 
 			{task && (
 				<>
@@ -2035,7 +2053,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					</div>
 					<FileChangesPanel clineMessages={messages} />
 					{areButtonsVisible && (
-						<div className="w-full canvas-narrative px-3 sm:px-4">
+						<div className="w-full canvas-narrative">
 							<div
 								className={`flex h-9 items-center mb-1 ${
 									showScrollToBottom ? "opacity-100" : enableButtons ? "opacity-100" : "opacity-50"
@@ -2124,7 +2142,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				</>
 			)}
 
-			<div className="w-full canvas-narrative px-3 sm:px-4">
+			<div className="w-full canvas-narrative">
 				<QueuedMessages
 					queue={messageQueue}
 					onRemove={(index) => {
@@ -2201,7 +2219,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			/>
 
 			{isProfileDisabled && (
-				<div className="w-full canvas-narrative px-3 sm:px-4">
+				<div className="w-full canvas-narrative">
 					<ProfileViolationWarning />
 				</div>
 			)}

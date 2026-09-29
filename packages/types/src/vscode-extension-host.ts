@@ -324,8 +324,8 @@ export type ExtensionState = Pick<
 	openAiModelInfos?: Record<string, ModelInfo>
 	version: string
 	clineMessages: ClineMessage[]
-	currentTaskId?: string
-	currentTaskItem?: HistoryItem
+	currentTaskId?: string | null
+	currentTaskItem?: HistoryItem | null
 	currentTaskTodos?: TodoItem[] // Initial todos for the current task
 	apiConfiguration: ProviderSettings
 	uriScheme?: string

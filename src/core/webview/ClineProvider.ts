@@ -1013,6 +1013,8 @@ export class ClineProvider
 					? "completed"
 					: historyItem.status === "delegated"
 					? "delegated"
+					: historyItem.status === "interrupted"
+					? "interrupted"
 					: "active",
 		})
 
@@ -1807,9 +1809,17 @@ export class ClineProvider
 			if (this.taskSwitchEpoch !== epoch) {
 				return
 			}
-			const requiresManualContinue = historyItem.status === "interrupted"
-			await this.createTaskWithHistoryItem(historyItem, { startTask: !requiresManualContinue })
+			await this.createTaskWithHistoryItem(historyItem)
 			if (this.taskSwitchEpoch !== epoch) {
+				const rogueIndex = this.clineStack.findIndex((t) => t.taskId === id)
+				if (rogueIndex !== -1) {
+					const rogueTask = this.clineStack[rogueIndex]
+					this.clineStack.splice(rogueIndex, 1)
+					this.runningTasks.delete(id)
+					try {
+						rogueTask.abortTask(true).catch(() => {})
+					} catch {}
+				}
 				return
 			}
 			this.foregroundTaskId = id
@@ -2218,8 +2228,8 @@ export class ClineProvider
 			autoCondenseContext: autoCondenseContext ?? true,
 			autoCondenseContextPercent: autoCondenseContextPercent ?? 100,
 			uriScheme: vscode.env.uriScheme,
-			currentTaskId: currentTask?.taskId,
-			currentTaskItem: currentTask?.taskId ? this.taskHistoryStore.get(currentTask.taskId) : undefined,
+			currentTaskId: currentTask?.taskId ?? null,
+			currentTaskItem: currentTask?.taskId ? (this.taskHistoryStore.get(currentTask.taskId) ?? null) : null,
 			clineMessages: currentTask?.clineMessages || [],
 			currentTaskTodos: currentTask?.todoList || [],
 			messageQueue: currentTask?.messageQueueService?.messages,
@@ -2474,6 +2484,7 @@ export class ClineProvider
 	 */
 	async updateTaskHistory(item: HistoryItem, options: { broadcast?: boolean } = {}): Promise<HistoryItem[]> {
 		const { broadcast = true } = options
+		if (item.status === "completed") item = { ...item, needsAttention: false }
 
 		const history = await this.taskHistoryStore.upsert(item)
 		this.recentTasksCache = undefined

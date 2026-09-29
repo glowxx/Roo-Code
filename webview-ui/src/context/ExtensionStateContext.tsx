@@ -161,6 +161,14 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 	const experiments = { ...prevExperiments, ...(newExperiments ?? {}) }
 	const rest = { ...prevRest, ...newRest }
 
+	if (
+		(newState as any).currentTaskId === null ||
+		("currentTaskId" in newState && newState.currentTaskId === undefined)
+	) {
+		rest.currentTaskId = undefined
+		rest.currentTaskItem = undefined
+	}
+
 	// Protect clineMessages from stale state pushes using sequence numbering.
 	// Multiple async event sources (settings, task streaming) can trigger
 	// concurrent state pushes. If a stale push arrives after a newer one, its clineMessages
@@ -395,6 +403,12 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					const action = message.action as any
 					if (action === "clearTask" || action === "switchWorkspace") {
 						resetToIdle()
+						setState((prev) => ({
+							...prev,
+							currentTaskId: undefined,
+							currentTaskItem: undefined,
+							clineMessages: [],
+						}))
 					}
 					if (message.action === "toggleAutoApprove") {
 						// Toggle the auto-approval state
