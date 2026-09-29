@@ -28,6 +28,10 @@ export const historyItemSchema = z.object({
 	mode: z.string().optional(),
 	apiConfigName: z.string().optional(), // Provider profile name for sticky profile feature
 	status: z.enum(["active", "completed", "delegated", "cancelled", "failed", "interrupted"]).optional(),
+	needsAttention: z.boolean().optional(),
+	chatModelId: z.string().optional(),
+	chatProvider: z.string().optional(),
+	chatReasoningEffort: z.string().optional(),
 	promptQueue: z.array(queuedMessageSchema).optional(),
 	delegatedToId: z.string().optional(), // Last child this parent delegated to
 	childIds: z.array(z.string()).optional(), // All children spawned by this task

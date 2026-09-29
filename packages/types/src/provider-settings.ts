@@ -543,6 +543,20 @@ export const modelIdKeysByProvider: Record<TypicalProvider, ModelIdKey> = {
 	xkiro: "xkiroModelId",
 }
 
+export const setModelId = (settings: ProviderSettings, provider: ProviderName, modelId: string): void => {
+	settings.apiProvider = provider
+	if (isTypicalProvider(provider)) {
+		const key = modelIdKeysByProvider[provider]
+		if (key) {
+			;(settings as any)[key] = modelId
+		}
+	}
+	if (provider === "xkiro" || provider === "openai" || provider === "openai-native") {
+		settings.openAiModelId = modelId
+	}
+	settings.apiModelId = modelId
+}
+
 /**
  * ANTHROPIC_STYLE_PROVIDERS
  */

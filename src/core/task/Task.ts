@@ -514,7 +514,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// Cloud Sync Tracking
 	// Initial status for the task's history item (set at creation time to avoid race conditions)
 	private readonly initialStatus?: "active" | "delegated" | "completed"
-	private readonly historyItem?: HistoryItem
+	public historyItem?: HistoryItem
 
 	// MessageManager for high-level message operations (lazy initialized)
 	private _messageManager?: MessageManager
@@ -1329,7 +1329,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.emit(RooCodeEventName.Message, { action: "updated", message })
 	}
 
-	private async saveClineMessages(): Promise<boolean> {
+	public async saveClineMessages(): Promise<boolean> {
 		try {
 			await saveTaskMessages({
 				messages: structuredClone(this.clineMessages),
@@ -1352,6 +1352,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				mode: this._taskMode || defaultModeSlug, // Use the task's own mode, not the current provider mode.
 				apiConfigName: this._taskApiConfigName, // Use the task's own provider profile, not the current provider profile.
 				initialStatus: this.initialStatus,
+				chatModelId: this.historyItem?.chatModelId || getModelId(this.apiConfiguration),
+				chatProvider: this.historyItem?.chatProvider || this.apiConfiguration?.apiProvider,
+				chatReasoningEffort: this.historyItem?.chatReasoningEffort ?? (this.apiConfiguration as any)?.reasoningEffort,
 			})
 
 			// Emit token/tool usage updates using debounced function

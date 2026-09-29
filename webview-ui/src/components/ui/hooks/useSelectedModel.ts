@@ -39,7 +39,7 @@ import {
 	stripModelTag,
 } from "@roo-code/types"
 
-import { ExtensionStateContext } from "@src/context/ExtensionStateContext"
+import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { useRouterModels } from "./useRouterModels"
 import { useOpenRouterModelProviders } from "./useOpenRouterModelProviders"
 import { useLmStudioModels } from "./useLmStudioModels"
@@ -53,15 +53,27 @@ function getValidatedModelId(
 	configuredId: string | undefined,
 	availableModels: ModelRecord | undefined,
 	defaultModelId: string,
-): string {
-	return configuredId && availableModels?.[configuredId] ? configuredId : defaultModelId
+): { id: string; isUnavailable: boolean } {
+	if (configuredId && availableModels?.[configuredId]) {
+		return { id: configuredId, isUnavailable: false }
+	}
+	const isUnavailable = Boolean(
+		configuredId && availableModels && Object.keys(availableModels).length > 0 && !availableModels[configuredId],
+	)
+	return { id: defaultModelId, isUnavailable }
 }
 
 export const useSelectedModel = (
 	apiConfiguration?: ProviderSettings,
 	openAiModelInfos?: Record<string, ModelInfo>,
 ) => {
-	const extensionState = useContext(ExtensionStateContext)
+	let extensionState: any = undefined
+	try {
+		// eslint-disable-next-line react-hooks/rules-of-hooks
+		extensionState = useExtensionState()
+	} catch {
+		// Graceful fallback when rendered in isolated test harnesses without ExtensionStateContextProvider
+	}
 	const effectiveOpenAiModelInfos = openAiModelInfos ?? extensionState?.openAiModelInfos
 
 	const provider = apiConfiguration?.apiProvider || "openrouter"
@@ -102,7 +114,7 @@ export const useSelectedModel = (
 		hasValidRouterData &&
 		(!needOpenRouterProviders || typeof openRouterModelProviders.data !== "undefined")
 
-	const { id, info } =
+	const { id, info, isUnavailable } =
 		apiConfiguration && isReady && activeProvider
 			? getSelectedModel({
 					provider: activeProvider,
@@ -113,7 +125,7 @@ export const useSelectedModel = (
 					ollamaModels: (ollamaModels.data || undefined) as ModelRecord | undefined,
 					openAiModelInfos: effectiveOpenAiModelInfos,
 				})
-			: { id: getProviderDefaultModelId(activeProvider ?? "openrouter"), info: undefined }
+			: { id: getProviderDefaultModelId(activeProvider ?? "openrouter"), info: undefined, isUnavailable: false }
 
 	const customContextOverride =
 		(apiConfiguration as any)?.xkiroCustomContextWindow || (apiConfiguration as any)?.customContextWindow
@@ -128,6 +140,7 @@ export const useSelectedModel = (
 		provider,
 		id,
 		info: resolvedInfo,
+		isUnavailable: Boolean(isUnavailable || (isReady && !resolvedInfo && id)),
 		isLoading:
 			(needRouterModels && routerModels.isLoading) ||
 			(needOpenRouterProviders && openRouterModelProviders.isLoading) ||
@@ -157,14 +170,15 @@ function getSelectedModel({
 	lmStudioModels: ModelRecord | undefined
 	ollamaModels: ModelRecord | undefined
 	openAiModelInfos?: Record<string, ModelInfo>
-}): { id: string; info: ModelInfo | undefined } {
+}): { id: string; info: ModelInfo | undefined; isUnavailable?: boolean } {
 	// the `undefined` case are used to show the invalid selection to prevent
 	// users from seeing the default model if their selection is invalid
 	// this gives a better UX than showing the default model
 	const defaultModelId = getProviderDefaultModelId(provider)
 	switch (provider) {
 		case "openrouter": {
-			const id = getValidatedModelId(apiConfiguration.openRouterModelId, routerModels.openrouter, defaultModelId)
+			const validated = getValidatedModelId(apiConfiguration.openRouterModelId, routerModels.openrouter, defaultModelId)
+			const id = validated.id
 			let info = routerModels.openrouter?.[id]
 			const specificProvider = apiConfiguration.openRouterSpecificProvider
 
@@ -177,22 +191,25 @@ function getSelectedModel({
 					: openRouterModelProviders[specificProvider]
 			}
 
-			return { id, info }
+			return { id, info, isUnavailable: validated.isUnavailable }
 		}
 		case "requesty": {
-			const id = getValidatedModelId(apiConfiguration.requestyModelId, routerModels.requesty, defaultModelId)
+			const validated = getValidatedModelId(apiConfiguration.requestyModelId, routerModels.requesty, defaultModelId)
+			const id = validated.id
 			const routerInfo = routerModels.requesty?.[id]
-			return { id, info: routerInfo }
+			return { id, info: routerInfo, isUnavailable: validated.isUnavailable }
 		}
 		case "unbound": {
-			const id = getValidatedModelId(apiConfiguration.unboundModelId, routerModels.unbound, defaultModelId)
+			const validated = getValidatedModelId(apiConfiguration.unboundModelId, routerModels.unbound, defaultModelId)
+			const id = validated.id
 			const routerInfo = routerModels.unbound?.[id]
-			return { id, info: routerInfo }
+			return { id, info: routerInfo, isUnavailable: validated.isUnavailable }
 		}
 		case "litellm": {
-			const id = getValidatedModelId(apiConfiguration.litellmModelId, routerModels.litellm, defaultModelId)
+			const validated = getValidatedModelId(apiConfiguration.litellmModelId, routerModels.litellm, defaultModelId)
+			const id = validated.id
 			const routerInfo = routerModels.litellm?.[id]
-			return { id, info: routerInfo ?? litellmDefaultModelInfo }
+			return { id, info: routerInfo ?? litellmDefaultModelInfo, isUnavailable: validated.isUnavailable }
 		}
 		case "xai": {
 			const id = apiConfiguration.apiModelId ?? defaultModelId
@@ -429,13 +446,14 @@ function getSelectedModel({
 			return { id, info }
 		}
 		case "vercel-ai-gateway": {
-			const id = getValidatedModelId(
+			const validated = getValidatedModelId(
 				apiConfiguration.vercelAiGatewayModelId,
 				routerModels["vercel-ai-gateway"],
 				defaultModelId,
 			)
+			const id = validated.id
 			const info = routerModels["vercel-ai-gateway"]?.[id]
-			return { id, info }
+			return { id, info, isUnavailable: validated.isUnavailable }
 		}
 		// case "anthropic":
 		// case "fake-ai":

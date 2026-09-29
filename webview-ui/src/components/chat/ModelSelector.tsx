@@ -382,7 +382,7 @@ export const ModelSelector = ({
 		effectiveListApiConfigMeta.find((c) => c.name === effectiveProfileName)?.id ||
 		""
 
-	const { id: activeModelId, info: activeModelInfo } = useSelectedModel(apiConfiguration)
+	const { id: activeModelId, info: activeModelInfo, isUnavailable } = useSelectedModel(apiConfiguration)
 	const activeProvider = (apiConfiguration?.apiProvider || "xkiro") as ProviderName
 
 	const handleRefreshModels = useCallback(() => {
@@ -435,8 +435,11 @@ export const ModelSelector = ({
 
 	// Friendly name for the currently selected model
 	const activeDisplayName = useMemo(() => {
+		if (isUnavailable || !activeModelId) {
+			return t("chat:modelSelector.selectModel") || "Select model"
+		}
 		return cleanModelDisplayName(activeModelId, activeModelInfo)
-	}, [activeModelId, activeModelInfo])
+	}, [activeModelId, activeModelInfo, isUnavailable, t])
 
 	// Available models for the current provider
 	const availableModels = useMemo<ModelItem[]>(() => {

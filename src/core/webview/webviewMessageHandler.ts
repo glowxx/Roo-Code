@@ -20,6 +20,7 @@ import {
 	ExperimentId,
 	checkoutDiffPayloadSchema,
 	checkoutRestorePayloadSchema,
+	getModelId,
 } from "@roo-code/types"
 import { customToolRegistry } from "@roo-code/core"
 
@@ -1949,8 +1950,30 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			if (message.text && message.apiConfiguration) {
 				await provider.upsertProviderProfile(message.text, message.apiConfiguration)
 
-				// Automatically discover and cache models for xKiro or OpenAI-compatible
 				const config = message.apiConfiguration
+				const selectedModelId = getModelId(config)
+				const selectedProvider = config.apiProvider
+				const selectedReasoningEffort = config.reasoningEffort
+
+				// Persist per-chat preferred model on active task without mutating its running execution snapshot
+				const currentTask = provider.getCurrentTask()
+				if (currentTask && selectedModelId && currentTask.historyItem) {
+					currentTask.historyItem.chatModelId = selectedModelId
+					currentTask.historyItem.chatProvider = selectedProvider
+					currentTask.historyItem.chatReasoningEffort = selectedReasoningEffort
+					await currentTask.saveClineMessages()
+				}
+
+				// Persist lastManuallySelectedModel for unassigned/new chats
+				if (selectedModelId && selectedProvider) {
+					await provider.setGlobalState("lastManuallySelectedModel", {
+						modelId: selectedModelId,
+						provider: selectedProvider,
+						reasoningEffort: selectedReasoningEffort,
+					})
+				}
+
+				// Automatically discover and cache models for xKiro or OpenAI-compatible
 				const providerType = config.apiProvider || "xkiro"
 				if (providerType === "xkiro" || providerType === "openai") {
 					const isXkiro = providerType === "xkiro"
