@@ -32,6 +32,10 @@ describe("conversation title intent", () => {
 	it("never falls back to the raw first line", () => {
 		expect(semanticFallbackTitle(`${skills}${task}`)).not.toMatch(/skills|graphify/i)
 	})
+	it("keeps the task object in a long English fallback", () => {
+		expect(semanticFallbackTitle(`${skills}${"Agent setup instructions. ".repeat(100)}\nFix chat history loading after a cold start`))
+			.toBe("Fix chat history loading after cold start")
+	})
 	it("accepts a valid AI title", async () => {
 		const result = await generateConversationTitle({
 			taskId: "1",

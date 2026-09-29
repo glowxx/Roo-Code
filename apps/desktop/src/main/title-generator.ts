@@ -102,6 +102,9 @@ export function semanticFallbackTitle(prompt: string): string {
 		.replace(/([\p{L}\p{N}])\//gu, "$1 ")
 		.replace(/\b[A-Z]{4,}\b/g, (word) => word[0] + word.slice(1).toLowerCase())
 	clause = clause.charAt(0).toLocaleUpperCase() + clause.slice(1)
+	if (clause.split(/\s+/).length > 7) {
+		clause = clause.replace(/\b(?:a|an|the|in|on|of|for)\b/gi, " ").replace(/\s+/g, " ").trim()
+	}
 	const title = sanitizeTitle(clause, "New conversation task")
 	return isValidGeneratedTitle(title) ? title : "New conversation task"
 }
