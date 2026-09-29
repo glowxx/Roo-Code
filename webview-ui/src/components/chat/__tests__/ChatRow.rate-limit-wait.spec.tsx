@@ -3,7 +3,12 @@ import React from "react"
 import { render, screen } from "@/utils/test-utils"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ExtensionStateContextProvider } from "@src/context/ExtensionStateContext"
-import { ChatRowContent } from "../ChatRow"
+import ChatRow, { ChatRowContent } from "../ChatRow"
+
+vi.mock("react-use", async (importOriginal) => ({
+	...(await importOriginal<typeof import("react-use")>()),
+	useSize: (element: React.ReactElement) => [element, { height: 0 }],
+}))
 
 // Mock i18n
 vi.mock("react-i18next", () => ({
@@ -49,6 +54,23 @@ function renderChatRow(message: any) {
 }
 
 describe("ChatRow - rate limit wait", () => {
+	it("places runtime events on the assistant lane and user feedback on the right lane", () => {
+		const renderFullRow = (message: any) => render(
+			<ExtensionStateContextProvider>
+				<QueryClientProvider client={queryClient}>
+					<ChatRow message={message} isExpanded={false} isLast={true} isStreaming={false} onHeightChange={() => {}} onToggleExpand={() => {}} />
+				</QueryClientProvider>
+			</ExtensionStateContextProvider>,
+		)
+		const assistant = renderFullRow({ type: "say", say: "api_req_started", ts: 1, text: "{}" })
+		expect(assistant.container.querySelector(".conversation-lane-narrative")).toBeTruthy()
+		expect(assistant.container.querySelector(".conversation-row--activity")).toBeTruthy()
+		assistant.unmount()
+		const user = renderFullRow({ type: "say", say: "user_feedback", ts: 2, text: "a long pasted message" })
+		expect(user.container.querySelector(".conversation-lane-user")).toBeTruthy()
+		expect(user.container.querySelector(".conversation-row--turn")).toBeTruthy()
+		user.unmount()
+	})
 	it("renders a non-error progress row for api_req_rate_limit_wait", () => {
 		const message: any = {
 			type: "say",

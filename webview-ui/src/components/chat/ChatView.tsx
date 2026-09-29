@@ -1632,6 +1632,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const {
 		showScrollToBottom,
 		handleRowHeightChange,
+		handleListHeightChange,
 		handleScrollToBottomClick,
 		enterUserBrowsingHistory,
 		followOutputCallback,
@@ -2028,6 +2029,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							components={virtuosoComponents}
 							followOutput={followOutputCallback}
 							atBottomStateChange={atBottomStateChangeCallback}
+							totalListHeightChanged={handleListHeightChange}
 							atBottomThreshold={30}
 						/>
 					</div>

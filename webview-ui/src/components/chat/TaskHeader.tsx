@@ -195,7 +195,8 @@ const TaskHeader = ({
 	}
 
 	return (
-		<div className="w-full canvas-narrative group pt-1 pb-0 px-3 sm:px-4">
+		<div className="conversation-canvas group pt-1 pb-0">
+			<div className="conversation-lane conversation-lane-user">
 			{isSubtask && (
 				<div className="mb-2" onClick={(e) => e.stopPropagation()}>
 					<Button
@@ -497,6 +498,7 @@ const TaskHeader = ({
 				)}
 				{/* Todo list - always shown at bottom when todos exist */}
 				{hasTodos && <TodoListDisplay todos={todos ?? (task as any)?.tool?.todos ?? []} />}
+			</div>
 			</div>
 		</div>
 	)

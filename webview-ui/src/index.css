@@ -797,4 +797,39 @@ input[cmdk-input]:focus {
 	}
 }
 
+@layer utilities {
+	.conversation-canvas {
+		width: 100%;
+		max-width: var(--agent-canvas-technical);
+		margin-inline: auto;
+		padding-inline: var(--agent-canvas-gutter, 1rem);
+	}
+	.conversation-lane {
+		min-width: 0;
+		margin-right: auto;
+	}
+	.conversation-lane-narrative {
+		max-width: var(--agent-canvas-narrative);
+	}
+	.conversation-lane-technical {
+		max-width: 100%;
+	}
+	.conversation-lane-user {
+		width: 78%;
+		max-width: var(--agent-canvas-narrative);
+		margin-left: auto;
+		margin-right: 0;
+		overflow-wrap: anywhere;
+	}
+	.conversation-lane-user pre,
+	.conversation-lane-user code {
+		max-width: 100%;
+		overflow-x: auto;
+	}
+	.conversation-row--detail { padding-top: 0.375rem; }
+	.conversation-row--activity { padding-top: 0.875rem; }
+	.conversation-row--operation { padding-top: 1.25rem; }
+	.conversation-row--turn { padding-top: 1.75rem; }
+}
+
 

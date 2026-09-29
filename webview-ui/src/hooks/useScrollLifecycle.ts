@@ -64,6 +64,7 @@ export interface UseScrollLifecycleReturn {
 	scrollPhase: ScrollPhase
 	showScrollToBottom: boolean
 	handleRowHeightChange: (isTaller: boolean) => void
+	handleListHeightChange: (height: number) => void
 	handleScrollToBottomClick: () => void
 	enterUserBrowsingHistory: (source: ScrollFollowDisengageSource) => void
 	followOutputCallback: () => "auto" | false
@@ -352,6 +353,16 @@ export function useScrollLifecycle({
 		[scrollToBottomAuto],
 	)
 
+	// Virtuoso reports the measured list height after rows and async content settle.
+	const handleListHeightChange = useCallback(
+		(_height: number) => {
+			if (scrollPhaseRef.current === "ANCHORED_FOLLOWING" && !isEditingMessageRef.current) {
+				scrollToBottomAuto()
+			}
+		},
+		[scrollToBottomAuto],
+	)
+
 	// -----------------------------------------------------------------------
 	// Scroll-to-bottom click handler
 	// -----------------------------------------------------------------------
@@ -558,6 +569,7 @@ export function useScrollLifecycle({
 		scrollPhase,
 		showScrollToBottom,
 		handleRowHeightChange,
+		handleListHeightChange,
 		handleScrollToBottomClick,
 		enterUserBrowsingHistory,
 		followOutputCallback,

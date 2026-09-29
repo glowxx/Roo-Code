@@ -30,6 +30,7 @@ import { TodoChangeDisplay } from "./TodoChangeDisplay"
 import CodeAccordion from "../common/CodeAccordion"
 import MarkdownBlock from "../common/MarkdownBlock"
 import { ReasoningBlock } from "./ReasoningBlock"
+import { getConversationRowLayout } from "./conversation-layout"
 import Thumbnails from "../common/Thumbnails"
 import ImageBlock from "../common/ImageBlock"
 import ErrorRow from "./ErrorRow"
@@ -135,6 +136,7 @@ interface ChatRowContentProps extends Omit<ChatRowProps, "onHeightChange"> {}
 const ChatRow = memo(
 	(props: ChatRowProps) => {
 		const { isLast, onHeightChange, message } = props
+		const { lane, spacing } = getConversationRowLayout(message)
 		// Store the previous height to compare with the current height
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
@@ -171,11 +173,11 @@ const ChatRow = memo(
 		}, [message])
 
 		const [chatrow, { height }] = useSize(
-			<div className="relative">
+			<div className={cn("relative conversation-canvas conversation-row", `conversation-row--${spacing}`)}>
 				<div
 					className={cn(
-						"w-full px-3 sm:px-4",
-						isTechnicalSurface ? "canvas-technical" : "canvas-narrative",
+						"conversation-lane",
+						lane === "user" ? "conversation-lane-user" : isTechnicalSurface ? "conversation-lane-technical" : "conversation-lane-narrative",
 					)}>
 					<ChatRowContent {...props} />
 				</div>
@@ -186,9 +188,11 @@ const ChatRow = memo(
 		const isHeightValid = height !== undefined && height > 0
 
 		useEffect(() => {
-			// Trigger handleRowHeightChange on height changes for the last row
-			if (isLast && isHeightValid && height !== prevHeightRef.current) {
-				onHeightChange(prevHeightRef.current === 0 ? true : height > prevHeightRef.current)
+			// Existing rows may finish rendering after a newer row has been appended.
+			if (isHeightValid && height !== prevHeightRef.current) {
+				if (isLast || prevHeightRef.current > 0) {
+					onHeightChange(prevHeightRef.current === 0 ? true : height > prevHeightRef.current)
+				}
 				prevHeightRef.current = height
 			}
 		}, [height, isLast, onHeightChange, isHeightValid])
@@ -1379,7 +1383,7 @@ export const ChatRowContent = ({
 							</div>
 							<div
 								className={cn(
-									"ml-5 border rounded-lg overflow-hidden whitespace-pre-wrap transition-colors prose-measure",
+									"border rounded-lg overflow-hidden whitespace-pre-wrap transition-colors prose-measure",
 									isEditing
 										? "bg-card text-foreground border-border/40 p-2"
 										: "cursor-text p-2.5 bg-card/60 hover:bg-card/80 border-l-2 border-l-vscode-focusBorder border-y border-r border-border/30 text-foreground",

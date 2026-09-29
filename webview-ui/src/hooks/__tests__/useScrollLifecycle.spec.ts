@@ -308,6 +308,33 @@ describe("useScrollLifecycle - 17 canonical regression cases and stress simulati
 	})
 
 	// Case 1: user at bottom + append message → remains bottom
+	it("measured list growth reanchors only while following, then resumes after returning to bottom", () => {
+		const { result } = renderHook(() =>
+			useScrollLifecycle({
+				virtuosoRef,
+				scrollContainerRef,
+				taskTs: 1999,
+				isStreaming: false,
+				isHidden: false,
+				hasTask: true,
+			}),
+		)
+		act(() => result.current.atBottomStateChangeCallback(true))
+		vi.mocked(mockVirtuosoHandle.scrollToIndex).mockClear()
+		act(() => {
+			result.current.atBottomStateChangeCallback(false)
+			result.current.handleListHeightChange(2000)
+		})
+		expect(mockVirtuosoHandle.scrollToIndex).toHaveBeenCalledTimes(1)
+		act(() => result.current.enterUserBrowsingHistory("wheel-up"))
+		vi.mocked(mockVirtuosoHandle.scrollToIndex).mockClear()
+		act(() => result.current.handleListHeightChange(2500))
+		expect(mockVirtuosoHandle.scrollToIndex).not.toHaveBeenCalled()
+		act(() => result.current.atBottomStateChangeCallback(true))
+		act(() => result.current.handleListHeightChange(3000))
+		expect(mockVirtuosoHandle.scrollToIndex).toHaveBeenCalledTimes(1)
+	})
+
 	it("Case 1: user at bottom + append message keeps followOutput auto", () => {
 		const { result } = renderHook(() =>
 			useScrollLifecycle({
