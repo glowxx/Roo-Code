@@ -741,56 +741,26 @@ input[cmdk-input]:focus {
    ========================================================================= */
 
 :root {
-	--agent-canvas-narrative: 860px;
-	--agent-canvas-technical: 1380px;
+	--agent-conversation-width: 860px;
+	--agent-canvas-narrative: var(--agent-conversation-width);
+	--agent-canvas-technical: var(--agent-conversation-width);
+	--agent-canvas-gutter: clamp(0.75rem, 2vw, 1.25rem);
 	--agent-reading-measure: 72ch;
 	--prose-line-height: 1.62;
 	--code-line-height: 1.45;
 }
 
 @layer utilities {
-	.canvas-narrative {
-		width: 100%;
-		max-width: var(--agent-canvas-narrative);
-		margin-left: auto;
-		margin-right: auto;
-		padding-left: 0.75rem;
-		padding-right: 0.75rem;
-	}
-	@media (min-width: 640px) {
-		.canvas-narrative {
-			padding-left: 1rem;
-			padding-right: 1rem;
-		}
-	}
-	@media (min-width: 1024px) {
-		.canvas-narrative {
-			padding-left: 1.25rem;
-			padding-right: 1.25rem;
-		}
-	}
-
+	.agent-conversation-column,
+	.conversation-canvas,
+	.canvas-narrative,
 	.canvas-technical {
 		width: 100%;
-		max-width: var(--agent-canvas-technical);
-		margin-left: auto;
-		margin-right: auto;
-		padding-left: 0.75rem;
-		padding-right: 0.75rem;
+		max-width: var(--agent-conversation-width);
+		margin-inline: auto;
+		padding-inline: var(--agent-canvas-gutter);
+		box-sizing: border-box;
 	}
-	@media (min-width: 640px) {
-		.canvas-technical {
-			padding-left: 1rem;
-			padding-right: 1rem;
-		}
-	}
-	@media (min-width: 1024px) {
-		.canvas-technical {
-			padding-left: 1.25rem;
-			padding-right: 1.25rem;
-		}
-	}
-
 	.prose-measure {
 		max-width: var(--agent-reading-measure);
 		line-height: var(--prose-line-height);
@@ -798,25 +768,21 @@ input[cmdk-input]:focus {
 }
 
 @layer utilities {
-	.conversation-canvas {
-		width: 100%;
-		max-width: var(--agent-canvas-technical);
-		margin-inline: auto;
-		padding-inline: var(--agent-canvas-gutter, 1rem);
-	}
 	.conversation-lane {
 		min-width: 0;
+		width: 100%;
+	}
+	.conversation-lane-narrative,
+	.conversation-lane-technical,
+	.conversation-lane-assistant {
+		width: 100%;
+		max-width: 100%;
+		margin-left: 0;
 		margin-right: auto;
 	}
-	.conversation-lane-narrative {
-		max-width: var(--agent-canvas-narrative);
-	}
-	.conversation-lane-technical {
-		max-width: 100%;
-	}
 	.conversation-lane-user {
-		width: 78%;
-		max-width: var(--agent-canvas-narrative);
+		width: fit-content;
+		max-width: min(78%, 100%);
 		margin-left: auto;
 		margin-right: 0;
 		overflow-wrap: anywhere;

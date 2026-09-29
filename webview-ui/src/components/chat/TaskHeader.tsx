@@ -45,6 +45,7 @@ export interface TaskHeaderProps {
 	isTaskActive?: boolean
 	isStopping?: boolean
 	onStop?: () => void
+	onNewChat?: () => void
 }
 
 const TaskHeader = ({
@@ -71,6 +72,7 @@ const TaskHeader = ({
 	isTaskActive = false,
 	isStopping = false,
 	onStop,
+	onNewChat,
 }: TaskHeaderProps) => {
 	const { t } = useTranslation()
 	const { apiConfiguration, currentTaskItem, clineMessages, openAiModelInfos } = useExtensionState()
@@ -196,7 +198,6 @@ const TaskHeader = ({
 
 	return (
 		<div className="conversation-canvas group pt-1 pb-0">
-			<div className="conversation-lane conversation-lane-user">
 			{isSubtask && (
 				<div className="mb-2" onClick={(e) => e.stopPropagation()}>
 					<Button
@@ -274,7 +275,7 @@ const TaskHeader = ({
 							)}
 							<StandardTooltip content={t("chat:startNewTask.title", "New Chat")}>
 								<button
-									onClick={() => vscode.postMessage({ type: "clearTask" })}
+									onClick={onNewChat ? onNewChat : () => vscode.postMessage({ type: "clearTask" })}
 									data-testid="header-new-chat-btn"
 									className="shrink-0 min-h-[20px] min-w-[20px] p-[2px] cursor-pointer opacity-75 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground bg-transparent border-none rounded-md transition-colors"
 									aria-label={t("chat:startNewTask.title", "New Chat")}>
@@ -347,7 +348,7 @@ const TaskHeader = ({
 						{displayPrompt.images && displayPrompt.images.length > 0 && <Thumbnails images={displayPrompt.images} />}
 
 						<div onClick={(e) => e.stopPropagation()}>
-							<TaskActions item={currentTaskItem} buttonsDisabled={buttonsDisabled} />
+							<TaskActions item={currentTaskItem ?? undefined} buttonsDisabled={buttonsDisabled} />
 						</div>
 
 						<div className="pt-3 mt-2 -mx-2.5 px-2.5 border-t border-vscode-sideBar-background">
@@ -498,7 +499,6 @@ const TaskHeader = ({
 				)}
 				{/* Todo list - always shown at bottom when todos exist */}
 				{hasTodos && <TodoListDisplay todos={todos ?? (task as any)?.tool?.todos ?? []} />}
-			</div>
 			</div>
 		</div>
 	)

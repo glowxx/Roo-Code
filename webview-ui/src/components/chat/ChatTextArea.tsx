@@ -978,7 +978,7 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			<div
 				className={cn(
 					"flex flex-col gap-1 bg-editor-background outline-none border border-none box-border",
-					isEditMode ? "p-2 w-full" : "relative px-1.5 pb-1 w-full canvas-narrative",
+					isEditMode ? "p-2 w-full" : "relative pb-1 w-full canvas-narrative",
 				)}>
 				<div className={cn(!isEditMode && "relative")}>
 					<div

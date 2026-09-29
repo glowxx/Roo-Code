@@ -102,7 +102,7 @@ const FileChangesPanel = memo(({ clineMessages, className }: FileChangesPanelPro
 	const fileCount = byPath.size
 
 	return (
-		<div className="w-full canvas-technical px-3 sm:px-4 my-1">
+		<div className="w-full canvas-narrative my-1">
 			<Collapsible open={panelExpanded} onOpenChange={setPanelExpanded} className={cn("w-full", className)}>
 				<CollapsibleTrigger
 					className={cn(
