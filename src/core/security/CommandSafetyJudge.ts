@@ -35,11 +35,31 @@ export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createF
 export const DEFAULT_TIMEOUT_MS = 15000
 
 const FAST_PATH_PATTERNS = [
-	/^git\s+(diff|status|log|show|branch|rev-parse)(\s+.*)?$/i,
-	/^(ls|dir|pwd)(\s+.*)?$/i,
-	/^(echo|cat|type|head|tail)(\s+.*)?$/i,
-	/^(node|pnpm|npm|npx|yarn|bun|vitest|jest)(\s+.*)?$/i,
-	/^(uname|whoami|date|hostname)(\s+.*)?$/i,
+	// Safe git read-only inspection commands
+	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote\s+-v)(\s+[^\n;&|`$<>]+)?$/i,
+	// Directory & basic file reading without composition
+	/^(ls|dir|pwd)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(cat|type|head|tail)(\s+[^\n;&|`$<>]+)?$/i,
+	// Pure echo without redirection
+	/^echo(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe test & lint runners for Node ecosystems
+	/^(?:pnpm|npm|yarn|bun)\s+(?:test|run\s+test|run\s+check-types|run\s+lint|check-types|lint|ls|list|why|outdated|audit)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(?:vitest|jest|npx\s+(?:vitest|jest))(\s+[^\n;&|`$<>]+)?$/i,
+	/^node\s+([^\n;&|`$<>]*test[^\n;&|`$<>]*)$/i,
+	// Safe test & lint runners for Python
+	/^(?:pytest|python3?\s+-m\s+(?:pytest|unittest)|ruff\s+check|flake8|mypy)(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe inspection / test commands for Rust
+	/^cargo\s+(test|check|clippy)(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe inspection / test commands for Go
+	/^go\s+(test|vet|version)(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe inspection / test commands for .NET
+	/^dotnet\s+(test|--version)(\s+[^\n;&|`$<>]+)?$/i,
+	// TypeScript and ESLint standalone binaries
+	/^(?:tsc|eslint)(\s+[^\n;&|`$<>]+)?$/i,
+	// Search and binary location utilities
+	/^(?:which|where|findstr|grep)(\s+[^\n;&|`$<>]+)?$/i,
+	// Harmless system information
+	/^(?:uname|whoami|date|hostname)(\s+[^\n;&|`$<>]+)?$/i,
 ]
 
 export interface EvaluateSafetyOptions {
@@ -121,15 +141,37 @@ export class CommandSafetyJudge {
 
 		const trimmed = command.trim()
 
-		// Rigorous check for write modifiers / escalation:
-		// If command contains '>', '>>', '| rm', '| bash', '| sh', '| zsh', '| powershell', '| pwsh', 'sudo',
-		// return null to force full LLM evaluation.
-		const hasWriteOrEscalationModifier =
-			trimmed.includes(">") ||
-			/\bsudo\b/i.test(trimmed) ||
-			/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(trimmed)
+		// Check command prefixed by simple directory change: `cd <dir> && <cmd>`
+		const cdMatch = trimmed.match(/^(?:cd\s+[^;&|<>`$]+\s*(?:&&|;)\s*)(.+)$/i)
+		if (cdMatch && cdMatch[1]) {
+			const subCmd = cdMatch[1].trim()
+			// Subcommand must have NO further chaining, redirection, or escalation
+			const subHasModifier =
+				/[><|;&`\n]/.test(subCmd) ||
+				/\$\(/.test(subCmd) ||
+				/\b(sudo|doas|runas)\b/i.test(subCmd) ||
+				/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(subCmd) ||
+				/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(subCmd)
+			if (!subHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(subCmd))) {
+				return {
+					isSafe: true,
+					riskLevel: "safe",
+					reason: `Verified command (${subCmd}) via fast-path`,
+				}
+			}
+			return null
+		}
 
-		if (hasWriteOrEscalationModifier) {
+		// Fast-path requires single-command execution without uninspected shell composition,
+		// redirection, subshell interpolation, or destructive/privilege escalation operators.
+		const hasDisqualifyingModifier =
+			/[><|;&`\n]/.test(trimmed) ||
+			/\$\(/.test(trimmed) ||
+			/\b(sudo|doas|runas)\b/i.test(trimmed) ||
+			/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(trimmed) ||
+			/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(trimmed)
+
+		if (hasDisqualifyingModifier) {
 			return null
 		}
 
@@ -139,23 +181,6 @@ export class CommandSafetyJudge {
 				isSafe: true,
 				riskLevel: "safe",
 				reason: "Verified read-only command via fast-path",
-			}
-		}
-
-		// Check command prefixed by simple directory change: `cd <dir> && <cmd>`
-		const cdMatch = trimmed.match(/^(?:cd\s+[^;&|<>]+\s*(?:&&|;)\s*)(.+)$/i)
-		if (cdMatch && cdMatch[1]) {
-			const subCmd = cdMatch[1].trim()
-			const subHasModifier =
-				subCmd.includes(">") ||
-				/\bsudo\b/i.test(subCmd) ||
-				/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(subCmd)
-			if (!subHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(subCmd))) {
-				return {
-					isSafe: true,
-					riskLevel: "safe",
-					reason: `Verified command (${subCmd}) via fast-path`,
-				}
 			}
 		}
 

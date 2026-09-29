@@ -386,7 +386,7 @@ describe("CommandSafetyJudge - evaluate method", () => {
 		})
 
 		const resultDns = await judgeDns.evaluate({
-			command: "cargo test",
+			command: "python build.py",
 			cwd: "/repo",
 			config: validConfig,
 		})
@@ -686,7 +686,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		const judge = new CommandSafetyJudge()
 		await judge.evaluate({
-			command: "cargo test",
+			command: "python build.py",
 			config: {
 				enabled: true,
 				provider: "openai",
@@ -712,7 +712,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 					text: JSON.stringify({
 						isSafe: true,
 						riskLevel: "safe",
-						reason: "Safe cargo check",
+						reason: "Safe build execution",
 					}),
 				},
 			],
@@ -720,7 +720,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 
 		const judge = new CommandSafetyJudge()
 		const result = await judge.evaluate({
-			command: "cargo check",
+			command: "python build.py",
 			config: {
 				enabled: true,
 				provider: "anthropic",
@@ -735,7 +735,7 @@ describe("CommandSafetyJudge - Provider Dispatching", () => {
 		expect(anthropicCall.temperature).toBe(0.0)
 		expect(anthropicCall.max_tokens).toBe(150)
 		expect(anthropicCall.system).toContain("operating system security auditor")
-		expect(anthropicCall.messages[0].content).toContain("cargo check")
+		expect(anthropicCall.messages[0].content).toContain("python build.py")
 		expect(result.isSafe).toBe(true)
 	})
 

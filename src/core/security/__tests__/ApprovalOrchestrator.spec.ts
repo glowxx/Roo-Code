@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { ApprovalOrchestrator } from "../ApprovalOrchestrator"
+import { CommandSafetyJudge } from "../CommandSafetyJudge"
 import { DecisionLogStore } from "../DecisionLogStore"
 import type { UnifiedApprovalRequest, ExtensionState } from "@roo-code/types"
 
@@ -959,6 +960,272 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.verifierFailureCategory).toBe("APPROVAL_RESPONSE_INVALID")
 			expect(result.reason).toContain("Approval response schema validation failed")
 			expect(result.risk).not.toBe("critical")
+		})
+	})
+
+	describe("AUTO Mode Precedence & Hardening Pass (Phase 24 Invariants)", () => {
+		let autoState: ExtensionState
+
+		beforeEach(() => {
+			autoState = {
+				apiConfiguration: {
+					apiProvider: "anthropic",
+					apiModelId: "claude-3-7-sonnet",
+				} as any,
+				commandSafetyConfig: {
+					enabled: true,
+					provider: "openai",
+					modelId: "gpt-4o-mini",
+					apiKey: "sk-mock-key",
+				},
+				approvalMode: "auto",
+			} as any
+		})
+
+		it("A1 & A2 & A3: Enforces EXPLICIT SCOPED DENY > SCOPED ALLOW over same-repo workspace scope", async () => {
+			const autoOrchestrator = new ApprovalOrchestrator()
+
+			// Prompt with explicit scoped allow and scoped denies across sibling directories
+			const userPrompt = "Commit only velune-website. Do not commit security/licensing/backend."
+
+			// 1. Target in explicitly denied scope (backend) must be DENIED even if in same repo
+			const backendReq: UnifiedApprovalRequest = {
+				id: "req-prec-1",
+				taskId: "task-prec-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/packages/backend/src/api.ts" },
+				taskContext: {
+					latestUserInstruction: userPrompt,
+					activeGoal: userPrompt,
+					workspacePath: "/repo/velune-website",
+					isWithinWorkspace: true,
+				},
+			}
+			const backendRes = await autoOrchestrator.evaluate(backendReq, autoState)
+			expect(backendRes.decision).toBe("DENY_AND_REPLAN")
+			expect(backendRes.reason).toMatch(/explicitly forbade|outside the explicitly authorized/i)
+
+			// 2. Target in explicitly denied scope (security) must be DENIED
+			const secReq: UnifiedApprovalRequest = {
+				id: "req-prec-2",
+				taskId: "task-prec-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/packages/security/auth.ts" },
+				taskContext: {
+					latestUserInstruction: userPrompt,
+					activeGoal: userPrompt,
+					workspacePath: "/repo/velune-website",
+					isWithinWorkspace: true,
+				},
+			}
+			const secRes = await autoOrchestrator.evaluate(secReq, autoState)
+			expect(secRes.decision).toBe("DENY_AND_REPLAN")
+			expect(secRes.reason).toMatch(/explicitly forbade|outside the explicitly authorized/i)
+
+			// 3. Target in explicitly allowed scope (velune-website) is ALLOWED
+			const siteReq: UnifiedApprovalRequest = {
+				id: "req-prec-3",
+				taskId: "task-prec-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/velune-website/src/components/Header.tsx" },
+				taskContext: {
+					latestUserInstruction: userPrompt,
+					activeGoal: userPrompt,
+					workspacePath: "/repo/velune-website",
+					isWithinWorkspace: true,
+				},
+			}
+			const siteRes = await autoOrchestrator.evaluate(siteReq, autoState)
+			expect(siteRes.decision).toBe("ALLOW_AUTO")
+
+			// 4. Target in other unmentioned scope is DENIED (scoped allows restrict all other scopes)
+			const otherReq: UnifiedApprovalRequest = {
+				id: "req-prec-4",
+				taskId: "task-prec-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/packages/common/utils.ts" },
+				taskContext: {
+					latestUserInstruction: userPrompt,
+					activeGoal: userPrompt,
+					workspacePath: "/repo/velune-website",
+					isWithinWorkspace: true,
+				},
+			}
+			const otherRes = await autoOrchestrator.evaluate(otherReq, autoState)
+			expect(otherRes.decision).toBe("DENY_AND_REPLAN")
+			expect(otherRes.reason).toContain("outside the explicitly authorized modification scope")
+		})
+
+		it("A4 & A17: Correctly interprets negation semantics in Polish and English", async () => {
+			const autoOrchestrator = new ApprovalOrchestrator()
+
+			// 1. "To nie jest analiza, popraw kod." -> write ALLOWED (negative assertion on analysis, affirmative on fix)
+			const negAssertionReq: UnifiedApprovalRequest = {
+				id: "req-neg-1",
+				taskId: "task-neg-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/src/core.ts" },
+				taskContext: {
+					latestUserInstruction: "To nie jest analiza, popraw kod.",
+					activeGoal: "Poprawka błędu",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const negAssertionRes = await autoOrchestrator.evaluate(negAssertionReq, autoState)
+			expect(negAssertionRes.decision).toBe("ALLOW_AUTO")
+
+			// 2. "Nie poprawiaj kodu." -> write DENIED (explicit read-only constraint)
+			const pureDenyReq: UnifiedApprovalRequest = {
+				id: "req-neg-2",
+				taskId: "task-neg-2",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/src/core.ts" },
+				taskContext: {
+					latestUserInstruction: "Nie poprawiaj kodu.",
+					activeGoal: "Przegląd kodu",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const pureDenyRes = await autoOrchestrator.evaluate(pureDenyReq, autoState)
+			expect(pureDenyRes.decision).toBe("DENY_AND_REPLAN")
+
+			// 3. "Nie tylko przeanalizuj — również napraw." -> write ALLOWED
+			const fixAlsoReq: UnifiedApprovalRequest = {
+				id: "req-neg-3",
+				taskId: "task-neg-3",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/src/core.ts" },
+				taskContext: {
+					latestUserInstruction: "Nie tylko przeanalizuj — również napraw.",
+					activeGoal: "Naprawa",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const fixAlsoRes = await autoOrchestrator.evaluate(fixAlsoReq, autoState)
+			expect(fixAlsoRes.decision).toBe("ALLOW_AUTO")
+
+			// 4. "Nie ruszaj backendu, popraw frontend." -> frontend ALLOWED, backend DENIED
+			const feReq: UnifiedApprovalRequest = {
+				id: "req-neg-4",
+				taskId: "task-neg-4",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/frontend/App.tsx" },
+				taskContext: {
+					latestUserInstruction: "Nie ruszaj backendu, popraw frontend.",
+					activeGoal: "Poprawka UI",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const beReq: UnifiedApprovalRequest = {
+				id: "req-neg-5",
+				taskId: "task-neg-4",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/backend/server.ts" },
+				taskContext: {
+					latestUserInstruction: "Nie ruszaj backendu, popraw frontend.",
+					activeGoal: "Poprawka UI",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const feRes = await autoOrchestrator.evaluate(feReq, autoState)
+			console.log("feRes is:", JSON.stringify(feRes, null, 2))
+			expect(feRes.decision).toBe("ALLOW_AUTO")
+			expect((await autoOrchestrator.evaluate(beReq, autoState)).decision).toBe("DENY_AND_REPLAN")
+		})
+
+		it("A10 & A11 & A12: Deterministic fallback on verifier timeout never fails open for unknown commands or sensitive paths", async () => {
+			const timeoutJudge = new CommandSafetyJudge({
+				callProviderOverride: async () => {
+					const err: any = new Error("Gateway timeout")
+					err.status = 504
+					err.name = "AbortError"
+					throw err
+				},
+			})
+			const autoOrchestrator = new ApprovalOrchestrator({ judge: timeoutJudge })
+
+			// 1. Unknown / arbitrary command MUST fail closed to USER_DECISION_REQUIRED or MANUAL_APPROVAL
+			const unknownCmdReq: UnifiedApprovalRequest = {
+				id: "req-fail-1",
+				taskId: "task-fail-1",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: { command: "python deploy_remote.py --key secret" },
+				taskContext: {
+					latestUserInstruction: "Deploy the app",
+					activeGoal: "Deploy",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const unknownCmdRes = await autoOrchestrator.evaluate(unknownCmdReq, autoState)
+			expect(["USER_DECISION_REQUIRED", "MANUAL_APPROVAL"]).toContain(unknownCmdRes.decision)
+			expect(unknownCmdRes.infrastructureFailure).toBe(true)
+
+			// 2. Fast-path safe command (e.g. git status) CAN be allowed deterministically on verifier timeout
+			const safeCmdReq: UnifiedApprovalRequest = {
+				id: "req-fail-2",
+				taskId: "task-fail-2",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: { command: "git status" },
+				taskContext: {
+					latestUserInstruction: "Check git status",
+					activeGoal: "Check status",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const safeCmdRes = await autoOrchestrator.evaluate(safeCmdReq, autoState)
+			expect(safeCmdRes.decision).toBe("ALLOW_AUTO")
+
+			// 3. Sensitive file write (.env) MUST fail closed to USER_DECISION_REQUIRED or MANUAL_APPROVAL
+			const sensitiveWriteReq: UnifiedApprovalRequest = {
+				id: "req-fail-3",
+				taskId: "task-fail-3",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/.env", isProtected: true },
+				taskContext: {
+					latestUserInstruction: "Write env secrets",
+					activeGoal: "Write env",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const sensitiveWriteRes = await autoOrchestrator.evaluate(sensitiveWriteReq, autoState)
+			expect(["USER_DECISION_REQUIRED", "MANUAL_APPROVAL", "HARD_BLOCK"]).toContain(sensitiveWriteRes.decision)
+
+			// 4. Routine workspace source code file write is allowed deterministically
+			const routineWriteReq: UnifiedApprovalRequest = {
+				id: "req-fail-4",
+				taskId: "task-fail-4",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "/repo/src/utils/math.ts" },
+				taskContext: {
+					latestUserInstruction: "Update math helper",
+					activeGoal: "Update math",
+					workspacePath: "/repo",
+					isWithinWorkspace: true,
+				},
+			}
+			const routineWriteRes = await autoOrchestrator.evaluate(routineWriteReq, autoState)
+			expect(routineWriteRes.decision).toBe("ALLOW_AUTO")
 		})
 	})
 })

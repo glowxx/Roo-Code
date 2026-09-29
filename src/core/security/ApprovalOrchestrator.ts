@@ -693,28 +693,66 @@ export class ApprovalOrchestrator {
 
 			// Also parse prompt text if scopes are not explicitly extracted in explicitConstraints
 			const promptText = `${substantiveInstruction}\n${latestInstruction}\n${activeGoal}`
-			const promptAllowMatch = promptText.match(
-				/(?:modify\s+only|you\s+may\s+modify\s+only|modyfikuj\s+wyłącznie)\s*([^\n.;]+)/i
-			)
-			if (promptAllowMatch && promptAllowMatch[1]) {
-				const scope = promptAllowMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
-				if (scope && !/^(kodu|code|all\s+files|wszystko)$/i.test(scope) && !scopedAllows.includes(scope)) {
-					scopedAllows.push(scope)
+
+			const allowSectionRegex =
+				/(?:modify\s+only|you\s+(?:may|can)\s+modify\s+only|commit\s+only|change\s+only|edit\s+only|modyfikuj\s+wyłącznie|zmieniaj\s+tylko|edytuj\s+tylko|commituj\s+tylko|popraw\s+tylko|napraw\s+tylko|fix\s+only|zakres\s+zapisu(?:\s*:\s*|\s+)wyłącznie(?:\s*w)?|authorized\s+to\s+modify\s+only):?([\s\S]*?)(?=(?:\n\s*\n|\b(?:do\s+not|nie\s+(?:modyfikuj|commituj|zmieniaj|ruszaj)|zakaz|goals?|instructions?|uwaga)\b|$))/i
+			const allowSectionMatch = promptText.match(allowSectionRegex)
+			if (allowSectionMatch && allowSectionMatch[1]) {
+				const lines = allowSectionMatch[1].split(/\n|;|,|\/|\s+and\s+|\s+or\s+|\s+oraz\s+|\s+i\s+/)
+				for (const line of lines) {
+					let cleaned = line
+						.trim()
+						.replace(/^[\s*\->•]+/, "")
+						.replace(/[\(\)].*$/, "")
+						.replace(/[.,:;!]+$/, "")
+						.trim()
+						.toLowerCase()
+					if (cleaned.length > 4 && cleaned.endsWith("u")) {
+						cleaned = cleaned.slice(0, -1)
+					}
+					if (
+						cleaned &&
+						!/^(kodu|code|all\s+files|wszystko|pliki|files)$/i.test(cleaned) &&
+						!scopedAllows.includes(cleaned)
+					) {
+						scopedAllows.push(cleaned)
+					}
 				}
 			}
-			const promptDenyMatch = promptText.match(
-				/(?:do\s+not\s+modify\s+(?:files\s+in|code\s+in)|nie\s+modyfikuj\s+(?:plików\s+w|kodu\s+w))\s*([^\n.;]+)/i
-			)
-			if (promptDenyMatch && promptDenyMatch[1]) {
-				const scope = promptDenyMatch[1].replace(/[\(\)].*$/, "").trim().toLowerCase()
-				if (scope && !/^(kodu|code|all\s+files|wszystko)$/i.test(scope) && !scopedDenies.includes(scope)) {
-					scopedDenies.push(scope)
+
+			const denySectionRegex =
+				/(?:do\s+not\s+(?:modify|commit|touch|edit)\s*(?:files\s+in|code\s+in)?|nie\s+(?:modyfikuj|commituj|ruszaj|zmieniaj)\s*(?:plików\s+w|kodu\s+w)?|zakaz\s+modyfikacji):?([\s\S]*?)(?=(?:\n\s*\n|\b(?:modify\s+only|commit\s+only|change\s+only|modyfikuj\s+wyłącznie|zmieniaj\s+tylko|edytuj\s+tylko|commituj\s+tylko|popraw\s+tylko|napraw\s+tylko|fix\s+only|ale\s+popraw|zamiast\s+tego|goals?|instructions?|uwaga)\b|$))/i
+			const denySectionMatch = promptText.match(denySectionRegex)
+			if (denySectionMatch && denySectionMatch[1]) {
+				const lines = denySectionMatch[1].split(/\n|;|,|\/|\s+and\s+|\s+or\s+|\s+oraz\s+|\s+i\s+/)
+				for (const line of lines) {
+					let cleaned = line
+						.trim()
+						.replace(/^[\s*\->•]+/, "")
+						.replace(/[\(\)].*$/, "")
+						.replace(/[.,:;!]+$/, "")
+						.trim()
+						.toLowerCase()
+					if (cleaned.length > 4 && cleaned.endsWith("u")) {
+						cleaned = cleaned.slice(0, -1)
+					}
+					if (
+						cleaned &&
+						!/^(kodu|code|all\s+files|wszystko|pliki|files)$/i.test(cleaned) &&
+						!scopedDenies.includes(cleaned)
+					) {
+						scopedDenies.push(cleaned)
+					}
 				}
 			}
 
 			// Helper to check scope match
 			const isScopeMatch = (filePath: string, scopePattern: string) => {
-				const clean = scopePattern.replace(/^\.?\//, "").replace(/\/$/, "")
+				const clean = scopePattern
+					.replace(/^\.?\//, "")
+					.replace(/\/$/, "")
+					.replace(/[.,:;!]+$/, "")
+					.trim()
 				return filePath.includes(clean)
 			}
 
@@ -760,19 +798,30 @@ export class ApprovalOrchestrator {
 
 			// 4. Affirmative override checking on latest instructions
 			const hasAffirmativeModifyOverride =
-				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować)/i.test(
+				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować|(?:^|[^\w])(?!nie\s+)(?:popraw|napraw|fix)\s+(?:kod|frontend|ui|backend|bug|błąd|[a-z0-9_-]+))/i.test(
 					substantiveInstruction
 				) ||
-				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować)/i.test(
+				/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|odblokuj.*edycj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować|(?:^|[^\w])(?!nie\s+)(?:popraw|napraw|fix)\s+(?:kod|frontend|ui|backend|bug|błąd|[a-z0-9_-]+))/i.test(
 					latestInstruction
 				)
 
 			// 5. Global negative constraint check
 			const hasNoModifyConstraint =
 				!hasAffirmativeModifyOverride &&
-				explicitConstraints.some((c) =>
-					/nie\s+modyfikuj|do\s+not\s+modify|don't\s+modify|read-only|tylko\s+do\s+odczytu/i.test(c)
-				)
+				(explicitConstraints.some((c) => {
+					// Guard against negative assertions like "This is NOT a read-only review" or "To NIE jest zadanie read-only"
+					const isNegative =
+						/(?:not|nie\s+jest|no\s+longer|to\s+nie\s+jest)\s+(?:a\s+)?(?:strictly\s+)?(?:read-only|tylko\s+do\s+odczytu|analiz[aą])/i.test(
+							c
+						)
+					if (isNegative) return false
+					return /nie\s+(?:modyfikuj|poprawiaj|naprawiaj|zmieniaj)\s+(?:kodu|plików|niczego)|do\s+not\s+(?:modify|fix|change)\s+(?:code|files|anything)|read-only|tylko\s+do\s+odczytu/i.test(
+						c
+					)
+				}) ||
+					/(?:^|\b)(?:nie\s+(?:poprawiaj|naprawiaj|zmieniaj|ruszaj)\s+(?:kodu|plików|niczego)|do\s+not\s+(?:modify|fix|change|touch)\s+(?:code|files|anything))\b/i.test(
+						promptText
+					))
 			if (hasNoModifyConstraint) {
 				return {
 					decision: "DENY_AND_REPLAN",
@@ -1103,6 +1152,74 @@ export class ApprovalOrchestrator {
 		// Infrastructure failure or schema invalidity across all candidate models
 		const isSchemaInvalid = execResult.lastCategory === VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
 		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown verification failure"
+
+		const isTransientInfra =
+			execResult.lastCategory === VerifierFailureCategory.RATE_LIMIT ||
+			execResult.lastCategory === VerifierFailureCategory.TIMEOUT ||
+			execResult.lastCategory === VerifierFailureCategory.NETWORK ||
+			execResult.lastCategory === VerifierFailureCategory.MODEL_UNAVAILABLE
+
+		const cmd = request.target.command || ""
+		const isDangerousCmd =
+			containsDangerousSubstitution(cmd) ||
+			request.executionBoundary?.hostImpact.isHostEscape ||
+			/(\b|^)(rm\s+-(?:r|f|rf)|del\s+\/[sfq]|format|clean\s+-fd|git\s+reset\s+--hard|push\s+--force)(\b|$)/i.test(cmd)
+
+		// Strict deterministic fallback: commands MUST be proven safe by fast-path heuristics
+		const isFastPathSafeCmd = Boolean(
+			cmd &&
+			typeof this.judge?.evaluateFastPath === "function" &&
+			this.judge.evaluateFastPath(cmd) !== null &&
+			!isDangerousCmd
+		)
+
+		const isSensitivePath = (filePath?: string): boolean => {
+			if (!filePath) return false
+			const norm = filePath.replace(/\\/g, "/").toLowerCase()
+			return (
+				norm.includes("/.git/") ||
+				norm.includes("/.env") ||
+				norm.endsWith(".pem") ||
+				norm.endsWith(".key") ||
+				norm.includes("/id_rsa") ||
+				norm.includes("/id_ed25519") ||
+				norm.includes("/credentials") ||
+				norm.includes("/shadow")
+			)
+		}
+
+		const isRoutineFileWrite =
+			(request.actionType === "write_to_file" || request.actionType === "replace_file_content") &&
+			Boolean(request.target.filePath) &&
+			!isSensitivePath(request.target.filePath) &&
+			!request.target.isOutsideWorkspace
+
+		const isDeterministicSafeAction =
+			request.actionType === "read_file" ||
+			request.actionType === "switch_mode" ||
+			request.actionType === "new_task" ||
+			request.actionType === "update_todo_list" ||
+			(request.actionType === "execute_command" && isFastPathSafeCmd) ||
+			isRoutineFileWrite
+
+		if (isTransientInfra && isDeterministicSafeAction && !request.target.isOutsideWorkspace) {
+			const reason = `Verification model temporarily unavailable (${execResult.lastCategory}). Deterministically verified safe action permitted autonomously.`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=ALLOW_AUTO reason="${reason}"`
+			const result: ApprovalDecisionResult = {
+				decision: "ALLOW_AUTO",
+				risk: "low",
+				reason,
+				taskAligned: true,
+				infrastructureFailure: true,
+				verifierUnavailable: true,
+				verifierFailureCategory: execResult.lastCategory,
+				approvalAttemptCount: execResult.attempts,
+				auditLog,
+			}
+			this.recordDecision(request, result, "none", false, state)
+			return result
+		}
+
 		const reason = isSchemaInvalid
 			? `Approval response schema validation failed (${errorMsg}). Fail closed.`
 			: `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
