@@ -312,6 +312,41 @@ describe("Desktop Shell & Agent Host Integration Bridge", () => {
 	})
 
 	describe("Sidebar Chat Indicators, Precedence & Unread State Persistence", () => {
+		it("notifies the sidebar for idle, running, approval, resumed, and completed transitions without switching chats", () => {
+			const item = { id: "chat-a", task: "Chat A", ts: 1, workspace: tempDir, status: "completed", hasUnread: false }
+			const runningTasks = new Map<string, any>()
+			host.registerWebviewProvider("test-view", { runningTasks, taskHistoryStore: { getAll: () => [item] } })
+			const observed: string[] = []
+			host.on("taskHistoryChanged", () => {
+				observed.push(host.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]?.[0]?.status || "missing")
+			})
+			host.on("statusChange", () => {
+				observed.push(host.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]?.[0]?.status || "missing")
+			})
+			expect(host.getChatsByWorkspace()[path.normalize(path.resolve(tempDir))]?.[0]?.status).toBe("completed")
+
+			runningTasks.set("chat-a", { isStarted: true, taskStatus: "running", clineMessages: [] })
+			;(host as any).processExtensionMessage({ type: "taskHistoryItemUpdated", taskHistoryItem: item })
+			expect(observed.at(-1)).toBe("running")
+
+			const task = runningTasks.get("chat-a")
+			task.taskStatus = "interactive"
+			task.currentAskType = "command"
+			task.clineMessages = [{ type: "ask", ask: "command", approvalState: "USER_DECISION_REQUIRED" }]
+			;(host as any).processExtensionMessage({ type: "ask", ask: "command" })
+			expect(observed.at(-1)).toBe("needs_attention")
+
+			task.taskStatus = "running"
+			task.currentAskType = undefined
+			task.clineMessages[0].approvalState = "APPROVED"
+			;(host as any).processExtensionMessage({ type: "say", say: "api_req_started" })
+			expect(observed.at(-1)).toBe("running")
+
+			task.isTaskCompleted = true
+			item.status = "completed"
+			;(host as any).processExtensionMessage({ type: "say", say: "completion_result" })
+			expect(observed.at(-1)).toBe("completed")
+		})
 		it("should accurately classify running tasks without false needs_attention", () => {
 			const mockRunningTasks = new Map<string, any>()
 			const fakeProvider = {

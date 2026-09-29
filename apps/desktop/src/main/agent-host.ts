@@ -1571,6 +1571,8 @@ export class DesktopAgentHost extends EventEmitter {
 				if (taskId && typeof raw.text === "string" && raw.text.trim()) {
 					this.triggerBackgroundTitleGeneration(taskId, raw.text.trim())
 				}
+			} else if (raw.say === "api_req_started") {
+				this.setStatus("thinking")
 			} else if (raw.say === "completion_result") {
 				this.setStatus("idle")
 				this.finishRunningTerminalLogs()
@@ -1596,6 +1598,7 @@ export class DesktopAgentHost extends EventEmitter {
 
 		if (
 			raw.type === "taskHistoryUpdated" ||
+			raw.type === "taskHistoryItemUpdated" ||
 			raw.type === "relinquishControl" ||
 			(raw.type === "say" && (raw.say === "task" || raw.say === "completion_result"))
 		) {

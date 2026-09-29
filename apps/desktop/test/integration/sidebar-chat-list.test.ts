@@ -10,6 +10,13 @@ describe("Sidebar Chat List Truncation & Progressive Disclosure (Area B)", () =>
 		appJsCode = fs.readFileSync(appJsPath, "utf-8")
 	})
 
+	it("broadcasts live lifecycle changes to the sidebar renderer", () => {
+		const serverCode = fs.readFileSync(path.resolve(__dirname, "../../src/main/server.ts"), "utf-8")
+		expect(serverCode).toMatch(/agentHost\.on\("statusChange",[\s\S]*?broadcastSidebarData\(\)/)
+		expect(appJsCode).toContain('case "sidebarData":')
+		expect(appJsCode).toContain("tryPatchSidebarInPlace(workspaces, curWsNorm)")
+	})
+
 	it("defines MAX_VISIBLE_CHATS as 6 and initializes projectChatExpansions Set", () => {
 		expect(appJsCode).toContain("const MAX_VISIBLE_CHATS = 6")
 		expect(appJsCode).toContain("const projectChatExpansions = new Set()")

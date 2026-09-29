@@ -425,6 +425,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	})
 	agentHost.on("statusChange", (status) => {
 		broadcast({ type: "agentStatus", status })
+		broadcastSidebarData()
 	})
 	agentHost.on("terminalLog", (entry) => {
 		broadcast({ type: "terminalLog", entry })
