@@ -135,38 +135,31 @@ export const WorktreesView = () => {
 	// Render error states
 	if (!isGitRepo) {
 		return (
-			<div>
-				<SectionHeader>{t("worktrees:title")}</SectionHeader>
-				<div className="px-5 text-sm">
-					<p className="text-vscode-descriptionForeground">{t("worktrees:description")}</p>
-					<p>{t("worktrees:notGitRepo")}</p>
-				</div>
+			<div className="flex flex-col">
+				<SectionHeader description={t("worktrees:description")}>{t("worktrees:title")}</SectionHeader>
+				<p className="text-sm text-vscode-errorForeground m-0">{t("worktrees:notGitRepo")}</p>
 			</div>
 		)
 	}
 
 	if (isMultiRoot) {
 		return (
-			<div>
-				<SectionHeader>{t("worktrees:title")}</SectionHeader>
-				<div className="px-5 text-sm">
-					<p className="text-vscode-descriptionForeground">{t("worktrees:description")}</p>
-					<p>{t("worktrees:multiRootNotSupported")}</p>
-				</div>
+			<div className="flex flex-col">
+				<SectionHeader description={t("worktrees:description")}>{t("worktrees:title")}</SectionHeader>
+				<p className="text-sm text-vscode-descriptionForeground m-0">{t("worktrees:multiRootNotSupported")}</p>
 			</div>
 		)
 	}
 
 	if (isSubfolder) {
 		return (
-			<div>
-				<SectionHeader>{t("worktrees:title")}</SectionHeader>
-				<div className="px-5 text-sm">
-					<p className="text-vscode-descriptionForeground">{t("worktrees:description")}</p>
-					<p>{t("worktrees:subfolderNotSupported")}</p>
-					<p>
+			<div className="flex flex-col">
+				<SectionHeader description={t("worktrees:description")}>{t("worktrees:title")}</SectionHeader>
+				<div className="flex flex-col gap-2 text-sm text-vscode-descriptionForeground">
+					<p className="m-0">{t("worktrees:subfolderNotSupported")}</p>
+					<p className="m-0">
 						{t("worktrees:gitRoot")}:{" "}
-						<code className="bg-vscode-input-background p-1 rounded-md">{gitRootPath}</code>
+						<code className="bg-vscode-input-background px-1.5 py-0.5 rounded text-xs">{gitRootPath}</code>
 					</p>
 				</div>
 			</div>
@@ -174,13 +167,13 @@ export const WorktreesView = () => {
 	}
 
 	return (
-		<div className="flex flex-col h-full overflow-hidden">
-			{/* Fixed Header */}
-			<div className="flex-shrink-0">
-				<SectionHeader>{t("worktrees:title")}</SectionHeader>
-				<div className="flex flex-col gap-2 px-5 py-2">
-					<p className="text-vscode-descriptionForeground text-sm m-0">{t("worktrees:description")}</p>
+		<div className="flex flex-col">
+			{/* Canonical SectionHeader */}
+			<SectionHeader description={t("worktrees:description")}>{t("worktrees:title")}</SectionHeader>
 
+			<div className="flex flex-col gap-4">
+				{/* Controls */}
+				<div className="flex flex-col gap-3">
 					{/* Show in Home Screen toggle */}
 					<label
 						className="flex cursor-pointer items-center gap-2 text-sm text-vscode-descriptionForeground"
@@ -190,26 +183,25 @@ export const WorktreesView = () => {
 					</label>
 
 					{/* New Worktree button */}
-					<Button variant="secondary" className="py-1" onClick={() => setShowCreateModal(true)}>
-						<Plus />
+					<Button variant="secondary" className="py-1 w-fit" onClick={() => setShowCreateModal(true)}>
+						<Plus className="size-4 mr-1.5" />
 						{t("worktrees:newWorktree")}
 					</Button>
 				</div>
-			</div>
 
-			{/* Scrollable List Area */}
-			<div className="flex-1 overflow-y-auto px-4 py-2 min-h-0">
-				{isLoading ? (
-					<div className="flex items-center justify-center h-48">
-						<span className="codicon codicon-loading codicon-modifier-spin text-2xl" />
-					</div>
-				) : error ? (
-					<div className="flex flex-col items-center justify-center h-48 text-vscode-errorForeground">
-						<span className="codicon codicon-error text-4xl mb-4" />
-						<p className="text-center">{error}</p>
-					</div>
-				) : (
-					<div className="flex flex-col gap-1">
+				{/* List Area */}
+				<div className="min-h-0">
+					{isLoading ? (
+						<div className="flex items-center justify-center h-32">
+							<span className="codicon codicon-loading codicon-modifier-spin text-2xl" />
+						</div>
+					) : error ? (
+						<div className="flex flex-col items-center justify-center h-32 text-vscode-errorForeground">
+							<span className="codicon codicon-error text-3xl mb-2" />
+							<p className="text-center text-sm">{error}</p>
+						</div>
+					) : (
+						<div className="flex flex-col gap-1.5">
 						{worktrees.map((worktree) => (
 							<div
 								key={worktree.path}
@@ -307,6 +299,7 @@ export const WorktreesView = () => {
 						)}
 					</div>
 				)}
+			</div>
 			</div>
 
 			{/* Create Modal */}
