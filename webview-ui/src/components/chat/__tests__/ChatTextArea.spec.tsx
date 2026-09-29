@@ -128,7 +128,7 @@ describe("ChatTextArea", () => {
 
 			render(<ChatTextArea {...defaultProps} inputValue="" />)
 
-			// Clear any calls from component initialization (e.g., IndexingStatusBadge)
+			// Clear any calls from component initialization
 			mockPostMessage.mockClear()
 
 			const enhanceButton = getEnhancePromptButton()

@@ -33,7 +33,6 @@ import { ReasoningEffortButton } from "./ReasoningEffortButton"
 import { AutoApproveDropdown } from "./AutoApproveDropdown"
 import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
 import ContextMenu from "./ContextMenu"
-import { IndexingStatusBadge } from "./IndexingStatusBadge"
 import { usePromptHistory } from "./hooks/usePromptHistory"
 import { ContextWindowProgress } from "./ContextWindowProgress"
 
@@ -1399,7 +1398,6 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								</button>
 							</StandardTooltip>
 						)}
-						{!isEditMode ? <IndexingStatusBadge /> : null}
 					</div>
 				</div>
 			</div>
