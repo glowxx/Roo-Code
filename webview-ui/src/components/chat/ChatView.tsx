@@ -43,6 +43,15 @@ import { QueuedMessages } from "./QueuedMessages"
 import { WorktreeSelector } from "./WorktreeSelector"
 import FileChangesPanel from "./FileChangesPanel"
 import { useScrollLifecycle } from "@src/hooks/useScrollLifecycle"
+import {
+	saveDraft,
+	loadDraft,
+	deleteDraft,
+	flushPendingDraft,
+	scheduleSaveDraft,
+	getActiveProvisionalId,
+	setActiveProvisionalIdKey,
+} from "@src/utils/draftManager"
 
 export interface ChatViewProps {
 	isHidden: boolean
@@ -88,6 +97,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		messageQueue = [],
 		showWorktreesInHomeScreen,
 		approvalMode,
+		cwd,
 	} = useExtensionState()
 
 	// Show a WarningRow when the user sends a message with a retired provider.
@@ -226,6 +236,114 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			vscode.postMessage({ type: "cancelAutoApproval", taskId: currentTaskItem?.id })
 		}
 	}, [isFollowUpAutoApprovalPaused, currentTaskItem?.id])
+
+	const selectedImagesRef = useRef(selectedImages)
+	useEffect(() => {
+		selectedImagesRef.current = selectedImages
+	}, [selectedImages])
+
+	// Unique ID for provisional (new) chat drafts before a task ID is assigned
+	const [activeProvisionalId, setActiveProvisionalId] = useState<string>(() => {
+		const existing = getActiveProvisionalId(cwd || "global")
+		if (existing) return existing
+		const fresh = `provisional_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+		setActiveProvisionalIdKey(cwd || "global", fresh)
+		return fresh
+	})
+	const activeProvisionalIdRef = useRef(activeProvisionalId)
+	useEffect(() => {
+		activeProvisionalIdRef.current = activeProvisionalId
+	}, [activeProvisionalId])
+
+	const assignNewProvisionalId = useCallback(() => {
+		const fresh = `provisional_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+		setActiveProvisionalId(fresh)
+		setActiveProvisionalIdKey(cwd || "global", fresh)
+		return fresh
+	}, [cwd])
+
+	const currentChatKey = currentTaskItem?.id ? `task_${currentTaskItem.id}` : activeProvisionalId
+	const currentChatKeyRef = useRef(currentChatKey)
+	useEffect(() => {
+		currentChatKeyRef.current = currentChatKey
+	}, [currentChatKey])
+
+	const prevChatKeyRef = useRef<string>(currentChatKey)
+	const isRestoringDraftRef = useRef(false)
+	const inFlightDraftRef = useRef<{ key: string; text: string; images: string[] } | null>(null)
+
+	// Restore draft on initial mount
+	useEffect(() => {
+		const restored = loadDraft(cwd || "global", currentChatKey)
+		if (restored && !inputValueRef.current) {
+			setInputValue(restored.text || "")
+			setSelectedImages(restored.images || [])
+		}
+	}, [])
+
+	// Save previous draft and restore target chat draft on chat switch
+	useEffect(() => {
+		if (prevChatKeyRef.current !== currentChatKey) {
+			flushPendingDraft()
+			saveDraft(cwd || "global", prevChatKeyRef.current, {
+				text: inputValueRef.current,
+				images: selectedImagesRef.current,
+			})
+
+			const restored = loadDraft(cwd || "global", currentChatKey)
+			isRestoringDraftRef.current = true
+			if (restored) {
+				setInputValue(restored.text || "")
+				setSelectedImages(restored.images || [])
+			} else {
+				setInputValue("")
+				setSelectedImages([])
+			}
+			prevChatKeyRef.current = currentChatKey
+			const timer = setTimeout(() => {
+				isRestoringDraftRef.current = false
+			}, 50)
+			return () => clearTimeout(timer)
+		}
+	}, [currentChatKey, cwd])
+
+	// Debounced draft save on input/image change
+	useEffect(() => {
+		if (isRestoringDraftRef.current) return
+		scheduleSaveDraft(cwd || "global", currentChatKey, {
+			text: inputValue,
+			images: selectedImages,
+		})
+	}, [inputValue, selectedImages, currentChatKey, cwd])
+
+	// Window blur and beforeunload forced flush
+	useEffect(() => {
+		const handleFlush = () => {
+			flushPendingDraft()
+			saveDraft(cwd || "global", currentChatKeyRef.current, {
+				text: inputValueRef.current,
+				images: selectedImagesRef.current,
+			})
+		}
+		window.addEventListener("blur", handleFlush)
+		window.addEventListener("beforeunload", handleFlush)
+		return () => {
+			window.removeEventListener("blur", handleFlush)
+			window.removeEventListener("beforeunload", handleFlush)
+		}
+	}, [cwd])
+
+	// Clean up provisional draft upon task creation confirmation
+	useEffect(() => {
+		if (currentTaskItem?.id && inFlightDraftRef.current) {
+			deleteDraft(cwd || "global", inFlightDraftRef.current.key)
+			if (inFlightDraftRef.current.key.startsWith("provisional_")) {
+				// Allocate new provisional ID for the next empty chat so sent draft does not leak
+				assignNewProvisionalId()
+			}
+			inFlightDraftRef.current = null
+		}
+	}, [currentTaskItem?.id, cwd, assignNewProvisionalId])
 
 	const isProfileDisabled = useMemo(
 		() => !!apiConfiguration && !ProfileValidator.isProfileAllowed(apiConfiguration, organizationAllowList),
@@ -474,8 +592,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "resume_task":
 							setSendingDisabled(false)
 							setClineAsk("resume_task")
-							setEnableButtons(false)
-							setPrimaryButtonText(undefined)
+							setEnableButtons(true)
+							setPrimaryButtonText(t("chat:resumeTask.title"))
 							setSecondaryButtonText(undefined)
 							setDidClickCancel(false) // special case where we reset the cancel button state
 							break
@@ -760,6 +878,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				) {
 					try {
 						console.log("queueMessage", text, images)
+						deleteDraft(cwd || "global", currentChatKeyRef.current)
 						vscode.postMessage({ type: "queueMessage", text, images, taskId: currentTaskItem?.id })
 						setInputValue("")
 						setSelectedImages([])
@@ -776,8 +895,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				userRespondedRef.current = true
 
 				if (messagesRef.current.length === 0) {
+					inFlightDraftRef.current = {
+						key: currentChatKeyRef.current,
+						text,
+						images,
+					}
 					vscode.postMessage({ type: "newTask", text, images })
 				} else if (clineAskRef.current) {
+					deleteDraft(cwd || "global", currentChatKeyRef.current)
 					if (clineAskRef.current === "followup") {
 						markFollowUpAsAnswered()
 					}
@@ -805,6 +930,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						// There is no other case that a textfield should be enabled.
 					}
 				} else {
+					deleteDraft(cwd || "global", currentChatKeyRef.current)
 					// This is a new message in an ongoing task.
 					vscode.postMessage({
 						type: "askResponse",
@@ -826,6 +952,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			messageQueue.length,
 			apiConfiguration?.apiProvider,
 			currentTaskItem?.id,
+			cwd,
 		], // messagesRef and clineAskRef are stable
 	)
 
@@ -846,8 +973,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	const startNewTask = useCallback(() => {
 		setShowRetiredProviderWarning(false)
+		flushPendingDraft()
+		saveDraft(cwd || "global", currentChatKeyRef.current, {
+			text: inputValueRef.current,
+			images: selectedImagesRef.current,
+		})
+		assignNewProvisionalId()
 		vscode.postMessage({ type: "clearTask" })
-	}, [])
+	}, [cwd, assignNewProvisionalId])
 
 	// Handle stop button click from textarea or header
 	const handleStopTask = useCallback(() => {
@@ -1054,6 +1187,12 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							textAreaRef.current?.focus({ preventScroll: true })
 							break
 						case "clearTask":
+							flushPendingDraft()
+							saveDraft(cwd || "global", currentChatKeyRef.current, {
+								text: inputValueRef.current,
+								images: selectedImagesRef.current,
+							})
+							assignNewProvisionalId()
 							handleChatReset()
 							break
 					}
@@ -1070,6 +1209,12 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				case "invoke":
 					switch (message.invoke!) {
 						case "newChat":
+							flushPendingDraft()
+							saveDraft(cwd || "global", currentChatKeyRef.current, {
+								text: inputValueRef.current,
+								images: selectedImagesRef.current,
+							})
+							assignNewProvisionalId()
 							handleChatReset()
 							break
 						case "sendMessage":
@@ -1849,7 +1994,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					/>
 
 					{checkpointWarning && (
-						<div className="px-3">
+						<div className="w-full canvas-narrative px-3 sm:px-4">
 							<CheckpointWarning warning={checkpointWarning} />
 						</div>
 					)}
@@ -1888,7 +2033,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					</div>
 					<FileChangesPanel clineMessages={messages} />
 					{areButtonsVisible && (
-						<div className="w-full max-w-[1240px] mx-auto px-3 sm:px-4">
+						<div className="w-full canvas-narrative px-3 sm:px-4">
 							<div
 								className={`flex h-9 items-center mb-1 ${
 									showScrollToBottom ? "opacity-100" : enableButtons ? "opacity-100" : "opacity-50"
@@ -1977,7 +2122,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				</>
 			)}
 
-			<div className="w-full max-w-[1240px] mx-auto px-3 sm:px-4">
+			<div className="w-full canvas-narrative px-3 sm:px-4">
 				<QueuedMessages
 					queue={messageQueue}
 					onRemove={(index) => {
@@ -2054,7 +2199,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			/>
 
 			{isProfileDisabled && (
-				<div className="px-3">
+				<div className="w-full canvas-narrative px-3 sm:px-4">
 					<ProfileViolationWarning />
 				</div>
 			)}
