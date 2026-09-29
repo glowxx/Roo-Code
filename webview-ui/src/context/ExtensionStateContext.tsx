@@ -167,6 +167,7 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 	// would overwrite the newer messages. The sequence number prevents this by only applying
 	// clineMessages when the incoming seq is strictly greater than the last applied seq.
 	if (
+		newState.currentTaskId === prevState.currentTaskId &&
 		newState.clineMessagesSeq !== undefined &&
 		prevState.clineMessagesSeq !== undefined &&
 		newState.clineMessagesSeq <= prevState.clineMessagesSeq &&

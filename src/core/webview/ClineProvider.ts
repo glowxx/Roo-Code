@@ -38,6 +38,7 @@ import {
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
 	DEFAULT_SAFE_COMMANDS,
 	getModelId,
+	setModelId,
 	isRetiredProvider,
 } from "@roo-code/types"
 import { aggregateTaskCostsRecursive, type AggregatedCosts } from "./aggregateTaskCosts"
@@ -155,6 +156,12 @@ export class ClineProvider
 	 * Used by the frontend to reject stale state that arrives out-of-order.
 	 */
 	private clineMessagesSeq = 0
+
+	/**
+	 * Monotonically increasing epoch for task switching.
+	 * Used to reject stale asynchronous loads that complete out-of-order.
+	 */
+	private taskSwitchEpoch = 0
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -1770,6 +1777,7 @@ export class ClineProvider
 	}
 
 	async showTaskWithId(id: string) {
+		const epoch = ++this.taskSwitchEpoch
 		if (this.runningTasks.has(id)) {
 			const prevTask = this.getCurrentTask()
 			if (prevTask && prevTask.taskId !== id) {
@@ -1779,13 +1787,10 @@ export class ClineProvider
 			const activeTask = this.runningTasks.get(id)!
 			activeTask.emit(RooCodeEventName.TaskFocused)
 
-			// Align UI state (mode, apiConfig) with the activated task
+			// Align UI state (mode) with the activated task
 			const taskMode = (activeTask as any).taskMode || (activeTask as any)._taskMode || (activeTask as any).mode
 			if (taskMode) {
 				await this.updateGlobalState("mode", taskMode)
-			}
-			if (activeTask.apiConfiguration) {
-				await this.contextProxy.setProviderSettings(activeTask.apiConfiguration)
 			}
 
 			await this.postStateToWebview()
@@ -1799,10 +1804,18 @@ export class ClineProvider
 				prevTask.emit(RooCodeEventName.TaskUnfocused)
 			}
 			const { historyItem } = await this.getTaskWithId(id)
-			await this.createTaskWithHistoryItem(historyItem)
+			if (this.taskSwitchEpoch !== epoch) {
+				return
+			}
+			const requiresManualContinue = historyItem.status === "interrupted"
+			await this.createTaskWithHistoryItem(historyItem, { startTask: !requiresManualContinue })
+			if (this.taskSwitchEpoch !== epoch) {
+				return
+			}
 			this.foregroundTaskId = id
 		}
 
+		await this.postStateToWebview()
 		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
 	}
 
@@ -2153,10 +2166,41 @@ export class ClineProvider
 			(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
 			(await this.getGlobalState("openAiModelInfos")) ??
 			{}
+		let effectiveApiConfiguration = { ...apiConfiguration }
+		if (currentTask) {
+			const chatProvider = (currentTask.historyItem?.chatProvider ||
+				currentTask.apiConfiguration?.apiProvider) as ProviderName | undefined
+			const chatModelId = currentTask.historyItem?.chatModelId || getModelId(currentTask.apiConfiguration)
+			const chatReasoningEffort =
+				currentTask.historyItem?.chatReasoningEffort ?? (currentTask.apiConfiguration as any)?.reasoningEffort
+
+			if (chatProvider) {
+				effectiveApiConfiguration.apiProvider = chatProvider
+			}
+			if (chatModelId && chatProvider) {
+				setModelId(effectiveApiConfiguration, chatProvider, chatModelId)
+			}
+			if (chatReasoningEffort !== undefined) {
+				effectiveApiConfiguration.reasoningEffort = chatReasoningEffort
+			}
+		} else {
+			// Unassigned / new chat: inherit lastManuallySelectedModel if user explicitly picked one
+			const lastManual = (await this.getGlobalState("lastManuallySelectedModel")) as
+				| { modelId?: string; provider?: ProviderName; reasoningEffort?: any }
+				| undefined
+			if (lastManual?.modelId && lastManual?.provider) {
+				const provider = lastManual.provider as ProviderName
+				effectiveApiConfiguration.apiProvider = provider
+				setModelId(effectiveApiConfiguration, provider, lastManual.modelId)
+				if (lastManual.reasoningEffort !== undefined) {
+					effectiveApiConfiguration.reasoningEffort = lastManual.reasoningEffort
+				}
+			}
+		}
 
 		return {
 			version: this.context.extension?.packageJSON?.version ?? Package.version ?? "",
-			apiConfiguration,
+			apiConfiguration: effectiveApiConfiguration,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
 			alwaysAllowReadOnlyOutsideWorkspace: alwaysAllowReadOnlyOutsideWorkspace ?? false,
@@ -2794,6 +2838,18 @@ export class ClineProvider
 			startTask: false,
 			...options,
 		})
+
+		if (task.historyItem) {
+			if (!task.historyItem.chatModelId) {
+				task.historyItem.chatModelId = getModelId(task.apiConfiguration)
+			}
+			if (!task.historyItem.chatProvider) {
+				task.historyItem.chatProvider = task.apiConfiguration.apiProvider
+			}
+			if (task.historyItem.chatReasoningEffort === undefined) {
+				task.historyItem.chatReasoningEffort = (task.apiConfiguration as any)?.reasoningEffort
+			}
+		}
 
 		await this.addClineToStack(task)
 		task.start()

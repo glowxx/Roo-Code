@@ -184,6 +184,7 @@
 	}
 	let isSidebarCollapsed = localStorage.getItem("roo-sidebar-collapsed") === "true"
 	let activeTaskId = null
+	let currentSelectionEpoch = 0
 	const projectExpansions = new Set()
 	const projectChatExpansions = new Set()
 	const MAX_VISIBLE_CHATS = 6
@@ -847,6 +848,7 @@
 	async function switchChat(taskId, wsPath) {
 		if (!taskId) return
 		if (taskId === activeTaskId) return
+		const thisEpoch = ++currentSelectionEpoch
 		activeTaskId = taskId
 
 		// Optimistically clear unread badge for the opened chat
@@ -871,13 +873,14 @@
 
 		switchDesktopTab("chat", "user")
 
-		forwardToWebview({ type: "showTaskWithId", text: taskId })
+		forwardToWebview({ type: "showTaskWithId", text: taskId, selectionEpoch: thisEpoch })
 		sendToServer({ type: "markChatRead", taskId })
 
 		// Immediately fetch diffs for the selected task to keep top bar counter accurate
 		fetch(`/api/diffs?taskId=${encodeURIComponent(taskId)}`)
 			.then((r) => (r.ok ? r.json() : []))
 			.then((data) => {
+				if (activeTaskId !== taskId || currentSelectionEpoch !== thisEpoch) return
 				if (Array.isArray(data)) {
 					diffFiles = data
 					diffsDirty = true
@@ -2328,16 +2331,21 @@
 						currentApiProfileName = msg.message.state.currentApiConfigName
 					}
 					if (msg.message.state.currentTaskId) {
-						activeTaskId = msg.message.state.currentTaskId
-						renderSidebar()
+						if (!activeTaskId || msg.message.state.currentTaskId === activeTaskId) {
+							activeTaskId = msg.message.state.currentTaskId
+							renderSidebar()
+						}
 					}
 				}
 				if (msg.message?.type === "taskHistoryUpdated") {
 					fetchSidebarData()
 				}
 				if (msg.message?.type === "showTaskWithId" && msg.message.text) {
-					activeTaskId = msg.message.text
-					renderSidebar()
+					const epoch = msg.message.selectionEpoch
+					if (epoch === undefined || epoch >= currentSelectionEpoch) {
+						activeTaskId = msg.message.text
+						renderSidebar()
+					}
 				}
 				break
 

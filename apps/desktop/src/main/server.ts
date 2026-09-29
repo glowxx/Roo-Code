@@ -464,6 +464,14 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	agentHost.on("taskHistoryChanged", () => {
 		broadcastSidebarData()
 	})
+	agentHost.on("conversationTitleUpdated", (payload) => {
+		broadcast({
+			type: "conversationTitleUpdated",
+			taskId: payload.taskId,
+			title: payload.title,
+			titleSource: payload.titleSource,
+		})
+	})
 
 	const server = http.createServer((req, res) => {
 		const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
@@ -1162,6 +1170,10 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	--vscode-font-weight: 400;
 	--vscode-editor-font-family: "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
 	--vscode-editor-font-size: 13px;
+
+	--agent-canvas-narrative: 860px;
+	--agent-canvas-technical: 1380px;
+	--agent-reading-measure: 72ch;
 
 	/* Dark Modern Tokens (Linear / Raycast tier) */
 	--vscode-editor-background: #090a0f;
@@ -2051,6 +2063,12 @@ window.addEventListener("keydown", function(e) {
 						} catch (e) {
 							safeSend(ws, { type: "error", message: `Failed to open folder: ${String(e)}` })
 						}
+					}
+				} else if (clientMsg.type === "renameChat") {
+					const taskId = clientMsg.taskId
+					const title = clientMsg.title
+					if (taskId && title) {
+						await agentHost.renameChat(taskId, title)
 					}
 				}
 			} catch (err) {

@@ -152,7 +152,7 @@ describe("Sidebar Concurrency & Spatial Stability (Problem 2)", () => {
 
 		await vi.waitFor(() => {
 			expect(mockProvider.completePrompt).toHaveBeenCalled()
-			expect(storedItems[0]!.title).toBe("Generated Semantic Title")
+			expect((storedItems[0] as any).title).toBe("Generated Semantic Title")
 		})
 
 		// Critical: background title generation must NOT emit taskHistoryChanged
