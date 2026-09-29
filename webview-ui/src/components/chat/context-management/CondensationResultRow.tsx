@@ -23,15 +23,15 @@ export function CondensationResultRow({ data }: CondensationResultRowProps) {
 		prevTokens > 0 ? Math.max(0, Math.round(((prevTokens - newTokens) / prevTokens) * 100)) : 0
 
 	return (
-		<div className="mb-2 text-xs">
-			<div className="bg-vscode-editor-background border border-vscode-editorGroup-border/60 rounded-md p-2 shadow-sm transition-all duration-150">
+		<div className="my-1 text-xs">
+			<div className="bg-card/30 border border-border/25 hover:border-border/40 rounded-lg px-2.5 py-1.5 transition-colors">
 				<div
 					className="flex items-center justify-between cursor-pointer select-none gap-2"
 					onClick={() => setIsExpanded(!isExpanded)}>
 					<div className="flex items-center gap-1.5 flex-wrap">
-						<span>⚡</span>
-						<span className="font-semibold text-vscode-foreground">Context compacted:</span>
-						<span className="text-vscode-descriptionForeground">
+						<span className="text-amber-400">⚡</span>
+						<span className="font-medium text-vscode-foreground">Context compacted:</span>
+						<span className="text-vscode-descriptionForeground font-mono text-[11px]">
 							{`${prevTokens.toLocaleString()} → ${newTokens.toLocaleString()} tokens (-${percentage}%)`}
 						</span>
 						<button
@@ -45,14 +45,14 @@ export function CondensationResultRow({ data }: CondensationResultRowProps) {
 						</button>
 					</div>
 					{displayCost > 0 && (
-						<span className="text-vscode-descriptionForeground text-xs shrink-0 font-mono">
+						<span className="text-vscode-descriptionForeground text-[11px] shrink-0 font-mono">
 							${displayCost.toFixed(2)}
 						</span>
 					)}
 				</div>
 
 				{isExpanded && summary && (
-					<div className="mt-2 pt-2 border-t border-vscode-editorGroup-border/40 text-vscode-foreground text-xs leading-relaxed overflow-auto max-h-96">
+					<div className="mt-2 pt-2 border-t border-border/20 text-vscode-foreground text-xs leading-relaxed overflow-auto max-h-96 prose-measure">
 						<Markdown markdown={summary} />
 					</div>
 				)}

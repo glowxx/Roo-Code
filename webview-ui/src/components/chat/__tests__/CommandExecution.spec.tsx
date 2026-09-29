@@ -605,4 +605,49 @@ Output:
 			expect(terminalOutput).toHaveTextContent("0 total")
 		})
 	})
+
+	describe("Long output compact preview and expansion", () => {
+		it("should render compact preview with summary badge for long output (>12 lines)", () => {
+			const longLines = Array.from({ length: 50 }, (_, i) => `✓ step ${i + 1} passed`)
+			longLines.push("WORKFLOW SUMMARY: 50 PASS, 0 FAIL")
+			longLines.push("duration_ms: 12000")
+			const commandText = `run-all-tests\nOutput:\n${longLines.join("\n")}`
+
+			render(
+				<ExtensionStateWrapper>
+					<CommandExecution executionId="test-long-1" text={commandText} />
+				</ExtensionStateWrapper>,
+			)
+
+			// Should render summary badge
+			expect(screen.getByText(/Tests passed \(50 checks/i)).toBeInTheDocument()
+
+			// Terminal output should contain folded preview text
+			const terminalOutput = screen.getByTestId("terminal-output")
+			expect(terminalOutput.textContent).toContain("lines hidden · click to expand")
+
+			// Should render "Show full output" button
+			expect(screen.getByText(/Show full output/i)).toBeInTheDocument()
+		})
+
+		it("should expand to full output when user clicks expand button", () => {
+			const longLines = Array.from({ length: 30 }, (_, i) => `log line ${i + 1}`)
+			const commandText = `long-task\nOutput:\n${longLines.join("\n")}`
+
+			render(
+				<ExtensionStateWrapper>
+					<CommandExecution executionId="test-long-2" text={commandText} />
+				</ExtensionStateWrapper>,
+			)
+
+			const expandButton = screen.getByText(/Show full output/i)
+			fireEvent.click(expandButton)
+
+			// After clicking expand, the terminal output should show full content without the fold indicator
+			const terminalOutput = screen.getByTestId("terminal-output")
+			expect(terminalOutput.textContent).not.toContain("lines hidden")
+			expect(screen.getByText(/Collapse/i)).toBeInTheDocument()
+		})
+	})
 })
+

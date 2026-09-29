@@ -736,3 +736,65 @@ input[cmdk-input]:focus {
 	--vscode-textCodeBlock-background: #f1f5f9;
 }
 
+/* =========================================================================
+   Agent View Responsive Canvas & Dual-Policy Width Architecture
+   ========================================================================= */
+
+:root {
+	--agent-canvas-narrative: 860px;
+	--agent-canvas-technical: 1380px;
+	--agent-reading-measure: 72ch;
+	--prose-line-height: 1.62;
+	--code-line-height: 1.45;
+}
+
+@layer utilities {
+	.canvas-narrative {
+		width: 100%;
+		max-width: var(--agent-canvas-narrative);
+		margin-left: auto;
+		margin-right: auto;
+		padding-left: 0.75rem;
+		padding-right: 0.75rem;
+	}
+	@media (min-width: 640px) {
+		.canvas-narrative {
+			padding-left: 1rem;
+			padding-right: 1rem;
+		}
+	}
+	@media (min-width: 1024px) {
+		.canvas-narrative {
+			padding-left: 1.25rem;
+			padding-right: 1.25rem;
+		}
+	}
+
+	.canvas-technical {
+		width: 100%;
+		max-width: var(--agent-canvas-technical);
+		margin-left: auto;
+		margin-right: auto;
+		padding-left: 0.75rem;
+		padding-right: 0.75rem;
+	}
+	@media (min-width: 640px) {
+		.canvas-technical {
+			padding-left: 1rem;
+			padding-right: 1rem;
+		}
+	}
+	@media (min-width: 1024px) {
+		.canvas-technical {
+			padding-left: 1.25rem;
+			padding-right: 1.25rem;
+		}
+	}
+
+	.prose-measure {
+		max-width: var(--agent-reading-measure);
+		line-height: var(--prose-line-height);
+	}
+}
+
+

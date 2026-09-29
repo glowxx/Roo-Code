@@ -81,11 +81,11 @@ import { useSearchIndexRegistry, SearchIndexProvider, useSettingsSearch, SearchR
 
 export const settingsTabsContainer = "flex flex-1 overflow-hidden"
 export const settingsTabList =
-	"w-60 data-[compact=true]:w-14 flex-shrink-0 flex flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-[#12141c]/40 p-2 gap-1"
+	"w-60 data-[compact=true]:w-14 flex-shrink-0 flex flex-col overflow-y-auto overflow-x-hidden border-r border-border bg-card/40 p-2 gap-1"
 export const settingsTabTrigger =
-	"w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 text-sm font-medium transition-colors text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-white/[0.04] cursor-pointer"
+	"w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 text-sm font-medium transition-colors text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-muted/40 cursor-pointer"
 export const settingsTabTriggerActive =
-	"bg-accent/50 text-vscode-foreground font-semibold shadow-xs border border-white/[0.06]"
+	"bg-accent/50 text-vscode-foreground font-semibold shadow-xs border border-border"
 
 export interface SettingsViewRef {
 	checkUnsaveChanges: (then: () => void) => void
@@ -830,18 +830,18 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 	return (
 		<Tab className="h-full flex flex-col bg-vscode-editor-background text-vscode-foreground select-none overflow-hidden">
 			{/* Top Header */}
-			<TabHeader className="flex justify-between items-center px-4 py-2.5 border-b border-white/[0.06] bg-[#12141c]/50 backdrop-blur-sm shrink-0">
+			<TabHeader className="flex justify-between items-center px-4 py-2.5 border-b border-border bg-card/50 backdrop-blur-sm shrink-0">
 				<div className="flex items-center gap-2">
 					<StandardTooltip content={t("settings:header.doneButtonTooltip")}>
 						<Button
 							variant="ghost"
-							className="px-2 py-1 h-8 text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-white/[0.06] rounded-md transition-colors"
+							className="px-2 py-1 h-8 text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-muted/40 rounded-md transition-colors"
 							onClick={() => checkUnsaveChanges(onDone)}>
 							<ArrowLeft className="w-4 h-4 mr-1.5" />
 							<span className="text-xs font-medium">{t("settings:common.done")}</span>
 						</Button>
 					</StandardTooltip>
-					<div className="h-4 w-[1px] bg-white/[0.08] mx-1" />
+					<div className="h-4 w-[1px] bg-border mx-1" />
 					<h3 className="text-sm font-semibold text-vscode-foreground m-0 tracking-tight">
 						{t("settings:header.title")}
 					</h3>
@@ -860,7 +860,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 								value={searchQuery}
 								onChange={(e) => setSearchQuery(e.target.value)}
 								placeholder={isCompactMode ? "" : t("settings:search.placeholder")}
-								className="h-8 pl-8 pr-7 text-xs bg-[#12141c] border-white/[0.06] rounded-md focus:border-vscode-focusBorder placeholder:text-vscode-descriptionForeground/60 w-full"
+								className="h-8 pl-8 pr-7 text-xs bg-card border-border rounded-md focus:border-vscode-focusBorder placeholder:text-vscode-descriptionForeground/60 w-full"
 							/>
 							{searchQuery && (
 								<button
@@ -967,9 +967,9 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											<button
 												key={`${result.section}-${result.settingId}`}
 												onClick={() => handleSearchNavigate(result.section, result.settingId)}
-												className="w-full text-left p-4 rounded-xl border border-white/[0.06] bg-[#12141c] hover:bg-white/[0.04] transition-colors flex items-center justify-between group">
+												className="w-full text-left p-4 rounded-xl border border-border bg-card hover:bg-muted/40 transition-colors flex items-center justify-between group">
 												<div className="flex flex-col gap-1">
-													<span className="text-sm font-medium text-vscode-foreground group-hover:text-white transition-colors">
+													<span className="text-sm font-medium text-vscode-foreground group-hover:text-foreground transition-colors">
 														{result.label}
 													</span>
 													<span className="text-xs text-vscode-descriptionForeground">
@@ -991,7 +991,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-providers"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<ApiConfigManager
 													currentApiConfigName={currentApiConfigName}
 													listApiConfigMeta={listApiConfigMeta}
@@ -1028,7 +1028,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-model"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<ApiOptions
 													uriScheme={uriScheme}
 													apiConfiguration={apiConfiguration}
@@ -1045,13 +1045,13 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-modes"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<SectionHeader>{t("settings:sections.modes")}</SectionHeader>
 												<ModesView />
 											</div>
 											<div
 												id="section-prompts"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<PromptsSettings
 													customSupportPrompts={customSupportPrompts || {}}
 													setCustomSupportPrompts={setCustomSupportPromptsField}
@@ -1063,12 +1063,12 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-slashCommands"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<SlashCommandsSettings />
 											</div>
 											<div
 												id="section-skills"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<SkillsSettings />
 											</div>
 										</div>
@@ -1079,7 +1079,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-contextManagement"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<ContextManagementSettings
 													autoCondenseContext={autoCondenseContext}
 													autoCondenseContextPercent={autoCondenseContextPercent}
@@ -1104,7 +1104,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-checkpoints"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<CheckpointSettings
 													enableCheckpoints={enableCheckpoints}
 													checkpointTimeout={checkpointTimeout}
@@ -1119,7 +1119,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-autoApprove"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<AutoApproveSettings
 													alwaysAllowReadOnly={alwaysAllowReadOnly}
 													alwaysAllowReadOnlyOutsideWorkspace={
@@ -1145,7 +1145,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-commandSafety"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<CommandSafetySettings
 													apiConfiguration={cachedState.apiConfiguration}
 													commandSafetyConfig={commandSafetyConfig}
@@ -1162,7 +1162,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-terminal"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<TerminalSettings
 													terminalOutputPreviewSize={terminalOutputPreviewSize}
 													terminalShellIntegrationTimeout={terminalShellIntegrationTimeout}
@@ -1178,12 +1178,12 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-mcp"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<McpView />
 											</div>
 											<div
 												id="section-worktrees"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<WorktreesView />
 											</div>
 										</div>
@@ -1194,7 +1194,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 										<div className="space-y-6">
 											<div
 												id="section-ui"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<UISettings
 													reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
 													enterBehavior={enterBehavior ?? "send"}
@@ -1204,7 +1204,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-notifications"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<NotificationSettings
 													ttsEnabled={ttsEnabled}
 													ttsSpeed={ttsSpeed}
@@ -1215,7 +1215,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-language"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<LanguageSettings
 													language={language || "en"}
 													setCachedStateField={setCachedStateField}
@@ -1223,7 +1223,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-experimental"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<ExperimentalSettings
 													setExperimentEnabled={setExperimentEnabled}
 													experiments={experiments}
@@ -1241,7 +1241,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 											<div
 												id="section-about"
-												className="bg-[#12141c] border border-white/[0.06] rounded-xl p-5 shadow-xs">
+												className="bg-card border border-border rounded-xl p-5 shadow-xs">
 												<About debug={cachedState.debug} setDebug={setDebug} />
 											</div>
 										</div>
@@ -1254,7 +1254,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			</div>
 
 			{/* Sticky Footer Action Bar */}
-			<div className="h-14 px-6 border-t border-white/[0.06] bg-[#12141c] flex items-center justify-between z-20 shrink-0">
+			<div className="h-14 px-6 border-t border-border bg-card flex items-center justify-between z-20 shrink-0">
 				{/* Left: Dirty state indicator */}
 				<div className="flex items-center gap-2">
 					{isChangeDetected ? (

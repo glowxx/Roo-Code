@@ -1,7 +1,7 @@
 import { useCallback, useState, memo, useMemo } from "react"
 import { useEvent } from "react-use"
 import { t } from "i18next"
-import { ChevronDown, OctagonX } from "lucide-react"
+import { ChevronDown, ChevronUp, OctagonX, Copy, Check, CheckCircle2, XCircle } from "lucide-react"
 
 import { type ExtensionMessage, type CommandExecutionStatus, commandExecutionStatusSchema } from "@roo-code/types"
 
@@ -10,6 +10,7 @@ import { COMMAND_OUTPUT_STRING } from "@roo/combineCommandSequences"
 import { parseCommand } from "@roo/parse-command"
 
 import { vscode } from "@src/utils/vscode"
+import { useCopyToClipboard } from "@src/utils/clipboard"
 import { extractPatternsFromCommand } from "@src/utils/command-parser"
 import { useExtensionState } from "@src/context/ExtensionStateContext"
 import { cn } from "@src/lib/utils"
@@ -19,6 +20,7 @@ import CodeBlock from "@src/components/common/CodeBlock"
 
 import { CommandPatternSelector } from "./CommandPatternSelector"
 import { TerminalOutput } from "./TerminalOutput"
+import { analyzeCommandOutput, type CommandOutputAnalysis } from "./command-output-analyzer"
 
 interface CommandPattern {
 	pattern: string
@@ -44,16 +46,39 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 
 	const { command, output: parsedOutput } = useMemo(() => parseCommandAndOutput(text), [text])
 
-	// If we aren't opening the VSCode terminal for this command then we default
-	// to expanding the command execution output.
-	const [isExpanded, setIsExpanded] = useState(terminalShellIntegrationDisabled)
+	const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
 	const [streamingOutput, setStreamingOutput] = useState("")
 	const [status, setStatus] = useState<CommandExecutionStatus | null>(null)
+
+	const { copyWithFeedback, showCopyFeedback } = useCopyToClipboard()
 
 	// The command's output can either come from the text associated with the
 	// task message (this is the case for completed commands) or from the
 	// streaming output (this is the case for running commands).
 	const output = streamingOutput || parsedOutput
+
+	const analysis = useMemo(() => {
+		return analyzeCommandOutput(output, status?.status === "exited" ? status.exitCode : undefined)
+	}, [output, status])
+
+	const isStreaming = status?.status === "started" || (streamingOutput.length > 0 && status?.status !== "exited")
+
+	// Determine effective expanded state
+	const isExpanded = useMemo(() => {
+		if (userExpanded !== null) {
+			return userExpanded
+		}
+		// While actively streaming, keep expanded so user watches output live
+		if (isStreaming) {
+			return true
+		}
+		// Completed long output (>12 lines): default to collapsed compact preview
+		if (analysis.isLong) {
+			return false
+		}
+		// Standard output: follow shell integration setting
+		return terminalShellIntegrationDisabled
+	}, [userExpanded, isStreaming, analysis.isLong, terminalShellIntegrationDisabled])
 
 	// Extract command patterns from the actual command that was executed
 	const commandPatterns = useMemo<CommandPattern[]>(() => {
@@ -132,7 +157,7 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 							setStreamingOutput(data.output)
 							break
 						case "fallback":
-							setIsExpanded(true)
+							setUserExpanded(true)
 							break
 						default:
 							setStatus(data)
@@ -145,6 +170,13 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 	)
 
 	useEvent("message", onMessage)
+
+	const handleCopyOutput = useCallback(
+		(e: React.MouseEvent) => {
+			copyWithFeedback(output, e)
+		},
+		[copyWithFeedback, output],
+	)
 
 	return (
 		<>
@@ -188,10 +220,18 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 							</div>
 						)}
 						{output.length > 0 && (
-							<Button variant="ghost" size="icon" onClick={() => setIsExpanded(!isExpanded)}>
+							<Button
+								variant="ghost"
+								size="icon"
+								onClick={() => setUserExpanded(!isExpanded)}
+								aria-label={
+									isExpanded
+										? t("chat:commandExecution.collapseOutput", { defaultValue: "Collapse output" })
+										: t("chat:commandExecution.expandOutput", { defaultValue: "Expand output" })
+								}>
 								<ChevronDown
 									className={cn(
-										"size-4 transition-transform duration-300",
+										"size-4 transition-transform duration-200",
 										isExpanded && "rotate-180",
 									)}
 								/>
@@ -204,7 +244,15 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 			<div className="bg-card/40 border border-border/30 rounded-lg ml-6 mt-1.5 overflow-hidden transition-colors hover:border-border/50">
 				<div className="p-2">
 					<CodeBlock source={command} language="shell" />
-					<OutputContainer isExpanded={isExpanded} output={output} />
+					<OutputContainer
+						isExpanded={isExpanded}
+						output={output}
+						analysis={analysis}
+						onToggleExpand={() => setUserExpanded(!isExpanded)}
+						onCopy={handleCopyOutput}
+						showCopyFeedback={showCopyFeedback}
+						isStreaming={isStreaming}
+					/>
 				</div>
 				{command && command.trim() && (
 					<CommandPatternSelector
@@ -222,15 +270,125 @@ export const CommandExecution = ({ executionId, text, icon, title }: CommandExec
 
 CommandExecution.displayName = "CommandExecution"
 
-const OutputContainerInternal = ({ isExpanded, output }: { isExpanded: boolean; output: string }) => (
-	<div
-		className={cn("overflow-hidden", {
-			"max-h-0": !isExpanded,
-			"max-h-[100%] mt-1 pt-1 border-t border-border/25": isExpanded,
-		})}>
-		{output.length > 0 && <TerminalOutput content={output} />}
-	</div>
-)
+interface OutputContainerProps {
+	isExpanded: boolean
+	output: string
+	analysis: CommandOutputAnalysis
+	onToggleExpand: () => void
+	onCopy: (e: React.MouseEvent) => void
+	showCopyFeedback: boolean
+	isStreaming: boolean
+}
+
+const OutputContainerInternal = ({
+	isExpanded,
+	output,
+	analysis,
+	onToggleExpand,
+	onCopy,
+	showCopyFeedback,
+	isStreaming,
+}: OutputContainerProps) => {
+	if (!output || output.length === 0) {
+		return null
+	}
+
+	// Long output (> 12 lines) handling
+	if (analysis.isLong && !isStreaming) {
+		return (
+			<div className="mt-2 pt-2 border-t border-border/25 flex flex-col gap-2">
+				{/* Compact Outcome / Status Bar */}
+				<div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/30 text-xs font-mono">
+					<div className="flex items-center gap-2 min-w-0">
+						{analysis.isFailed ? (
+							<XCircle className="size-3.5 text-red-500 shrink-0" />
+						) : (
+							<CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+						)}
+						<span
+							className={cn(
+								"font-medium truncate",
+								analysis.isFailed ? "text-red-400" : "text-emerald-400",
+							)}>
+							{analysis.summaryBadge}
+						</span>
+					</div>
+
+					<div className="flex items-center gap-1 shrink-0">
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+							onClick={onCopy}>
+							{showCopyFeedback ? (
+								<>
+									<Check className="size-3 text-emerald-500" />
+									<span className="text-[11px] text-emerald-500">
+										{t("chat:commandExecution.copied", { defaultValue: "Copied" }) || "Copied"}
+									</span>
+								</>
+							) : (
+								<>
+									<Copy className="size-3" />
+									<span className="text-[11px]">
+										{t("chat:commandExecution.copyFullOutput", { defaultValue: "Copy" }) || "Copy"}
+									</span>
+								</>
+							)}
+						</Button>
+
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+							onClick={onToggleExpand}>
+							{isExpanded ? (
+								<>
+									<ChevronUp className="size-3" />
+									<span className="text-[11px]">
+										{t("chat:commandExecution.collapseOutput", { defaultValue: "Collapse" }) || "Collapse"}
+									</span>
+								</>
+							) : (
+								<>
+									<ChevronDown className="size-3" />
+									<span className="text-[11px]">
+										{t("chat:commandExecution.showFullOutput", {
+											count: analysis.totalLines,
+											defaultValue: `Show full output (${analysis.totalLines} lines)`,
+										}) || `Show full output (${analysis.totalLines} lines)`}
+									</span>
+								</>
+							)}
+						</Button>
+					</div>
+				</div>
+
+				{/* Output display */}
+				{isExpanded ? (
+					<div className="max-h-[460px] overflow-y-auto overflow-x-hidden rounded bg-black/20 p-1 border border-border/20">
+						<TerminalOutput content={output} />
+					</div>
+				) : (
+					<div className="rounded bg-black/15 p-1 border border-border/15 opacity-90 hover:opacity-100 transition-opacity">
+						<TerminalOutput content={analysis.previewContent} />
+					</div>
+				)}
+			</div>
+		)
+	}
+
+	// Short output or active streaming
+	return (
+		<div
+			className={cn("overflow-hidden", {
+				"max-h-0": !isExpanded,
+				"max-h-[460px] overflow-y-auto mt-1 pt-1 border-t border-border/25": isExpanded,
+			})}>
+			{output.length > 0 && <TerminalOutput content={output} />}
+		</div>
+	)
+}
 
 const OutputContainer = memo(OutputContainerInternal)
 

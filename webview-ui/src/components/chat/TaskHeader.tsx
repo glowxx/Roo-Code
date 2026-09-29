@@ -195,7 +195,7 @@ const TaskHeader = ({
 	}
 
 	return (
-		<div className="w-full max-w-[1240px] mx-auto group pt-1 pb-0 px-3 sm:px-4">
+		<div className="w-full canvas-narrative group pt-1 pb-0 px-3 sm:px-4">
 			{isSubtask && (
 				<div className="mb-2" onClick={(e) => e.stopPropagation()}>
 					<Button

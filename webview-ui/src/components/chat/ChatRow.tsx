@@ -139,11 +139,14 @@ const ChatRow = memo(
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
 
-		const isFullWidthSurface = useMemo(() => {
+		const isTechnicalSurface = useMemo(() => {
 			if (message.ask === "command" || message.say === "command_output") {
 				return true
 			}
-			if (message.ask === "tool") {
+			if (message.say === "codebase_search_result") {
+				return true
+			}
+			if (message.ask === "tool" || message.say === "tool") {
 				try {
 					const tool = typeof message.text === "string" ? JSON.parse(message.text || "{}") : message.text
 					const t = tool?.tool
@@ -171,8 +174,8 @@ const ChatRow = memo(
 			<div className="relative">
 				<div
 					className={cn(
-						"w-full",
-						isFullWidthSurface ? "px-3" : "max-w-[1240px] mx-auto px-3 sm:px-4",
+						"w-full px-3 sm:px-4",
+						isTechnicalSurface ? "canvas-technical" : "canvas-narrative",
 					)}>
 					<ChatRowContent {...props} />
 				</div>
@@ -776,51 +779,86 @@ export const ChatRowContent = ({
 				)
 			case "skill": {
 				const skillInfo = tool
+				if (message.type === "ask") {
+					return (
+						<>
+							<div style={headerStyle}>
+								{toolIcon("book")}
+								<span style={{ fontWeight: "bold" }}>
+									{t("chat:skill.wantsToLoad")}
+								</span>
+							</div>
+							<div
+								className="mt-1 rounded-lg border border-border/30 bg-card/40 overflow-hidden cursor-pointer"
+								onClick={handleToggleExpand}>
+								<ToolUseBlockHeader
+									className="group flex items-center justify-between p-2.5">
+									<div className="flex items-center gap-2">
+										<span className="font-medium text-sm">
+											{skillInfo.skill}
+										</span>
+										{skillInfo.source && (
+											<VSCodeBadge style={{ fontSize: "calc(var(--vscode-font-size) - 2px)" }}>
+												{skillInfo.source}
+											</VSCodeBadge>
+										)}
+									</div>
+									<span
+										className={`codicon codicon-chevron-${isExpanded ? "up" : "down"} opacity-0 group-hover:opacity-100 transition-opacity duration-200`}></span>
+								</ToolUseBlockHeader>
+								{isExpanded && (skillInfo.args || skillInfo.description) && (
+									<div className="px-3 py-2 border-t border-border/20 flex flex-col gap-2 text-xs">
+										{skillInfo.description && (
+											<div className="text-muted-foreground">
+												{skillInfo.description}
+											</div>
+										)}
+										{skillInfo.args && (
+											<div>
+												<span className="font-medium">Arguments: </span>
+												<span className="text-muted-foreground">
+													{skillInfo.args}
+												</span>
+											</div>
+										)}
+									</div>
+								)}
+							</div>
+						</>
+					)
+				}
+
 				return (
-					<>
-						<div style={headerStyle}>
-							{toolIcon("book")}
-							<span style={{ fontWeight: "bold" }}>
-								{message.type === "ask" ? t("chat:skill.wantsToLoad") : t("chat:skill.didLoad")}
-							</span>
-						</div>
-						<div
-							className="mt-1 rounded-lg border border-border/30 bg-card/40 overflow-hidden cursor-pointer"
-							onClick={handleToggleExpand}>
-							<ToolUseBlockHeader
-								className="group flex items-center justify-between p-2.5">
-								<div className="flex items-center gap-2">
-									<span className="font-medium text-sm">
-										{skillInfo.skill}
-									</span>
-									{skillInfo.source && (
-										<VSCodeBadge style={{ fontSize: "calc(var(--vscode-font-size) - 2px)" }}>
-											{skillInfo.source}
-										</VSCodeBadge>
-									)}
-								</div>
-								<span
-									className={`codicon codicon-chevron-${isExpanded ? "up" : "down"} opacity-0 group-hover:opacity-100 transition-opacity duration-200`}></span>
-							</ToolUseBlockHeader>
-							{isExpanded && (skillInfo.args || skillInfo.description) && (
-								<div className="px-3 py-2 border-t border-border/20 flex flex-col gap-2 text-xs">
-									{skillInfo.description && (
-										<div className="text-muted-foreground">
-											{skillInfo.description}
-										</div>
-									)}
-									{skillInfo.args && (
-										<div>
-											<span className="font-medium">Arguments: </span>
-											<span className="text-muted-foreground">
-												{skillInfo.args}
-											</span>
-										</div>
-									)}
-								</div>
-							)}
-						</div>
-					</>
+					<div
+						className="inline-flex flex-wrap items-center gap-1.5 py-1 px-2.5 my-0.5 rounded-md bg-secondary/25 hover:bg-secondary/40 border border-border/20 text-xs cursor-pointer transition-colors max-w-full"
+						onClick={handleToggleExpand}>
+						{toolIcon("book")}
+						<span className="text-muted-foreground">
+							{t("chat:skill.didLoad", { defaultValue: "Loaded skill:" })}
+						</span>
+						<span className="font-mono font-medium text-foreground">
+							{skillInfo.skill}
+						</span>
+						{skillInfo.source && (
+							<VSCodeBadge style={{ fontSize: "calc(var(--vscode-font-size) - 2px)" }}>
+								{skillInfo.source}
+							</VSCodeBadge>
+						)}
+						{(skillInfo.args || skillInfo.description) && (
+							<span className={`codicon codicon-chevron-${isExpanded ? "up" : "down"} text-muted-foreground ml-0.5`} />
+						)}
+						{isExpanded && (skillInfo.args || skillInfo.description) && (
+							<div className="w-full mt-1.5 pt-1.5 border-t border-border/20 flex flex-col gap-1 text-[11px] text-muted-foreground">
+								{skillInfo.description && <div>{skillInfo.description}</div>}
+								{skillInfo.args && (
+									<div>
+										<span className="font-medium text-foreground">Arguments: </span>
+										<span>{skillInfo.args}</span>
+									</div>
+								)}
+							</div>
+						)}
+					</div>
 				)
 			}
 			case "listFilesTopLevel":
@@ -1167,27 +1205,28 @@ export const ChatRowContent = ({
 					return (
 						<>
 							<div
-								className={`group text-sm transition-opacity ${
-									isApiRequestInProgress ? "opacity-100" : "opacity-40 hover:opacity-100"
+								className={`group text-xs transition-opacity ${
+									isApiRequestInProgress ? "opacity-100" : "opacity-45 hover:opacity-100"
 								}`}
 								style={{
 									...headerStyle,
 									marginBottom:
 										((cost === null || cost === undefined) && apiRequestFailedMessage) ||
 										apiReqStreamingFailedMessage
-											? 10
+											? 8
 											: 0,
 									justifyContent: "space-between",
 								}}>
-								<div style={{ display: "flex", alignItems: "center", gap: "10px", flexGrow: 1 }}>
+								<div style={{ display: "flex", alignItems: "center", gap: "8px", flexGrow: 1 }}>
 									{icon}
 									{title}
 								</div>
-								<div
-									className="text-xs text-vscode-dropdown-foreground border-vscode-dropdown-border/50 border px-1.5 py-0.5 rounded-lg"
-									style={{ opacity: cost !== null && cost !== undefined && cost > 0 ? 1 : 0 }}>
-									${Number(cost || 0)?.toFixed(4)}
-								</div>
+								{cost !== null && cost !== undefined && cost > 0 && (
+									<div
+										className="text-[11px] font-mono text-vscode-descriptionForeground border-vscode-dropdown-border/40 border px-1.5 py-0.5 rounded">
+										${Number(cost || 0)?.toFixed(4)}
+									</div>
+								)}
 							</div>
 							{(((cost === null || cost === undefined) && apiRequestFailedMessage) ||
 								apiReqStreamingFailedMessage) && (
@@ -1319,7 +1358,7 @@ export const ChatRowContent = ({
 								<div style={{ flexGrow: 1 }} />
 								<OpenMarkdownPreviewButton markdown={message.text} />
 							</div>
-							<div className="border-l-2 border-border/30 ml-2 pl-3 pb-0.5">
+							<div className="border-l-2 border-border/30 ml-2 pl-3 pb-0.5 prose-measure">
 								<Markdown markdown={message.text} partial={message.partial} />
 								{message.images && message.images.length > 0 && (
 									<div style={{ marginTop: "10px" }}>
@@ -1340,7 +1379,7 @@ export const ChatRowContent = ({
 							</div>
 							<div
 								className={cn(
-									"ml-5 border rounded-lg overflow-hidden whitespace-pre-wrap transition-colors",
+									"ml-5 border rounded-lg overflow-hidden whitespace-pre-wrap transition-colors prose-measure",
 									isEditing
 										? "bg-card text-foreground border-border/40 p-2"
 										: "cursor-text p-2.5 bg-card/60 hover:bg-card/80 border-l-2 border-l-vscode-focusBorder border-y border-r border-border/30 text-foreground",
@@ -1465,7 +1504,7 @@ export const ChatRowContent = ({
 								<div style={{ flexGrow: 1 }} />
 								<OpenMarkdownPreviewButton markdown={message.text} />
 							</div>
-							<div className={`border-l-2 ${borderColor} ml-2 pl-3 pb-1`}>
+							<div className={`border-l-2 ${borderColor} ml-2 pl-3 pb-1 prose-measure`}>
 								<Markdown markdown={message.text} />
 							</div>
 						</div>

@@ -1128,7 +1128,7 @@ body.light-theme .header-action-btn:hover {
 
 /* Warning badge for tasks needing user action */
 .sidebar-chat-item .chat-status-badge.needs-attention {
-	color: #f59e0b;
+	color: var(--warning, #f59e0b);
 	font-weight: 800;
 	font-size: 11px;
 	line-height: 1;
@@ -3295,4 +3295,19 @@ body.light-theme .sidebar-context-menu .context-menu-divider {
 	margin: 0;
 	white-space: pre-line;
 }
+
+/* Smooth in-place conversation title update */
+.chat-title.title-updated {
+	animation: chatTitleFadeIn 0.25s ease-out;
+}
+
+@keyframes chatTitleFadeIn {
+	from {
+		opacity: 0.6;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
 

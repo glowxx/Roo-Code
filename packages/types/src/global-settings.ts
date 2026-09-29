@@ -253,6 +253,18 @@ export const globalSettingsSchema = z.object({
 	 * Persisted across sessions via ContextProxy to prevent cold-start context window collapse.
 	 */
 	openAiModelInfos: z.record(z.string(), modelInfoSchema).optional(),
+
+	/**
+	 * Last manually selected model by the user in the model selector.
+	 * Used as a default preference for new and unassigned chats.
+	 */
+	lastManuallySelectedModel: z
+		.object({
+			modelId: z.string().optional(),
+			provider: z.string().optional(),
+			reasoningEffort: z.string().optional(),
+		})
+		.optional(),
 })
 
 export type GlobalSettings = z.infer<typeof globalSettingsSchema>

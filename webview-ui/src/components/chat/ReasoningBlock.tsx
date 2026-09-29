@@ -45,21 +45,37 @@ export const ReasoningBlock = ({ content, isStreaming, isLast }: ReasoningBlockP
 	}
 
 	return (
-		<div className="group">
+		<div className="group my-1">
 			<div
-				className="flex items-center justify-between mb-2.5 pr-2 cursor-pointer select-none"
+				className={cn(
+					"flex items-center justify-between py-1 px-2 rounded-lg border transition-all cursor-pointer select-none text-xs",
+					isStreaming && isLast
+						? "bg-primary/[0.06] border-primary/30 text-vscode-foreground font-medium shadow-xs"
+						: "border-transparent text-vscode-descriptionForeground opacity-70 hover:opacity-100 hover:bg-vscode-input-background/40",
+				)}
 				onClick={handleToggle}>
 				<div className="flex items-center gap-2">
-					<Lightbulb className="w-4" />
-					<span className="font-bold text-vscode-foreground">{t("chat:reasoning.thinking")}</span>
+					{isStreaming && isLast ? (
+						<span className="relative flex h-2 w-2">
+							<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+							<span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+						</span>
+					) : (
+						<Lightbulb className="w-3.5 h-3.5 shrink-0" />
+					)}
+					<span className={cn(isStreaming && isLast ? "font-semibold text-primary" : "font-medium")}>
+						{t("chat:reasoning.thinking")}
+					</span>
 					{elapsed > 0 && (
-						<span className="text-sm text-vscode-descriptionForeground mt-0.5">{secondsLabel}</span>
+						<span className="text-[11px] opacity-80 font-mono">
+							{secondsLabel}
+						</span>
 					)}
 				</div>
 				<div className="flex items-center gap-2">
 					<ChevronUp
 						className={cn(
-							"w-4 transition-all opacity-0 group-hover:opacity-100",
+							"w-3.5 h-3.5 transition-transform duration-200 opacity-0 group-hover:opacity-100",
 							isCollapsed && "-rotate-180",
 						)}
 					/>
@@ -68,7 +84,7 @@ export const ReasoningBlock = ({ content, isStreaming, isLast }: ReasoningBlockP
 			{(content?.trim()?.length ?? 0) > 0 && !isCollapsed && (
 				<div
 					ref={contentRef}
-					className="border-l border-vscode-descriptionForeground/20 ml-2 pl-4 pb-1 text-vscode-descriptionForeground break-words">
+					className="border-l border-vscode-descriptionForeground/20 ml-3 pl-3.5 py-1 text-vscode-descriptionForeground break-words prose-measure text-xs">
 					<MarkdownBlock markdown={content} />
 				</div>
 			)}
