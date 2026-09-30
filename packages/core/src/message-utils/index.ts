@@ -1,6 +1,7 @@
 export {
 	type ParsedApiReqStartedTextType,
 	consolidateTokenUsage,
+	consolidateReportedTokenUsage,
 	hasTokenUsageChanged,
 	hasToolUsageChanged,
 } from "./consolidateTokenUsage.js"

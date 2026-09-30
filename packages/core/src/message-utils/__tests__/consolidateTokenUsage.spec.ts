@@ -2,7 +2,39 @@
 
 import type { ClineMessage } from "@roo-code/types"
 
-import { consolidateTokenUsage, hasTokenUsageChanged, hasToolUsageChanged } from "../consolidateTokenUsage.js"
+import { consolidateTokenUsage, consolidateReportedTokenUsage, hasTokenUsageChanged, hasToolUsageChanged } from "../consolidateTokenUsage.js"
+
+describe("consolidateReportedTokenUsage", () => {
+	it("sums provider usage without adding cached or reasoning tokens twice", () => {
+		const messages = [
+			{ ts: 1, type: "say", say: "api_req_started", text: JSON.stringify({ tokensIn: 100, tokensOut: 40, cacheReads: 30, reasoningTokens: 10, tokenUsageSource: "provider" }) },
+			{ ts: 2, type: "say", say: "api_req_started", text: JSON.stringify({ tokensIn: 200, tokensOut: 60, cacheReads: 20, tokenUsageSource: "provider" }) },
+		] as any
+		expect(consolidateReportedTokenUsage(messages)).toEqual({ inputTokens: 300, outputTokens: 100, incomplete: false, requestsWithUsage: 2 })
+	})
+
+	it("marks missing and estimated usage as incomplete without inventing totals", () => {
+		const messages = [
+			{ ts: 1, type: "say", say: "api_req_started", text: JSON.stringify({ tokensIn: 100, tokensOut: 20, tokenUsageSource: "provider" }) },
+			{ ts: 2, type: "say", say: "api_req_started", text: JSON.stringify({ tokensIn: 900, tokensOut: 80, tokenUsageSource: "estimated" }) },
+			{ ts: 3, type: "say", say: "api_req_started", text: JSON.stringify({ apiProtocol: "openai" }) },
+		] as any
+		expect(consolidateReportedTokenUsage(messages)).toEqual({ inputTokens: 100, outputTokens: 20, incomplete: true, requestsWithUsage: 1 })
+	})
+
+	it("updates when a streaming request receives final usage and survives serialized reopen", () => {
+		const messages = [{ ts: 1, type: "say", say: "api_req_started", text: JSON.stringify({ apiProtocol: "openai" }) }] as ClineMessage[]
+		expect(consolidateReportedTokenUsage(messages).incomplete).toBe(true)
+		messages[0]!.text = JSON.stringify({ tokensIn: 42, tokensOut: 7, tokenUsageSource: "provider" })
+		const reopened = JSON.parse(JSON.stringify(messages)) as ClineMessage[]
+		expect(consolidateReportedTokenUsage(reopened)).toEqual({ inputTokens: 42, outputTokens: 7, incomplete: false, requestsWithUsage: 1 })
+	})
+
+	it("rejects malformed negative token counts", () => {
+		const messages = [{ ts: 1, type: "say", say: "api_req_started", text: JSON.stringify({ tokensIn: -1, tokensOut: 7, tokenUsageSource: "provider" }) }] as ClineMessage[]
+		expect(consolidateReportedTokenUsage(messages)).toEqual({ inputTokens: 0, outputTokens: 0, incomplete: true, requestsWithUsage: 0 })
+	})
+})
 
 describe("consolidateTokenUsage", () => {
 	// Helper function to create a basic api_req_started message

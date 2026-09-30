@@ -7,7 +7,6 @@ import { LRUCache } from "lru-cache"
 
 import { useDebounceEffect } from "@src/utils/useDebounceEffect"
 import { appendImages } from "@src/utils/imageUtils"
-import { getCostBreakdownIfNeeded } from "@src/utils/costFormatting"
 import { batchConsecutive } from "@src/utils/batchConsecutive"
 
 import type { ClineAsk, ClineSayTool, ClineMessage, ExtensionMessage, AudioType } from "@roo-code/types"
@@ -17,11 +16,11 @@ import { findLast } from "@roo/array"
 import { SuggestionItem } from "@roo-code/types"
 import { combineApiRequests } from "@roo/combineApiRequests"
 import { combineCommandSequences, COMMAND_OUTPUT_STRING } from "@roo/combineCommandSequences"
-import { getApiMetrics } from "@roo/getApiMetrics"
+import { getApiMetrics, consolidateReportedTokenUsage } from "@roo/getApiMetrics"
 import { getAllModes } from "@roo/modes"
 import { ProfileValidator } from "@roo/ProfileValidator"
 import { getLatestTodo } from "@roo/todo"
-import { getLatestUserPrompt, getLatestPromptModifiedMessages } from "./utils/userPrompt"
+import { getLatestUserPrompt } from "./utils/userPrompt"
 
 import { vscode } from "@src/utils/vscode"
 import { openSettings } from "@src/utils/settingsNavigation"
@@ -142,29 +141,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	// Has to be after api_req_finished are all reduced into api_req_started messages.
 	const apiMetrics = useMemo(() => getApiMetrics(modifiedMessages), [modifiedMessages])
-
-	const latestPromptModifiedMessages = useMemo(
-		() => getLatestPromptModifiedMessages(modifiedMessages, latestUserPrompt, task),
-		[modifiedMessages, latestUserPrompt, task],
-	)
-
-	// Api metrics for the agent's work in response to the latest user prompt.
-	const latestPromptApiMetrics = useMemo(
-		() => getApiMetrics(latestPromptModifiedMessages),
-		[latestPromptModifiedMessages],
-	)
-
-	// Whether the latest prompt has initiated or completed API requests
-	const hasCompletedWork = useMemo(() => {
-		return (
-			latestPromptApiMetrics.totalTokensIn > 0 ||
-			latestPromptApiMetrics.totalTokensOut > 0 ||
-			latestPromptApiMetrics.totalCost > 0 ||
-			latestPromptModifiedMessages.some(
-				(m) => m.say === "api_req_started" || m.say === "api_req_finished",
-			)
-		)
-	}, [latestPromptApiMetrics, latestPromptModifiedMessages])
+	const reportedUsage = useMemo(() => consolidateReportedTokenUsage(modifiedMessages), [modifiedMessages])
 
 	const [inputValue, setInputValue] = useState("")
 	const inputValueRef = useRef(inputValue)
@@ -203,16 +180,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const autoApproveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 	const userRespondedRef = useRef<boolean>(false)
 	const [currentFollowUpTs, setCurrentFollowUpTs] = useState<number | null>(null)
-	const [aggregatedCostsMap, setAggregatedCostsMap] = useState<
-		Map<
-			string,
-			{
-				totalCost: number
-				ownCost: number
-				childrenCost: number
-			}
-		>
-	>(new Map())
 
 	const clineAskRef = useRef(clineAsk)
 	useEffect(() => {
@@ -682,18 +649,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 		userRespondedRef.current = false
 	}, [task?.ts])
-
-	const taskTs = task?.ts
-
-	// Request aggregated costs when task changes and has childIds
-	useEffect(() => {
-		if (taskTs && currentTaskItem?.childIds && currentTaskItem.childIds.length > 0) {
-			vscode.postMessage({
-				type: "getTaskWithAggregatedCosts",
-				text: currentTaskItem.id,
-			})
-		}
-	}, [taskTs, currentTaskItem?.id, currentTaskItem?.childIds])
 
 	useEffect(() => {
 		if (isHidden) {
@@ -1273,15 +1228,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					break
 				case "interactionRequired":
 					playSound("notification")
-					break
-				case "taskWithAggregatedCosts":
-					if (message.text && message.aggregatedCosts) {
-						setAggregatedCostsMap((prev) => {
-							const newMap = new Map(prev)
-							newMap.set(message.text!, message.aggregatedCosts!)
-							return newMap
-						})
-					}
 					break
 			}
 			// textAreaRef.current is not explicitly required here since React
@@ -1966,36 +1912,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					<TaskHeader
 						task={task}
 						latestUserPrompt={latestUserPrompt}
-						tokensIn={latestPromptApiMetrics.totalTokensIn}
-						tokensOut={latestPromptApiMetrics.totalTokensOut}
-						cacheWrites={latestPromptApiMetrics.totalCacheWrites}
-						cacheReads={latestPromptApiMetrics.totalCacheReads}
-						latestPromptCost={latestPromptApiMetrics.totalCost}
-						totalCost={apiMetrics.totalCost}
-						costSource={latestPromptApiMetrics.costSource ?? apiMetrics.costSource}
-						precision={latestPromptApiMetrics.precision ?? apiMetrics.precision}
-						hasCompletedWork={hasCompletedWork}
-						aggregatedCost={
-							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
-								? aggregatedCostsMap.get(currentTaskItem.id)!.totalCost
-								: undefined
-						}
-						hasSubtasks={
-							!!(
-								currentTaskItem?.id &&
-								aggregatedCostsMap.has(currentTaskItem.id) &&
-								aggregatedCostsMap.get(currentTaskItem.id)!.childrenCost > 0
-							)
-						}
+						tokensIn={reportedUsage.inputTokens}
+						tokensOut={reportedUsage.outputTokens}
+						usageIncomplete={reportedUsage.incomplete}
+						requestsWithUsage={reportedUsage.requestsWithUsage}
+						cacheWrites={apiMetrics.totalCacheWrites}
+						cacheReads={apiMetrics.totalCacheReads}
 						parentTaskId={currentTaskItem?.parentTaskId}
-						costBreakdown={
-							currentTaskItem?.id && aggregatedCostsMap.has(currentTaskItem.id)
-								? getCostBreakdownIfNeeded(aggregatedCostsMap.get(currentTaskItem.id)!, {
-										own: t("common:costs.own"),
-										subtasks: t("common:costs.subtasks"),
-								  })
-								: undefined
-						}
 						contextTokens={apiMetrics.contextTokens}
 						buttonsDisabled={sendingDisabled}
 						isCondensing={isCondensing}

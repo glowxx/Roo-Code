@@ -9,6 +9,44 @@ export type ParsedApiReqStartedTextType = {
 	costSource?: CostSource
 	precision?: CostPrecision
 	apiProtocol?: "anthropic" | "openai"
+	tokenUsageSource?: "provider" | "estimated" | "unavailable"
+	cancelReason?: string
+}
+
+/** Totals that can be attributed to provider usage events, excluding local estimates. */
+export function consolidateReportedTokenUsage(messages: ClineMessage[]): {
+	inputTokens: number
+	outputTokens: number
+	incomplete: boolean
+	requestsWithUsage: number
+} {
+	let inputTokens = 0
+	let outputTokens = 0
+	let incomplete = false
+	let requestsWithUsage = 0
+	for (const message of messages) {
+		if (message.type !== "say" || message.say !== "api_req_started") continue
+		let usage: ParsedApiReqStartedTextType
+		try {
+			usage = JSON.parse(message.text || "{}")
+		} catch {
+			incomplete = true
+			continue
+		}
+		if (
+			usage.tokenUsageSource !== "provider" ||
+			typeof usage.tokensIn !== "number" || !Number.isFinite(usage.tokensIn) || usage.tokensIn < 0 ||
+			typeof usage.tokensOut !== "number" || !Number.isFinite(usage.tokensOut) || usage.tokensOut < 0
+		) {
+			incomplete = true
+			continue
+		}
+		inputTokens += usage.tokensIn
+		outputTokens += usage.tokensOut
+		requestsWithUsage++
+		if (usage.cancelReason) incomplete = true
+	}
+	return { inputTokens, outputTokens, incomplete, requestsWithUsage }
 }
 
 /**

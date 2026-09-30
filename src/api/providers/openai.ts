@@ -385,7 +385,9 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 				text: message?.content || "",
 			}
 
-			yield this.processUsageMetrics(response.usage, modelInfo)
+			if (response.usage) {
+				yield this.processUsageMetrics(response.usage, modelInfo)
+			}
 		}
 	}
 

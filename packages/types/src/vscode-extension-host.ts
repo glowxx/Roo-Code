@@ -822,6 +822,7 @@ export interface ClineApiReqInfo {
 	request?: string
 	tokensIn?: number
 	tokensOut?: number
+	tokenUsageSource?: "provider" | "estimated" | "unavailable"
 	cacheWrites?: number
 	cacheReads?: number
 	cost?: number

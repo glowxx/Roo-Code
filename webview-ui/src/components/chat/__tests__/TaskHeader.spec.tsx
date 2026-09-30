@@ -97,7 +97,7 @@ describe("TaskHeader", () => {
 		task: { type: "say", ts: Date.now(), text: "Test task", images: [] },
 		tokensIn: 100,
 		tokensOut: 50,
-		totalCost: 0.05,
+		requestsWithUsage: 1,
 		contextTokens: 200,
 		buttonsDisabled: false,
 		handleCondenseContext: vi.fn(),
@@ -113,31 +113,18 @@ describe("TaskHeader", () => {
 		)
 	}
 
-	it("should display cost when totalCost is greater than 0", () => {
+	it("shows separate provider input and output totals without cost", () => {
 		renderTaskHeader()
-		expect(screen.getByText("$0.05")).toBeInTheDocument()
+		expect(screen.getByTestId("task-token-usage")).toHaveTextContent("chat:task.inputTokens 100")
+		expect(screen.getByTestId("task-token-usage")).toHaveTextContent("chat:task.outputTokens 50")
+		expect(screen.queryByText(/\\$/)).not.toBeInTheDocument()
 	})
 
-	it("should not display cost when totalCost is 0", () => {
-		renderTaskHeader({ totalCost: 0 })
-		expect(screen.queryByText("$0.0000")).not.toBeInTheDocument()
+	it("shows unavailable usage instead of an invented zero", () => {
+		renderTaskHeader({ tokensIn: 0, tokensOut: 0, requestsWithUsage: 0, usageIncomplete: true })
+		expect(screen.getByTestId("task-token-usage")).toHaveTextContent("chat:task.inputTokens —")
+		expect(screen.getByTestId("task-token-usage")).toHaveTextContent("(chat:task.partial)")
 	})
-
-	it("should not display cost when totalCost is null", () => {
-		renderTaskHeader({ totalCost: null as any })
-		expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
-	})
-
-	it("should not display cost when totalCost is undefined", () => {
-		renderTaskHeader({ totalCost: undefined as any })
-		expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
-	})
-
-	it("should not display cost when totalCost is NaN", () => {
-		renderTaskHeader({ totalCost: NaN })
-		expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
-	})
-
 	it("should render the condense context button when expanded", () => {
 		renderTaskHeader()
 		// First click to expand the task header
@@ -346,41 +333,13 @@ describe("TaskHeader", () => {
 		})
 	})
 
-	describe("Prompt Cost and Total API Cost isolation", () => {
-		it("shows latest prompt cost in compact header when provided", () => {
-			renderTaskHeader({
-				totalCost: 1.5,
-				latestPromptCost: 0.12,
-			})
-			const compactCost = screen.getByTestId("compact-prompt-cost")
-			expect(compactCost).toHaveTextContent("$0.12")
-		})
-
-		it("shows $0.00 prompt cost when hasCompletedWork is true", () => {
-			renderTaskHeader({
-				totalCost: 0,
-				latestPromptCost: 0,
-				hasCompletedWork: true,
-			})
-			const compactCost = screen.getByTestId("compact-prompt-cost")
-			expect(compactCost).toHaveTextContent("$0.00")
-		})
-
-		it("displays both Prompt Cost and Total API Cost in expanded header", () => {
-			renderTaskHeader({
-				totalCost: 2.75,
-				latestPromptCost: 0.45,
-			})
-
-			// Click to expand task header
+	describe("Task token usage", () => {
+		it("shows the same task totals when expanded", () => {
+			renderTaskHeader({ tokensIn: 1250, tokensOut: 300, requestsWithUsage: 2 })
 			const headerCard = screen.getByText("Test task").closest(".cursor-pointer")
 			fireEvent.click(headerCard!)
-
-			const promptCost = screen.getByTestId("expanded-prompt-cost")
-			const totalCost = screen.getByTestId("expanded-total-cost")
-
-			expect(promptCost).toHaveTextContent("$0.45")
-			expect(totalCost).toHaveTextContent("$2.75")
+			expect(screen.getByText(/chat:task.inputTokens/)).toBeInTheDocument()
+			expect(screen.queryByText(/\\$/)).not.toBeInTheDocument()
 		})
 	})
 })

@@ -1,9 +1,19 @@
 import { memo, useRef, useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { ChevronUp, ChevronDown, HardDriveDownload, HardDriveUpload, FoldVertical, ArrowLeft, Plus, Square, Loader2 } from "lucide-react"
+import {
+	ChevronUp,
+	ChevronDown,
+	HardDriveDownload,
+	HardDriveUpload,
+	FoldVertical,
+	ArrowLeft,
+	Plus,
+	Square,
+	Loader2,
+} from "lucide-react"
 import prettyBytes from "pretty-bytes"
 
-import { type ClineMessage, type CostPrecision, type CostSource, getModelContextWindow } from "@roo-code/types"
+import { type ClineMessage, getModelContextWindow } from "@roo-code/types"
 
 import { getModelMaxOutputTokens } from "@roo/api"
 
@@ -26,17 +36,11 @@ export interface TaskHeaderProps {
 	latestUserPrompt?: ClineMessage
 	tokensIn: number
 	tokensOut: number
+	usageIncomplete?: boolean
+	requestsWithUsage?: number
 	cacheWrites?: number
 	cacheReads?: number
-	totalCost: number
-	latestPromptCost?: number
-	costSource?: CostSource
-	precision?: CostPrecision
-	hasCompletedWork?: boolean
-	aggregatedCost?: number
-	hasSubtasks?: boolean
 	parentTaskId?: string
-	costBreakdown?: string
 	contextTokens: number
 	buttonsDisabled: boolean
 	isCondensing?: boolean
@@ -53,17 +57,11 @@ const TaskHeader = ({
 	latestUserPrompt,
 	tokensIn,
 	tokensOut,
+	usageIncomplete = false,
+	requestsWithUsage = 0,
 	cacheWrites,
 	cacheReads,
-	totalCost,
-	latestPromptCost,
-	costSource,
-	precision,
-	hasCompletedWork = false,
-	aggregatedCost,
-	hasSubtasks,
 	parentTaskId,
-	costBreakdown,
 	contextTokens,
 	buttonsDisabled,
 	isCondensing = false,
@@ -143,59 +141,6 @@ const TaskHeader = ({
 		}
 	}
 
-	const displayPromptCost = latestPromptCost ?? totalCost
-	const shouldShowPromptCost = displayPromptCost > 0 || (hasCompletedWork && displayPromptCost >= 0)
-
-	const formatCost = (val: number) => {
-		if (val === 0) return "$0.00"
-		if (val < 0.01) return `$${val.toFixed(4)}`
-		return `$${val.toFixed(2)}`
-	}
-
-	const getCostTooltip = (cost: number, isPrompt: boolean) => {
-		const sourceLabel =
-			costSource === "provider-reported"
-				? "Provider reported / billed"
-				: costSource === "live-provider-pricing"
-					? "Live provider pricing (/models)"
-					: costSource === "configured-pricing"
-						? "Configured rate / discount"
-						: "Catalog estimate"
-
-		const precisionLabel = precision === "exact" ? "Exact" : "Estimated"
-
-		return (
-			<div className="space-y-1 text-xs text-left">
-				<div className="font-semibold">
-					{isPrompt
-						? t("chat:costs.promptCostTooltip", {
-								defaultValue: "Current prompt cost: ${{cost}}",
-								cost: cost < 0.01 && cost > 0 ? cost.toFixed(4) : cost.toFixed(2),
-							})
-						: t("chat:costs.total", {
-								cost: cost < 0.01 && cost > 0 ? cost.toFixed(4) : cost.toFixed(2),
-							})}
-				</div>
-				<div className="flex items-center gap-1.5 opacity-90">
-					<span className="font-medium">Status:</span>
-					<span className={precision === "exact" ? "text-green-400 font-medium" : "text-amber-400"}>
-						{precisionLabel}
-					</span>
-				</div>
-				<div className="opacity-80">
-					<span className="font-medium">Source:</span> {sourceLabel}
-				</div>
-				{apiConfiguration?.apiProvider === "xkiro" && (
-					<div className="opacity-80 border-t border-border/50 pt-1 text-[11px]">
-						{(apiConfiguration as any)?.xkiroDiscountMultiplier !== undefined
-							? `xKiro discount: ${Math.round((1 - (apiConfiguration as any).xkiroDiscountMultiplier) * 100)}% promo applied`
-							: "xKiro active account promo may apply on provider dashboard"}
-					</div>
-				)}
-			</div>
-		)
-	}
-
 	return (
 		<div className="conversation-canvas group pt-1 pb-0">
 			{isSubtask && (
@@ -258,13 +203,19 @@ const TaskHeader = ({
 						<div className="flex items-center shrink-0 ml-2 gap-1" onClick={(e) => e.stopPropagation()}>
 							{(isTaskActive || isStopping) && onStop && (
 								<StandardTooltip
-									content={isStopping ? t("chat:stopping.title", "Stopping task...") : t("chat:stop.title")}>
+									content={
+										isStopping ? t("chat:stopping.title", "Stopping task...") : t("chat:stop.title")
+									}>
 									<button
 										onClick={onStop}
 										disabled={isStopping}
 										data-testid="header-stop-btn"
 										className="shrink-0 min-h-[20px] min-w-[20px] p-[2px] cursor-pointer opacity-85 hover:opacity-100 hover:bg-vscode-toolbar-hoverBackground bg-transparent border-none rounded-md transition-colors text-red-400 hover:text-red-300"
-										aria-label={isStopping ? t("chat:stopping.title", "Stopping task...") : t("chat:stop.title")}>
+										aria-label={
+											isStopping
+												? t("chat:stopping.title", "Stopping task...")
+												: t("chat:stop.title")
+										}>
 										{isStopping ? (
 											<Loader2 size={16} className="animate-spin" />
 										) : (
@@ -298,34 +249,25 @@ const TaskHeader = ({
 				</div>
 				{!isTaskExpanded && (
 					<div
-						className="flex items-center justify-between text-sm text-muted-foreground/70"
+						className="flex items-center gap-2 text-xs text-vscode-descriptionForeground"
 						onClick={(e) => e.stopPropagation()}>
-						<div className="flex items-center gap-2">
-							{compactButton}
-							{shouldShowPromptCost && (
-								<>
-									<span>·</span>
-									<StandardTooltip
-										content={getCostTooltip(displayPromptCost, true)}
-										side="top"
-										sideOffset={8}>
-										<span data-testid="compact-prompt-cost" className="inline-flex items-center gap-1">
-											{precision === "estimated" && (
-												<span className="opacity-60 text-[10px]" title="Estimated">
-													~
-												</span>
-											)}
-											{formatCost(displayPromptCost)}
-											{costSource === "provider-reported" && (
-												<span className="text-[10px] text-green-500 font-medium">
-													(billed)
-												</span>
-											)}
-										</span>
-									</StandardTooltip>
-								</>
+						{compactButton}
+						<span data-testid="task-token-usage" className="inline-flex items-center gap-1.5">
+							<span title={requestsWithUsage ? String(tokensIn) : undefined}>
+								{t("chat:task.inputTokens", "Input")}{" "}
+								{requestsWithUsage ? formatLargeNumber(tokensIn) : "—"}
+							</span>
+							<span aria-hidden="true">·</span>
+							<span title={requestsWithUsage ? String(tokensOut) : undefined}>
+								{t("chat:task.outputTokens", "Output")}{" "}
+								{requestsWithUsage ? formatLargeNumber(tokensOut) : "—"}
+							</span>
+							{usageIncomplete && (
+								<span title={t("chat:task.partialUsage", "Some requests have no provider usage data")}>
+									({t("chat:task.partial", "partial")})
+								</span>
 							)}
-						</div>
+						</span>
 					</div>
 				)}
 				{/* Expanded state: Show task text and images */}
@@ -345,7 +287,9 @@ const TaskHeader = ({
 								<Mention text={displayPrompt.text} />
 							</div>
 						</div>
-						{displayPrompt.images && displayPrompt.images.length > 0 && <Thumbnails images={displayPrompt.images} />}
+						{displayPrompt.images && displayPrompt.images.length > 0 && (
+							<Thumbnails images={displayPrompt.images} />
+						)}
 
 						<div onClick={(e) => e.stopPropagation()}>
 							<TaskActions item={currentTaskItem ?? undefined} buttonsDisabled={buttonsDisabled} />
@@ -361,24 +305,26 @@ const TaskHeader = ({
 											{t("chat:task.contextWindow")}
 										</th>
 										<td className="font-light align-top">
-											<div className="flex items-center gap-1 -mt-1">
-												{compactButton}
-											</div>
+											<div className="flex items-center gap-1 -mt-1">{compactButton}</div>
 										</td>
 									</tr>
 
 									<tr>
 										<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">
-											{t("chat:task.tokens")}
+											{t("chat:task.tokens", "Tokens")}
 										</th>
 										<td className="font-light align-top">
 											<div className="flex items-center gap-1 flex-wrap">
-												{typeof tokensIn === "number" && tokensIn > 0 && (
-													<span>↑ {formatLargeNumber(tokensIn)}</span>
-												)}
-												{typeof tokensOut === "number" && tokensOut > 0 && (
-													<span>↓ {formatLargeNumber(tokensOut)}</span>
-												)}
+												<span>
+													{t("chat:task.inputTokens", "Input")}{" "}
+													{requestsWithUsage ? formatLargeNumber(tokensIn) : "—"}
+												</span>
+												<span>·</span>
+												<span>
+													{t("chat:task.outputTokens", "Output")}{" "}
+													{requestsWithUsage ? formatLargeNumber(tokensOut) : "—"}
+												</span>
+												{usageIncomplete && <span>({t("chat:task.partial", "partial")})</span>}
 											</div>
 										</td>
 									</tr>
@@ -404,79 +350,6 @@ const TaskHeader = ({
 														</>
 													)}
 												</div>
-											</td>
-										</tr>
-									)}
-
-									{shouldShowPromptCost && (
-										<tr>
-											<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">
-												{t("chat:task.promptCost", "Prompt Cost")}
-											</th>
-											<td className="font-light align-top">
-												<StandardTooltip
-													content={getCostTooltip(displayPromptCost, true)}
-													side="top"
-													sideOffset={8}>
-													<span data-testid="expanded-prompt-cost" className="inline-flex items-center gap-1">
-														{precision === "estimated" && (
-															<span className="opacity-60 text-[10px]" title="Estimated">
-																~
-															</span>
-														)}
-														{formatCost(displayPromptCost)}
-														{costSource === "provider-reported" && (
-															<span className="text-[10px] text-green-500 font-medium">
-																(billed)
-															</span>
-														)}
-													</span>
-												</StandardTooltip>
-											</td>
-										</tr>
-									)}
-
-									{(totalCost > 0 || hasSubtasks) && (
-										<tr>
-											<th className="font-medium text-left align-top w-1 whitespace-nowrap pr-3 h-[24px]">
-												{t("chat:task.apiCost")}
-											</th>
-											<td className="font-light align-top">
-												<StandardTooltip
-													content={
-														hasSubtasks ? (
-															<div>
-																<div>
-																	{t("chat:costs.totalWithSubtasks", {
-																		cost: (aggregatedCost ?? totalCost).toFixed(2),
-																	})}
-																</div>
-																{costBreakdown && (
-																	<div className="text-xs mt-1">{costBreakdown}</div>
-																)}
-															</div>
-														) : (
-															getCostTooltip(totalCost, false)
-														)
-													}
-													side="top"
-													sideOffset={8}>
-													<span data-testid="expanded-total-cost" className="inline-flex items-center gap-1">
-														{precision === "estimated" && (
-															<span className="opacity-60 text-[10px]" title="Estimated">
-																~
-															</span>
-														)}
-														{formatCost(aggregatedCost ?? totalCost)}
-														{hasSubtasks && (
-															<span
-																className="text-xs ml-1"
-																title={t("chat:costs.includesSubtasks")}>
-																*
-															</span>
-														)}
-													</span>
-												</StandardTooltip>
 											</td>
 										</tr>
 									)}
