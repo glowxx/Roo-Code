@@ -4440,8 +4440,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							precision = "estimated"
 						} else if (
 							(this.apiConfiguration as any).xkiroCustomModelInfo ||
-							this.apiConfiguration.openAiCustomModelInfo ||
-							(this.apiConfiguration as any).xkiroDiscountMultiplier !== undefined
+							this.apiConfiguration.openAiCustomModelInfo
 						) {
 							costSource = "configured-pricing"
 							precision = "exact"

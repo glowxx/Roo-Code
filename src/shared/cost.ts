@@ -10,24 +10,8 @@ export interface ApiCostResult {
 
 export interface CostCalculationOptions {
 	serviceTier?: ServiceTier
-	discountMultiplier?: number
 	costSource?: CostSource
 	precision?: CostPrecision
-}
-
-function applyDiscountMultiplier(modelInfo: ModelInfo, discountMultiplier?: number): ModelInfo {
-	if (discountMultiplier === undefined || discountMultiplier === 1) {
-		return modelInfo
-	}
-	return {
-		...modelInfo,
-		inputPrice: modelInfo.inputPrice !== undefined ? modelInfo.inputPrice * discountMultiplier : undefined,
-		outputPrice: modelInfo.outputPrice !== undefined ? modelInfo.outputPrice * discountMultiplier : undefined,
-		cacheWritesPrice:
-			modelInfo.cacheWritesPrice !== undefined ? modelInfo.cacheWritesPrice * discountMultiplier : undefined,
-		cacheReadsPrice:
-			modelInfo.cacheReadsPrice !== undefined ? modelInfo.cacheReadsPrice * discountMultiplier : undefined,
-	}
 }
 
 function applyLongContextPricing(modelInfo: ModelInfo, totalInputTokens: number, serviceTier?: ServiceTier): ModelInfo {
@@ -105,13 +89,8 @@ export function calculateApiCostAnthropic(
 	// Total input = base input + cache creation + cache reads
 	const totalInputTokens = inputTokens + cacheCreation + cacheRead
 
-	let effectiveModelInfo = modelInfo
-	if (options?.discountMultiplier !== undefined && options.discountMultiplier !== 1) {
-		effectiveModelInfo = applyDiscountMultiplier(effectiveModelInfo, options.discountMultiplier)
-	}
-
 	return calculateApiCostInternal(
-		effectiveModelInfo,
+		modelInfo,
 		inputTokens,
 		outputTokens,
 		cacheCreation,
@@ -133,13 +112,11 @@ export function calculateApiCostOpenAI(
 	serviceTierOrOptions?: ServiceTier | CostCalculationOptions,
 ): ApiCostResult {
 	let serviceTier: ServiceTier | undefined
-	let discountMultiplier: number | undefined
 	let costSource: CostSource | undefined
 	let precision: CostPrecision | undefined
 
 	if (typeof serviceTierOrOptions === "object" && serviceTierOrOptions !== null) {
 		serviceTier = serviceTierOrOptions.serviceTier
-		discountMultiplier = serviceTierOrOptions.discountMultiplier
 		costSource = serviceTierOrOptions.costSource
 		precision = serviceTierOrOptions.precision
 	} else if (typeof serviceTierOrOptions === "string") {
@@ -149,10 +126,7 @@ export function calculateApiCostOpenAI(
 	const cacheCreationInputTokensNum = cacheCreationInputTokens || 0
 	const cacheReadInputTokensNum = cacheReadInputTokens || 0
 	const nonCachedInputTokens = Math.max(0, inputTokens - cacheCreationInputTokensNum - cacheReadInputTokensNum)
-	let effectiveModelInfo = applyLongContextPricing(modelInfo, inputTokens, serviceTier)
-	if (discountMultiplier !== undefined && discountMultiplier !== 1) {
-		effectiveModelInfo = applyDiscountMultiplier(effectiveModelInfo, discountMultiplier)
-	}
+	const effectiveModelInfo = applyLongContextPricing(modelInfo, inputTokens, serviceTier)
 
 	// For OpenAI: inputTokens ALREADY includes all tokens (cached + non-cached)
 	// So we pass the original inputTokens as the total

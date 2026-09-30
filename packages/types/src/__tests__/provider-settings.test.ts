@@ -1,4 +1,16 @@
-import { getApiProtocol, getModelId } from "../provider-settings.js"
+import { getApiProtocol, getModelId, providerSettingsSchema, discriminatedProviderSettingsWithIdSchema, PROVIDER_SETTINGS_KEYS } from "../provider-settings.js"
+
+describe("retired xKiro promo setting", () => {
+	it("loads old settings safely and strips the multiplier on save", () => {
+		const oldConfig = { apiProvider: "xkiro", xkiroApiKey: "key", xkiroModelId: "openai/gpt-5", xkiroDiscountMultiplier: 0.5 }
+		const loaded = providerSettingsSchema.parse(oldConfig)
+		const saved = discriminatedProviderSettingsWithIdSchema.parse(oldConfig)
+		expect(loaded).not.toHaveProperty("xkiroDiscountMultiplier")
+		expect(saved).not.toHaveProperty("xkiroDiscountMultiplier")
+		expect(saved).toMatchObject({ apiProvider: "xkiro", xkiroApiKey: "key", xkiroModelId: "openai/gpt-5" })
+		expect(PROVIDER_SETTINGS_KEYS).not.toContain("xkiroDiscountMultiplier")
+	})
+})
 
 describe("getApiProtocol", () => {
 	describe("Anthropic-style providers", () => {

@@ -349,11 +349,6 @@ function getSelectedModel({
 				baseInfo.supportsReasoningEffort ??
 				(modelSupportsReasoning(id, baseInfo) ? true : undefined)
 
-			const discountMultiplier =
-				typeof (apiConfiguration as any).xkiroDiscountMultiplier === "number"
-					? (apiConfiguration as any).xkiroDiscountMultiplier
-					: undefined
-
 			let inputPrice = baseInfo.inputPrice
 			let outputPrice = baseInfo.outputPrice
 			let cacheReadsPrice = baseInfo.cacheReadsPrice
@@ -364,11 +359,6 @@ function getSelectedModel({
 				outputPrice = 0
 				cacheReadsPrice = 0
 				cacheWritesPrice = 0
-			} else if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
-				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
-				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
-				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
-				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
 			}
 
 			const isFree = id.toLowerCase().endsWith(":free") || (inputPrice === 0 && outputPrice === 0)

@@ -893,6 +893,12 @@ describe("useSelectedModel", () => {
 	})
 
 	describe("xkiro provider", () => {
+		it("ignores a persisted promo multiplier and preserves catalog prices and context", () => {
+			const config: ProviderSettings = { apiProvider: "xkiro", xkiroModelId: "openai/gpt-5" }
+			const standard = renderHook(() => useSelectedModel(config), { wrapper: createWrapper() })
+			const legacy = renderHook(() => useSelectedModel({ ...config, ...{ xkiroDiscountMultiplier: 0.5 } }), { wrapper: createWrapper() })
+			expect(legacy.result.current).toEqual(standard.result.current)
+		})
 		it("should return predefined model info for openai/gpt-5 with 400k context window and reasoning effort", () => {
 			const apiConfiguration: ProviderSettings = {
 				apiProvider: "xkiro",

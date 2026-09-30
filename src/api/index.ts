@@ -171,11 +171,6 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				effectiveInfo?.supportsReasoningEffort ??
 				(modelSupportsReasoning(xkiroModelId, effectiveInfo) ? true : undefined)
 
-			const discountMultiplier =
-				typeof (options as any).xkiroDiscountMultiplier === "number"
-					? (options as any).xkiroDiscountMultiplier
-					: undefined
-
 			let inputPrice = effectiveInfo?.inputPrice
 			let outputPrice = effectiveInfo?.outputPrice
 			let cacheReadsPrice = effectiveInfo?.cacheReadsPrice
@@ -186,11 +181,6 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				outputPrice = 0
 				cacheReadsPrice = 0
 				cacheWritesPrice = 0
-			} else if (discountMultiplier !== undefined && discountMultiplier > 0 && discountMultiplier !== 1) {
-				inputPrice = inputPrice !== undefined ? inputPrice * discountMultiplier : undefined
-				outputPrice = outputPrice !== undefined ? outputPrice * discountMultiplier : undefined
-				cacheReadsPrice = cacheReadsPrice !== undefined ? cacheReadsPrice * discountMultiplier : undefined
-				cacheWritesPrice = cacheWritesPrice !== undefined ? cacheWritesPrice * discountMultiplier : undefined
 			}
 
 			const isFree = xkiroModelId.toLowerCase().endsWith(":free") || (inputPrice === 0 && outputPrice === 0)

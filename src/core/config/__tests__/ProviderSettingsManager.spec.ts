@@ -342,6 +342,33 @@ describe("ProviderSettingsManager", () => {
 			expect(storedConfig).toEqual(expectedConfig)
 		})
 
+		it("loads and saves legacy xKiro profiles without recreating promo settings", async () => {
+			const legacy = {
+				id: "xkiro-profile",
+				apiProvider: "xkiro",
+				xkiroApiKey: "key",
+				xkiroBaseUrl: "http://localhost:8000",
+				xkiroModelId: "claude-sonnet-4.5",
+				xkiroDiscountMultiplier: 0.5,
+			}
+			mockSecrets.get.mockResolvedValue(
+				JSON.stringify({
+					currentApiConfigName: "legacy",
+					apiConfigs: { legacy },
+					modeApiConfigs: {},
+				}),
+			)
+			await expect(providerSettingsManager.getProfile({ name: "legacy" })).resolves.toMatchObject({
+				apiProvider: "xkiro",
+				xkiroApiKey: "key",
+				xkiroModelId: "claude-sonnet-4.5",
+			})
+			await providerSettingsManager.saveConfig("legacy", legacy as any)
+			const stored = JSON.parse(mockSecrets.store.mock.calls.at(-1)![1])
+			expect(stored.apiConfigs.legacy).not.toHaveProperty("xkiroDiscountMultiplier")
+			expect(stored.apiConfigs.legacy.xkiroBaseUrl).toBe(legacy.xkiroBaseUrl)
+		})
+
 		it("should only save provider relevant settings", async () => {
 			mockSecrets.get.mockResolvedValue(
 				JSON.stringify({

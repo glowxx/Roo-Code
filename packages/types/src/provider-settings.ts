@@ -388,7 +388,6 @@ const xkiroSchema = baseProviderSettingsSchema.extend({
 	xkiroModelId: z.string().optional(),
 	xkiroCustomContextWindow: z.number().optional(),
 	xkiroCustomModelInfo: modelInfoSchema.nullish(),
-	xkiroDiscountMultiplier: z.number().optional(),
 })
 
 const defaultSchema = z.object({
