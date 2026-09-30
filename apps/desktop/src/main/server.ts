@@ -2020,10 +2020,12 @@ window.addEventListener("keydown", function(e) {
 					}
 				} else if (clientMsg.type === "renameProject") {
 					try {
-						renameProject(clientMsg.path, clientMsg.name)
+						const sidebar = getSidebarData()
+						renameProject(clientMsg.path, clientMsg.name, [sidebar.currentWorkspace, ...Object.keys(sidebar.chats)])
 						broadcastSidebarData()
+						safeSend(ws, { type: "projectRenameResult", path: clientMsg.path, success: true })
 					} catch (error) {
-						safeSend(ws, { type: "error", message: error instanceof Error ? error.message : "Unable to rename project" })
+						safeSend(ws, { type: "projectRenameResult", path: clientMsg.path, success: false, error: error instanceof Error ? error.message : "Unable to rename project" })
 					}
 				} else if (clientMsg.type === "removeProject") {
 					const projectPath = clientMsg.path

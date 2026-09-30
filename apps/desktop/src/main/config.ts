@@ -143,15 +143,16 @@ export function arePathsEqual(p1: string, p2: string): boolean {
 }
 
 /** Sets or clears a display name. The workspace path remains the project identity. */
-export function renameProject(workspacePath: string, name: string | null): { success: true } {
+export function renameProject(workspacePath: string, name: string | null, knownWorkspaces: string[] = []): { success: true } {
 	const config = loadDesktopConfig()
 	const projectPath = canonicalizePath(workspacePath)
-	const storedPath = (config.recentWorkspaces || []).find((p) => arePathsEqual(p, projectPath))
+	const recentWorkspaces = config.recentWorkspaces || []
+	const storedPath = [...recentWorkspaces, ...knownWorkspaces].find((p) => arePathsEqual(p, projectPath))
 	if (!projectPath || !storedPath) {
 		throw new Error("Unknown project")
 	}
 	const trimmed = name?.trim()
-	if (name !== null && (!trimmed || trimmed.length > 80)) {
+	if (name !== null && (!trimmed || trimmed.length > 80 || /[\r\n]/.test(trimmed))) {
 		throw new Error("Project name must contain 1 to 80 characters")
 	}
 	const projectNames = { ...config.projectNames }
@@ -159,7 +160,14 @@ export function renameProject(workspacePath: string, name: string | null): { suc
 		if (arePathsEqual(key, storedPath)) delete projectNames[key]
 	}
 	if (name !== null) projectNames[storedPath] = trimmed!
-	saveDesktopConfig({ projectNames })
+	const saved = saveDesktopConfig({
+		projectNames,
+		recentWorkspaces: recentWorkspaces.some((p) => arePathsEqual(p, storedPath)) || recentWorkspaces.length >= 25
+			? recentWorkspaces : [...recentWorkspaces, storedPath],
+	})
+	if (!saved.projectNames || JSON.stringify(saved.projectNames) !== JSON.stringify(projectNames)) {
+		throw new Error("Unable to save project name")
+	}
 	return { success: true }
 }
 

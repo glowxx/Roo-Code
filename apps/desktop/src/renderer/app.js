@@ -296,8 +296,11 @@
 			projectMenu: "Project options",
 			renameProject: "Rename project",
 			resetProjectName: "Use folder name",
+			saveProjectName: "Save name",
+			cancelProjectName: "Cancel",
 			projectNamePrompt: "Project display name (1–80 characters):",
 			projectNameInvalid: "Enter a project name of 1–80 characters.",
+			projectNameConnectionError: "Connection lost. Reconnect and try again.",
 			openProjectFolder: "Open project folder",
 			copyProjectPath: "Copy project path",
 			pathCopied: "Project path copied to clipboard",
@@ -410,8 +413,11 @@
 			projectMenu: "Opcje projektu",
 			renameProject: "Zmień nazwę projektu",
 			resetProjectName: "Przywróć nazwę folderu",
+			saveProjectName: "Zapisz nazwę",
+			cancelProjectName: "Anuluj",
 			projectNamePrompt: "Nazwa wyświetlana projektu (1–80 znaków):",
 			projectNameInvalid: "Podaj nazwę projektu o długości 1–80 znaków.",
+			projectNameConnectionError: "Utracono połączenie. Połącz się ponownie i spróbuj jeszcze raz.",
 			openProjectFolder: "Otwórz folder projektu",
 			copyProjectPath: "Kopiuj ścieżkę projektu",
 			pathCopied: "Ścieżka projektu skopiowana do schowka",
@@ -1184,15 +1190,69 @@
 		return getProjectCustomName(ws) || ws.split(/[/\\]/).filter(Boolean).pop() || ws
 	}
 
+	let projectRenameDialog = null
+	let pendingProjectRename = null
+	function closeProjectRenameDialog() {
+		projectRenameDialog?.remove()
+		projectRenameDialog = null
+		pendingProjectRename = null
+	}
+
 	function handleRenameProject(ws) {
-		const input = window.prompt(tDesktop("projectNamePrompt"), getProjectDisplayName(ws))
-		if (input === null) return
-		const name = input.trim()
-		if (!name || name.length > 80) {
-			window.alert(tDesktop("projectNameInvalid"))
-			return
-		}
-		sendToServer({ type: "renameProject", path: ws, name })
+		closeProjectRenameDialog()
+		const previousFocus = document.activeElement
+		const backdrop = document.createElement("div")
+		backdrop.className = "modal-backdrop"
+		backdrop.innerHTML = `<form class="modal-card project-rename-card" role="dialog" aria-modal="true" aria-labelledby="project-rename-title">
+			<div class="modal-header"><h3 class="modal-title" id="project-rename-title"></h3></div>
+			<div class="modal-body"><label for="project-rename-input"></label><input id="project-rename-input" type="text" maxlength="80" autocomplete="off" />
+				<p class="project-rename-error" role="alert" hidden></p></div>
+			<div class="modal-footer"><span></span><div class="modal-footer-right"><button type="button" class="btn btn-secondary" data-action="cancel"></button>
+				<button type="submit" class="btn btn-primary" data-action="save"></button></div></div></form>`
+		const form = backdrop.querySelector("form")
+		const input = backdrop.querySelector("input")
+		const error = backdrop.querySelector(".project-rename-error")
+		const save = backdrop.querySelector('[data-action="save"]')
+		backdrop.querySelector("#project-rename-title").textContent = tDesktop("renameProject")
+		backdrop.querySelector("label").textContent = tDesktop("projectNamePrompt")
+		backdrop.querySelector('[data-action="cancel"]').textContent = tDesktop("cancelProjectName")
+		save.textContent = tDesktop("saveProjectName")
+		input.value = getProjectDisplayName(ws)
+		const close = () => { closeProjectRenameDialog(); previousFocus?.focus?.() }
+		backdrop.querySelector('[data-action="cancel"]').addEventListener("click", close)
+		backdrop.addEventListener("click", (event) => { if (event.target === backdrop && !pendingProjectRename) close() })
+		backdrop.addEventListener("keydown", (event) => {
+			if (event.key === "Escape" && !pendingProjectRename) { event.preventDefault(); close() }
+			if (event.key === "Tab") {
+				const focusable = [input, backdrop.querySelector('[data-action="cancel"]'), save]
+				const index = focusable.indexOf(document.activeElement)
+				if (event.shiftKey && index === 0) { event.preventDefault(); save.focus() }
+				else if (!event.shiftKey && index === 2) { event.preventDefault(); input.focus() }
+			}
+		})
+		form.addEventListener("submit", (event) => {
+			event.preventDefault()
+			if (pendingProjectRename) return
+			const name = input.value.trim()
+			if (!name || name.length > 80 || /[\r\n]/.test(name)) {
+				error.textContent = tDesktop("projectNameInvalid")
+				error.hidden = false
+				return
+			}
+			if (!socket || socket.readyState !== WebSocket.OPEN) {
+				error.textContent = tDesktop("projectNameConnectionError")
+				error.hidden = false
+				return
+			}
+			error.hidden = true
+			save.disabled = true
+			pendingProjectRename = ws
+			sendToServer({ type: "renameProject", path: ws, name })
+		})
+		projectRenameDialog = backdrop
+		document.body.appendChild(backdrop)
+		input.focus()
+		input.select()
 	}
 
 	function openProjectContextMenu(eventOrX, yOrWs, wsOrTrigger, triggerEl) {
@@ -1635,6 +1695,12 @@
 			const { ws, pEl, isExpanded, wsNorm, visibleChats, chatEls, isTruncated, hiddenChats, toggleBtn } = item
 			const isActive = wsNorm === curWsNorm
 			pEl.classList.toggle("active", isActive)
+			const projectNameEl = pEl.querySelector(".project-name")
+			const projectName = getProjectDisplayName(ws)
+			if (projectNameEl && projectNameEl.textContent !== projectName) {
+				projectNameEl.textContent = projectName
+				projectNameEl.title = projectName
+			}
 
 			// Update header active status dot
 			const headerEl = pEl.querySelector(".project-header")
@@ -2495,6 +2561,13 @@
 		socket.onclose = (event) => {
 			console.warn(`[WS] Connection closed (code: ${event.code}, reason: ${event.reason || "none"}). Reconnecting...`)
 			isConnected = false
+			if (pendingProjectRename) {
+				pendingProjectRename = null
+				const error = projectRenameDialog?.querySelector(".project-rename-error")
+				if (error) { error.textContent = tDesktop("projectNameConnectionError"); error.hidden = false }
+				const save = projectRenameDialog?.querySelector('[data-action="save"]')
+				if (save) save.disabled = false
+			}
 			if (connectionStatusEl) {
 				connectionStatusEl.textContent = tDesktop("statusDisconnected")
 				const dot = connectionStatusEl.parentElement?.querySelector(".indicator-dot")
@@ -2531,6 +2604,22 @@
 		switch (msg.type) {
 			case "sidebarData":
 				updateSidebarData(msg.data)
+				break
+
+			case "projectRenameResult":
+				if (pendingProjectRename && pathNormalize(pendingProjectRename) === pathNormalize(msg.path)) {
+					if (msg.success) {
+						closeProjectRenameDialog()
+					} else {
+						pendingProjectRename = null
+						const error = projectRenameDialog?.querySelector(".project-rename-error")
+						if (error) { error.textContent = msg.error || tDesktop("projectNameInvalid"); error.hidden = false }
+						const save = projectRenameDialog?.querySelector('[data-action="save"]')
+						if (save) save.disabled = false
+					}
+				} else if (!msg.success) {
+					window.alert(msg.error || tDesktop("projectNameInvalid"))
+				}
 				break
 
 			case "conversationTitleUpdated":

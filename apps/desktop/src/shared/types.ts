@@ -113,5 +113,6 @@ export type DesktopServerMessage =
 	  }
 	| { type: "chatDeleted"; taskId: string; success: boolean; error?: string; requiresStop?: boolean }
 	| { type: "projectRemoved"; path: string; success: boolean; error?: string; requiresStop?: boolean; activeTasksCount?: number }
+	| { type: "projectRenameResult"; path: string; success: boolean; error?: string }
 	| { type: "conversationTitleUpdated"; taskId: string; title: string; titleSource?: "generated_ai" | "manual" | "fallback" }
 	| { type: "error"; message: string }

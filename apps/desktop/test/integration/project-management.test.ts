@@ -121,6 +121,76 @@ describe("Project Management & Sidebar Creation Flow (TDD)", () => {
 			expect(loadDesktopConfig().projectNames?.[canonicalizePath(first)]).toBeUndefined()
 			expect(fs.existsSync(first)).toBe(true)
 		})
+
+		it("keeps two names and manual order through reload and rejects multiline names", () => {
+			const first = path.join(tempDir, "ProjectA")
+			const second = path.join(tempDir, "ProjectB")
+			fs.mkdirSync(first)
+			fs.mkdirSync(second)
+			saveDesktopConfig({ lastWorkspacePath: first, recentWorkspaces: [first, second] })
+			renameProject(first, "Roo A")
+			renameProject(second, "Roo B")
+			saveDesktopConfig({ recentWorkspaces: [second, first] })
+			const reloaded = loadDesktopConfig()
+			expect(reloaded.recentWorkspaces).toEqual([canonicalizePath(second), canonicalizePath(first)])
+			expect(reloaded.projectNames).toEqual({ [canonicalizePath(first)]: "Roo A", [canonicalizePath(second)]: "Roo B" })
+			expect(reloaded.lastWorkspacePath).toBe(canonicalizePath(first))
+			expect(fs.readdirSync(tempDir)).toContain("ProjectA")
+			expect(fs.readdirSync(tempDir)).toContain("ProjectB")
+			expect(() => renameProject(first, "Line one\nLine two")).toThrow()
+			expect(loadDesktopConfig().projectNames).toEqual(reloaded.projectNames)
+			renameProject(second, null)
+			expect(loadDesktopConfig().projectNames).toEqual({ [canonicalizePath(first)]: "Roo A" })
+		})
+
+		it("renames a visible active project even before it is in recent workspaces", () => {
+			const current = path.join(tempDir, "CurrentProject")
+			fs.mkdirSync(current)
+			expect(loadDesktopConfig().recentWorkspaces).toBeUndefined()
+			expect(() => renameProject(current, "Hidden", [])).toThrow("Unknown project")
+			expect(renameProject(current, "Visible name", [current])).toEqual({ success: true })
+			const afterRestart = loadDesktopConfig()
+			expect(afterRestart.recentWorkspaces).toEqual([canonicalizePath(current)])
+			expect(afterRestart.projectNames?.[canonicalizePath(current)]).toBe("Visible name")
+			expect(fs.existsSync(current)).toBe(true)
+		})
+		it("keeps a full manual project list intact when renaming a visible project outside it", () => {
+			const projects = Array.from({ length: 25 }, (_, index) => path.join(tempDir, `Project${index}`))
+			const current = path.join(tempDir, "ActiveOutsideRecent")
+			saveDesktopConfig({ lastWorkspacePath: projects[0], recentWorkspaces: projects })
+			expect(renameProject(current, "Visible name", [current])).toEqual({ success: true })
+			const reloaded = loadDesktopConfig()
+			expect(reloaded.recentWorkspaces).toEqual(projects.map(canonicalizePath))
+			expect(reloaded.projectNames?.[canonicalizePath(current)]).toBe("Visible name")
+		})
+		it("preserves chat ownership, active conversation and running task during rename", async () => {
+			const project = path.join(tempDir, "ProjectA")
+			const tasksDir = path.join(tempDir, "global-storage", "tasks")
+			fs.mkdirSync(project)
+			fs.mkdirSync(tasksDir, { recursive: true })
+			fs.writeFileSync(path.join(tasksDir, "_index.json"), JSON.stringify({ entries: [
+				{ id: "task-a", workspace: project, task: "Active chat", ts: Date.now() },
+				{ id: "task-b", workspace: project, task: "Other chat", ts: Date.now() },
+			] }))
+			saveDesktopConfig({ lastWorkspacePath: project, recentWorkspaces: [project] })
+			const host = new DesktopAgentHost({ workspacePath: project, extensionPath: tempDir, storageDir: tempDir })
+			const task = { taskId: "task-a", cwd: project, isStreaming: true, abortTask: vi.fn() }
+			const runningTasks = new Map([["task-a", task]])
+			host.registerWebviewProvider("mockView", { runningTasks, getCurrentTask: () => task })
+			await host.setActiveTaskId("task-a")
+			const before = host.getChatsByWorkspace()
+
+			renameProject(project, "Custom name")
+
+			expect(host.getWorkspace()).toBe(canonicalizePath(project))
+			expect(host.getActiveTaskId()).toBe("task-a")
+			expect(host.getChatsByWorkspace()).toEqual(before)
+			expect(before[canonicalizePath(project)]?.map((chat) => chat.id)).toEqual(expect.arrayContaining(["task-a", "task-b"]))
+			expect(before[canonicalizePath(project)]).toHaveLength(2)
+			expect(runningTasks.get("task-a")).toBe(task)
+			expect(task.abortTask).not.toHaveBeenCalled()
+			expect(fs.existsSync(project)).toBe(true)
+		})
 		it("uses the stored workspace identity for case-insensitive rename and reset", () => {
 			if (process.platform !== "win32") return
 			const project = path.join(tempDir, "CaseSensitiveName")
