@@ -6,6 +6,7 @@ import { createRequire } from "module"
 export interface DesktopConfig {
 	lastWorkspacePath?: string
 	recentWorkspaces?: string[]
+	projectNames?: Record<string, string>
 	theme?: string
 	windowBounds?: {
 		width: number
@@ -139,6 +140,27 @@ export function arePathsEqual(p1: string, p2: string): boolean {
 		return c1.toLowerCase() === c2.toLowerCase()
 	}
 	return c1 === c2
+}
+
+/** Sets or clears a display name. The workspace path remains the project identity. */
+export function renameProject(workspacePath: string, name: string | null): { success: true } {
+	const config = loadDesktopConfig()
+	const projectPath = canonicalizePath(workspacePath)
+	const storedPath = (config.recentWorkspaces || []).find((p) => arePathsEqual(p, projectPath))
+	if (!projectPath || !storedPath) {
+		throw new Error("Unknown project")
+	}
+	const trimmed = name?.trim()
+	if (name !== null && (!trimmed || trimmed.length > 80)) {
+		throw new Error("Project name must contain 1 to 80 characters")
+	}
+	const projectNames = { ...config.projectNames }
+	for (const key of Object.keys(projectNames)) {
+		if (arePathsEqual(key, storedPath)) delete projectNames[key]
+	}
+	if (name !== null) projectNames[storedPath] = trimmed!
+	saveDesktopConfig({ projectNames })
+	return { success: true }
 }
 
 /**

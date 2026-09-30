@@ -9,6 +9,7 @@ import {
 	loadDesktopConfig,
 	saveDesktopConfig,
 	getConfigFilePath,
+	renameProject,
 } from "../../src/main/config.js"
 
 describe("Project Management & Sidebar Creation Flow (TDD)", () => {
@@ -103,6 +104,35 @@ describe("Project Management & Sidebar Creation Flow (TDD)", () => {
 	})
 
 	describe("3. Config Persistence & Duplicate Prevention", () => {
+		it("renames and resets display metadata without changing workspace identity or order", () => {
+			const first = path.join(tempDir, "Roo-Code")
+			const second = path.join(tempDir, "Other")
+			fs.mkdirSync(first)
+			fs.mkdirSync(second)
+			saveDesktopConfig({ lastWorkspacePath: first, recentWorkspaces: [second, first] })
+
+			expect(renameProject(first, "  Roo Desktop  ")).toEqual({ success: true })
+			const renamed = loadDesktopConfig()
+			expect(renamed.projectNames?.[canonicalizePath(first)]).toBe("Roo Desktop")
+			expect(renamed.recentWorkspaces).toEqual([canonicalizePath(second), canonicalizePath(first)])
+			expect(renamed.lastWorkspacePath).toBe(canonicalizePath(first))
+			expect(() => renameProject(first, "   ")).toThrow()
+			expect(renameProject(first, null)).toEqual({ success: true })
+			expect(loadDesktopConfig().projectNames?.[canonicalizePath(first)]).toBeUndefined()
+			expect(fs.existsSync(first)).toBe(true)
+		})
+		it("uses the stored workspace identity for case-insensitive rename and reset", () => {
+			if (process.platform !== "win32") return
+			const project = path.join(tempDir, "CaseSensitiveName")
+			fs.mkdirSync(project)
+			saveDesktopConfig({ recentWorkspaces: [project] })
+			renameProject(project.toUpperCase(), "First")
+			renameProject(project.toLowerCase(), "Second")
+			expect(Object.keys(loadDesktopConfig().projectNames || {})).toHaveLength(1)
+			expect(Object.values(loadDesktopConfig().projectNames || {})).toEqual(["Second"])
+			renameProject(project.toUpperCase(), null)
+			expect(loadDesktopConfig().projectNames).toEqual({})
+		})
 		it("deduplicates recentWorkspaces even when added with varied casing on Windows", () => {
 			const dir1 = path.join(tempDir, "ProjectA")
 			fs.mkdirSync(dir1, { recursive: true })

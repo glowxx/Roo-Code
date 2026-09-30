@@ -9,7 +9,7 @@ import { fileURLToPath } from "url"
 import { WebSocketServer, WebSocket } from "ws"
 import { execSync, spawn } from "child_process"
 import { DesktopAgentHost } from "./agent-host.js"
-import { loadDesktopConfig, saveDesktopConfig, canonicalizePath, arePathsEqual } from "./config.js"
+import { loadDesktopConfig, saveDesktopConfig, canonicalizePath, arePathsEqual, renameProject } from "./config.js"
 import type { DesktopClientMessage, DesktopServerMessage, SidebarData, WorkspaceInfo } from "../shared/types.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -409,6 +409,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 		const chats = agentHost.getChatsByWorkspace()
 		return {
 			recentWorkspaces: recent,
+			projectNames: config.projectNames || {},
 			currentWorkspace: curWs,
 			activeTaskId: agentHost.getActiveTaskId(),
 			chats,
@@ -2016,6 +2017,13 @@ window.addEventListener("keydown", function(e) {
 					})
 					if (result.success) {
 						broadcastSidebarData()
+					}
+				} else if (clientMsg.type === "renameProject") {
+					try {
+						renameProject(clientMsg.path, clientMsg.name)
+						broadcastSidebarData()
+					} catch (error) {
+						safeSend(ws, { type: "error", message: error instanceof Error ? error.message : "Unable to rename project" })
 					}
 				} else if (clientMsg.type === "removeProject") {
 					const projectPath = clientMsg.path

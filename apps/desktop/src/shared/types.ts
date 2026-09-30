@@ -43,6 +43,7 @@ export interface SidebarChatEntry {
 
 export interface SidebarData {
 	recentWorkspaces: string[]
+	projectNames?: Record<string, string>
 	currentWorkspace: string
 	activeTaskId?: string | null
 	chats: Record<string, SidebarChatEntry[]>
@@ -72,6 +73,7 @@ export type DesktopClientMessage =
 	| { type: "markChatRead"; taskId: string }
 	| { type: "deleteChat"; taskId: string; forceStop?: boolean }
 	| { type: "removeProject"; path: string; forceStop?: boolean }
+	| { type: "renameProject"; path: string; name: string | null }
 	| { type: "openProjectFolder"; path: string }
 	| { type: "renameChat"; taskId: string; title: string }
 	| { type: "reorderWorkspaces"; workspaces: string[] }

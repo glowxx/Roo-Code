@@ -179,6 +179,7 @@
 
 	let sidebarData = {
 		recentWorkspaces: [],
+		projectNames: {},
 		currentWorkspace: "",
 		chats: {},
 	}
@@ -293,6 +294,10 @@
 			confirmDelete: "Delete chat",
 			chatMenu: "Chat options",
 			projectMenu: "Project options",
+			renameProject: "Rename project",
+			resetProjectName: "Use folder name",
+			projectNamePrompt: "Project display name (1–80 characters):",
+			projectNameInvalid: "Enter a project name of 1–80 characters.",
 			openProjectFolder: "Open project folder",
 			copyProjectPath: "Copy project path",
 			pathCopied: "Project path copied to clipboard",
@@ -403,6 +408,10 @@
 			confirmDelete: "Usuń chat",
 			chatMenu: "Opcje chatu",
 			projectMenu: "Opcje projektu",
+			renameProject: "Zmień nazwę projektu",
+			resetProjectName: "Przywróć nazwę folderu",
+			projectNamePrompt: "Nazwa wyświetlana projektu (1–80 znaków):",
+			projectNameInvalid: "Podaj nazwę projektu o długości 1–80 znaków.",
 			openProjectFolder: "Otwórz folder projektu",
 			copyProjectPath: "Kopiuj ścieżkę projektu",
 			pathCopied: "Ścieżka projektu skopiowana do schowka",
@@ -811,6 +820,7 @@
 		}
 		sidebarData = {
 			recentWorkspaces: Array.isArray(data.recentWorkspaces) ? data.recentWorkspaces : [],
+			projectNames: data.projectNames || {},
 			currentWorkspace: data.currentWorkspace || currentWorkspace?.path || "",
 			activeTaskId: data.activeTaskId ?? activeTaskId,
 			chats: data.chats || {},
@@ -1165,6 +1175,26 @@
 		openSidebarContextMenu({ x, y, items, triggerEl: trigger })
 	}
 
+	function getProjectCustomName(ws) {
+		const match = Object.entries(sidebarData.projectNames || {}).find(([p]) => pathNormalize(p) === pathNormalize(ws))
+		return match?.[1] || ""
+	}
+
+	function getProjectDisplayName(ws) {
+		return getProjectCustomName(ws) || ws.split(/[/\\]/).filter(Boolean).pop() || ws
+	}
+
+	function handleRenameProject(ws) {
+		const input = window.prompt(tDesktop("projectNamePrompt"), getProjectDisplayName(ws))
+		if (input === null) return
+		const name = input.trim()
+		if (!name || name.length > 80) {
+			window.alert(tDesktop("projectNameInvalid"))
+			return
+		}
+		sendToServer({ type: "renameProject", path: ws, name })
+	}
+
 	function openProjectContextMenu(eventOrX, yOrWs, wsOrTrigger, triggerEl) {
 		let x, y, ws, trigger
 		if (eventOrX && typeof eventOrX === "object" && ("clientX" in eventOrX || "target" in eventOrX)) {
@@ -1190,6 +1220,12 @@
 		}
 
 		const items = [
+			{
+				label: tDesktop("renameProject"),
+				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16 4a2 2 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`,
+				action: () => handleRenameProject(ws),
+			},
+			...(getProjectCustomName(ws) ? [{ label: tDesktop("resetProjectName"), action: () => sendToServer({ type: "renameProject", path: ws, name: null }) }] : []),
 			{
 				label: tDesktop("newChatInProject"),
 				icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
@@ -1282,7 +1318,7 @@
 			}
 		}
 		const runningCount = chats.filter((c) => c.status === "running").length
-		const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+		const wsName = getProjectDisplayName(ws)
 
 		if (runningCount > 0) {
 			showConfirmationModal({
@@ -1794,7 +1830,7 @@
 		workspaces.forEach((ws) => {
 			const wsNorm = pathNormalize(ws)
 			const isActive = wsNorm === curWsNorm
-			const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+			const wsName = getProjectDisplayName(ws)
 			let chats = []
 
 			// Find chats matching this workspace
@@ -2000,7 +2036,7 @@
 				e.dataTransfer.setData("text/plain", ws)
 
 				// Create elevated drag ghost
-				const wsName = ws.split(/[/\\]/).filter(Boolean).pop() || ws
+				const wsName = getProjectDisplayName(ws)
 				const ghost = document.createElement("div")
 				ghost.className = "project-drag-ghost"
 				ghost.style.cssText = "position:absolute; top:-1000px; left:-1000px; padding:6px 12px; background:var(--bg-surface-elevated, #252526); color:var(--text-primary, #ffffff); border:1px solid var(--accent, #3b82f6); border-radius:6px; font-size:12px; font-weight:600; box-shadow:0 4px 12px rgba(0,0,0,0.4); pointer-events:none; z-index:9999; max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"

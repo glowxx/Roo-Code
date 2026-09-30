@@ -1355,6 +1355,9 @@ export class DesktopAgentHost extends EventEmitter {
 		// 5. Update configuration: remove from recentWorkspaces
 		const curCfg = loadDesktopConfig()
 		const updatedWorkspaces = (curCfg.recentWorkspaces || []).filter((p) => !arePathsEqual(p, normWs))
+		const projectNames = Object.fromEntries(
+			Object.entries(curCfg.projectNames || {}).filter(([projectPath]) => !arePathsEqual(projectPath, normWs))
+		)
 		let nextWorkspace = curCfg.lastWorkspacePath
 		if (arePathsEqual(curCfg.lastWorkspacePath || "", normWs)) {
 			nextWorkspace = updatedWorkspaces.length > 0 ? updatedWorkspaces[0] : ""
@@ -1362,6 +1365,7 @@ export class DesktopAgentHost extends EventEmitter {
 		saveDesktopConfig({
 			recentWorkspaces: updatedWorkspaces,
 			lastWorkspacePath: nextWorkspace,
+			projectNames,
 		})
 
 		// 6. If currently active workspace is the removed one, switch to next or empty
