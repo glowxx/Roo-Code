@@ -122,3 +122,4 @@ export function getProviderDefaultModelId(
 			return anthropicDefaultModelId
 	}
 }
+export type { ProviderLimits } from "./provider-limits.js"

@@ -13,6 +13,7 @@ import type { GitCommit } from "./git.js"
 import type { McpServer } from "./mcp.js"
 import type { CostPrecision, CostSource, ModelInfo, ModelRecord, RouterModels } from "./model.js"
 import type { OpenAiCodexRateLimitInfo } from "./providers/openai-codex-rate-limits.js"
+import type { ProviderLimits } from "./providers/provider-limits.js"
 import type { SkillMetadata } from "./skills.js"
 import type { WorktreeIncludeStatus } from "./worktree.js"
 import type { DecisionLogEntry } from "./command-safety.js"
@@ -84,6 +85,7 @@ export interface ExtensionMessage {
 		| "modes"
 		| "taskWithAggregatedCosts"
 		| "openAiCodexRateLimits"
+		| "providerLimits"
 		// Worktree response types
 		| "worktreeList"
 		| "worktreeResult"
@@ -247,6 +249,7 @@ export interface ExtensionMessage {
 	newTokens?: number
 	savedTokensPercentage?: number
 	decisionLog?: DecisionLogEntry[]
+	providerLimits?: ProviderLimits
 }
 
 export interface OpenAiCodexRateLimitsMessage {
@@ -534,6 +537,7 @@ export interface WebviewMessage {
 		| "openDebugUiHistory"
 		| "downloadErrorDiagnostics"
 		| "requestOpenAiCodexRateLimits"
+		| "requestProviderLimits"
 		| "refreshCustomTools"
 		| "requestModes"
 		| "switchMode"

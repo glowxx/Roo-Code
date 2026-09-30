@@ -11,6 +11,7 @@ import React, {
 } from "react"
 import {
 	Cpu,
+	Gauge,
 	MessageSquareCode,
 	Database,
 	ShieldCheck,
@@ -60,6 +61,7 @@ import { SetCachedStateField, SetExperimentEnabled } from "./types"
 import { SectionHeader } from "./SectionHeader"
 import ApiConfigManager from "./ApiConfigManager"
 import ApiOptions from "./ApiOptions"
+import { ProviderLimits } from "./ProviderLimits"
 import { AutoApproveSettings } from "./AutoApproveSettings"
 import { CommandSafetySettings } from "./CommandSafetySettings"
 import { CheckpointSettings } from "./CheckpointSettings"
@@ -93,6 +95,7 @@ export interface SettingsViewRef {
 
 export const sectionNames = [
 	"providers",
+	"limits",
 	"autoApprove",
 	"slashCommands",
 	"skills",
@@ -114,6 +117,7 @@ export type SectionName = (typeof sectionNames)[number]
 
 export const categoryIds = [
 	"providers",
+	"limits",
 	"modes_prompts",
 	"context",
 	"permissions",
@@ -125,6 +129,7 @@ export type CategoryId = (typeof categoryIds)[number]
 
 export const SECTION_TO_CATEGORY: Record<string, CategoryId> = {
 	providers: "providers",
+	limits: "limits",
 	provider: "providers",
 	model: "providers",
 	models: "providers",
@@ -178,6 +183,8 @@ export const resolveSectionDomId = (sectionOrAlias?: string): string => {
 		case "provider":
 		case "api":
 			return "section-providers"
+		case "limits":
+			return "section-limits"
 		case "model":
 		case "models":
 			return "section-model"
@@ -250,6 +257,11 @@ const CATEGORIES: CategoryDefinition[] = [
 		id: "providers",
 		icon: Cpu,
 		legacySections: ["providers"],
+	},
+	{
+		id: "limits",
+		icon: Gauge,
+		legacySections: ["limits"],
 	},
 	{
 		id: "modes_prompts",
@@ -1039,6 +1051,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 											</div>
 										</div>
 									)}
+									{renderCategory === "limits" && !isIndexing && <ProviderLimits />}
 
 									{/* Category 2: Modes & Prompts */}
 									{renderCategory === "modes_prompts" && (

@@ -58,6 +58,7 @@ import { playTts, setTtsEnabled, setTtsSpeed, stopTts } from "../../utils/tts"
 import { searchCommits } from "../../utils/git"
 import { exportSettings, importSettingsWithFeedback } from "../config/importExport"
 import { getOpenAiModels, getOpenAiModelsWithInfo, sortOpenAiModels } from "../../api/providers/openai"
+import { getProviderLimits } from "../../api/provider-limits"
 import { getVsCodeLmModels } from "../../api/providers/vscode-lm"
 import { openMention } from "../mentions"
 import { resolveImageMentions } from "../mentions/resolveImageMentions"
@@ -3177,6 +3178,13 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 					error: errorMessage,
 				})
 			}
+			break
+		}
+
+		case "requestProviderLimits": {
+			const { apiConfiguration } = await provider.getState()
+			const limits = await getProviderLimits(apiConfiguration, message.bool === true)
+			await provider.postMessageToWebview({ type: "providerLimits", providerLimits: limits, requestId: message.requestId })
 			break
 		}
 

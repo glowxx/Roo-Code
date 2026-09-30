@@ -27,6 +27,7 @@
 	},
 	"categories": {
 		"providers": "Dostawcy i Modele",
+		"limits": "Limity",
 		"modes_prompts": "Tryby i Prompty",
 		"context": "Zarządzanie Kontekstem",
 		"permissions": "Uprawnienia i Auto-Approve",
@@ -35,6 +36,7 @@
 	},
 	"categoryDescriptions": {
 		"providers": "Konfiguracja połączeń z modelami AI, profili API oraz dostawców (xKiro, OpenRouter i inni).",
+		"limits": "Dane o wykorzystaniu konta udostępnione przez skonfigurowanego dostawcę.",
 		"modes_prompts": "Dostosuj tryby pracy asystenta, instrukcje systemowe, komendy slash oraz umiejętności.",
 		"context": "Zarządzanie rozmiarem kontekstu, kondensacją historii, limitami tokenów i punktami kontrolnymi.",
 		"permissions": "Definiuj reguły bezpieczeństwa i uprawnienia do automatycznego wykonywania akcji.",
@@ -54,6 +56,7 @@
 	},
 	"sections": {
 		"providers": "Dostawcy",
+		"limits": "Limity",
 		"modes": "Tryby",
 		"mcp": "Serwery MCP",
 		"worktrees": "Worktrees",
@@ -333,6 +336,30 @@
 		"useCustomId": "Użyj niestandardowego ID:",
 		"noModels": "Brak dostępnych modeli",
 		"placeholder": "np. gpt-4o-mini, claude-3-5-haiku-20241022"
+	},
+	"limits": {
+		"title": "Wykorzystanie dostawcy",
+		"description": "Dane dla zapisanego profilu API, pobrane z konta dostawcy.",
+		"provider": "Dostawca",
+		"refresh": "Odśwież",
+		"loading": "Pobieranie danych…",
+		"unsupported": "Dane konta są niedostępne dla tego dostawcy.",
+		"missingAuth": "Dodaj klucz API do zapisanego profilu, aby zobaczyć dane.",
+		"authError": "Błąd uwierzytelniania. Sprawdź klucz API w zapisanym profilu.",
+		"error": "Nie udało się pobrać limitów.",
+		"plan": "Plan",
+		"spent": "Wydano",
+		"cap": "Limit",
+		"remaining": "Pozostało",
+		"reset": "Reset",
+		"freeTokens": "Darmowe tokeny",
+		"usedToday": "Wykorzystano dziś",
+		"dailyLimit": "Limit dzienny",
+		"wallet": "Portfel",
+		"balance": "Saldo",
+		"held": "Zablokowano",
+		"rateLimitUnavailable": "Pozostałe żądania oraz RPM/TPM nie są udostępniane przez ten endpoint.",
+		"updated": "Aktualizacja"
 	},
 	"providers": {
 		"providerDocumentation": "Dokumentacja {{provider}}",

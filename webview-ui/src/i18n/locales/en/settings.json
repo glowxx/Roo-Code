@@ -27,6 +27,7 @@
 	},
 	"categories": {
 		"providers": "Providers & Models",
+		"limits": "Limits",
 		"modes_prompts": "Modes & Prompts",
 		"context": "Context Management",
 		"permissions": "Permissions & Auto-Approve",
@@ -35,6 +36,7 @@
 	},
 	"categoryDescriptions": {
 		"providers": "Configure AI model connections, API profiles, and provider credentials.",
+		"limits": "View account usage reported by the configured provider.",
 		"modes_prompts": "Customize assistant modes, system instructions, slash commands, and skills.",
 		"context": "Control context window size, history condensation, token limits, and checkpoints.",
 		"permissions": "Define security rules and permissions for auto-approving actions.",
@@ -54,6 +56,7 @@
 	},
 	"sections": {
 		"providers": "Providers",
+		"limits": "Limits",
 		"modes": "Modes",
 		"mcp": "MCP Servers",
 		"worktrees": "Worktrees",
@@ -395,6 +398,30 @@
 		"useCustomId": "Use custom ID:",
 		"noModels": "No models available",
 		"placeholder": "e.g. gpt-4o-mini, claude-3-5-haiku-20241022"
+	},
+	"limits": {
+		"title": "Provider usage",
+		"description": "Usage for the saved API profile. Values come from the provider account endpoint.",
+		"provider": "Provider",
+		"refresh": "Refresh",
+		"loading": "Loading usage…",
+		"unsupported": "Account usage is unavailable for this provider.",
+		"missingAuth": "Add an API key to the saved profile to view usage.",
+		"authError": "Authentication failed. Check the API key in the saved profile.",
+		"error": "Unable to fetch limits.",
+		"plan": "Plan",
+		"spent": "Spent",
+		"cap": "Cap",
+		"remaining": "Remaining",
+		"reset": "Resets",
+		"freeTokens": "Free tokens",
+		"usedToday": "Used today",
+		"dailyLimit": "Daily limit",
+		"wallet": "Wallet",
+		"balance": "Balance",
+		"held": "Held",
+		"rateLimitUnavailable": "Remaining requests and RPM/TPM are not provided by this endpoint.",
+		"updated": "Updated"
 	},
 	"providers": {
 		"providerDocumentation": "{{provider}} documentation",
