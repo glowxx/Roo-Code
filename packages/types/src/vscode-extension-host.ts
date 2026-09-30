@@ -110,6 +110,8 @@ export interface ExtensionMessage {
 	id?: string
 	command?: string
 	cwd?: string
+	/** Workspace owning a desktop subsystem event, including background tasks. */
+	workspacePath?: string
 	timestamp?: number
 	data?: string
 	exitCode?: number

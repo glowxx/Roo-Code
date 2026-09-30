@@ -53,6 +53,7 @@ describe("Diff Batching & Lazy Loading (TDD)", () => {
 		}) as any)
 
 		host.refreshDiffsFromGit()
+		expect(host.getNavigationCounts().diffCount).toBe(3)
 
 		const diffs = host.getDiffFiles()
 		expect(diffs).toHaveLength(3)
@@ -77,6 +78,12 @@ describe("Diff Batching & Lazy Loading (TDD)", () => {
 
 		// Invariant: MUST NOT read file contents into memory during manifest refresh
 		expect(readFileSyncSpy).not.toHaveBeenCalled()
+		// A manifest reset publishes removal immediately, without opening the panel.
+		const changed = vi.fn()
+		host.on("navigationCountsUpdated", changed)
+		mockedExec.mockReturnValue("")
+		host.refreshDiffsFromGit()
+		expect(changed.mock.lastCall?.[0].diffCount).toBe(0)
 	})
 
 	it("intercepts tool file modifications from ask: 'tool' messages", () => {

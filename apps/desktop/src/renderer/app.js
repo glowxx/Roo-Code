@@ -5,6 +5,7 @@
 	let currentWorkspace = null
 	let terminalLogs = []
 	let terminalSessions = []
+	let navigationCounts = { workspace: "", diffCount: 0, terminalCount: 0, terminalTotal: 0, terminalRunning: 0 }
 	let selectedTerminalSessionId = null
 	let diffFiles = []
 	let selectedDiffFile = null
@@ -587,6 +588,7 @@
 		}
 
 		if (targetTab === "terminal") {
+			if (!terminalRenderedOnce) sendToServer({ type: "getTerminalLogs" })
 			const activeSession = terminalSessions.find((s) => s.id === selectedTerminalSessionId) || terminalSessions[0]
 			if (terminalDirty || !terminalRenderedOnce || lastRenderedTerminalSessionId !== selectedTerminalSessionId || activeSession?._dirty) {
 				renderTerminalLogs()
@@ -774,8 +776,6 @@
 		selectedDiffFile = null
 		renderTerminalLogs()
 		renderDiffs()
-		if (terminalCountEl) terminalCountEl.textContent = "0"
-		if (diffsCountEl) diffsCountEl.textContent = "0"
 
 		sendToServer({ type: "newChat", workspacePath })
 		sendToServer({ type: "webviewMessage", message: { type: "clearTask" } })
@@ -898,22 +898,6 @@
 		forwardToWebview({ type: "showTaskWithId", text: taskId, selectionEpoch: thisEpoch })
 		sendToServer({ type: "markChatRead", taskId })
 
-		// Immediately fetch diffs for the selected task to keep top bar counter accurate
-		fetch(`/api/diffs?taskId=${encodeURIComponent(taskId)}`)
-			.then((r) => (r.ok ? r.json() : []))
-			.then((data) => {
-				if (activeTaskId !== taskId || currentSelectionEpoch !== thisEpoch) return
-				if (Array.isArray(data)) {
-					diffFiles = data
-					diffsDirty = true
-					if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
-					if (currentDesktopTab === "diffs") {
-						renderDiffs()
-						diffsDirty = false
-					}
-				}
-			})
-			.catch(() => {})
 
 		try {
 			const resp = await fetch("/api/chat/switch", {
@@ -2364,7 +2348,6 @@
 		selectedTerminalSessionId = null
 		renderTerminalSessions()
 		renderActiveTerminalOutput()
-		if (terminalCountEl) terminalCountEl.textContent = "0"
 		sendToServer({ type: "clearTerminalLogs" })
 	})
 
@@ -2542,11 +2525,12 @@
 				engineConnectionBadge.className = "engine-connection-badge status-connected"
 				engineConnectionBadge.title = tDesktop("coreEngineConnected")
 			}
+			terminalRenderedOnce = false
+			if (currentDesktopTab === "terminal") sendToServer({ type: "getTerminalLogs" })
 			// WebSocket connected - remove loading overlay immediately
 			showWebviewSuccess()
 			sendToServer({ type: "getWorkspaceInfo" })
-			sendToServer({ type: "getDiffs", taskId: activeTaskId })
-			sendToServer({ type: "getTerminalLogs" })
+			sendToServer({ type: "getDiffs" })
 		}
 
 		socket.onmessage = (event) => {
@@ -2600,8 +2584,40 @@
 		}
 	}
 
+	function updateNavigationCounters(counts) {
+		if (pathNormalize(counts.workspace) !== pathNormalize(currentWorkspace?.path)) return
+		navigationCounts = counts
+		if (diffsCountEl) diffsCountEl.textContent = String(counts.diffCount)
+		if (terminalCountEl) {
+			terminalCountEl.textContent = String(counts.terminalCount)
+			terminalCountEl.title = counts.terminalRunning > 0
+				? `${counts.terminalRunning} active command(s) running (${counts.terminalTotal} total)`
+				: `${counts.terminalTotal} command session(s)`
+		}
+	}
+
 	function handleServerMessage(msg) {
 		switch (msg.type) {
+			case "navigationCounts":
+				updateNavigationCounters(msg)
+				break
+
+			case "terminalLogsInvalidated":
+				terminalRenderedOnce = false
+				terminalDirty = true
+				if (currentDesktopTab === "terminal") sendToServer({ type: "getTerminalLogs" })
+				break
+
+			case "terminalLogsUpdated":
+				terminalSessions = (msg.entries || []).slice().reverse()
+				selectedTerminalSessionId = terminalSessions[0]?.id || null
+				terminalDirty = true
+				if (currentDesktopTab === "terminal") {
+					renderTerminalLogs()
+					terminalRenderedOnce = true
+				}
+				break
+
 			case "sidebarData":
 				updateSidebarData(msg.data)
 				break
@@ -2628,22 +2644,14 @@
 
 			case "extensionMessage":
 				forwardToWebview(msg.message)
-				if (msg.message?.type === "terminalSessionStarted") {
-					handleServerMessage({ type: "terminalSessionStarted", ...msg.message })
-				} else if (msg.message?.type === "terminalOutput") {
-					handleServerMessage({ type: "terminalOutput", ...msg.message })
-				} else if (msg.message?.type === "terminalSessionEnded") {
-					handleServerMessage({ type: "terminalSessionEnded", ...msg.message })
-				} else if (msg.message?.type === "workspaceFilesChanged") {
-					handleServerMessage({ type: "workspaceFilesChanged", ...msg.message })
-				} else if (msg.message?.type === "clearTask") {
+				if (msg.message?.type === "clearTask") {
 					terminalLogs = []
+					terminalSessions = []
+					terminalRenderedOnce = false
 					diffFiles = []
 					selectedDiffFile = null
 					renderTerminalLogs()
 					renderDiffs()
-					if (terminalCountEl) terminalCountEl.textContent = "0"
-					if (diffsCountEl) diffsCountEl.textContent = "0"
 				}
 				if (msg.message?.type === "state" && msg.message.state) {
 					latestExtensionState = { ...(latestExtensionState || {}), ...msg.message.state }
@@ -2684,16 +2692,21 @@
 				break
 
 			case "workspaceInfo":
-				if (msg.workspace?.path && (!currentWorkspace?.path || pathNormalize(msg.workspace.path) !== pathNormalize(currentWorkspace.path))) {
+				if (pathNormalize(msg.workspace?.path) !== pathNormalize(currentWorkspace?.path)) {
 					terminalLogs = []
+					terminalSessions = []
+					selectedTerminalSessionId = null
 					diffFiles = []
 					selectedDiffFile = null
 					renderTerminalLogs()
+					terminalRenderedOnce = false
 					renderDiffs()
-					if (terminalCountEl) terminalCountEl.textContent = "0"
-					if (diffsCountEl) diffsCountEl.textContent = "0"
 				}
 				currentWorkspace = msg.workspace
+				if (pathNormalize(navigationCounts.workspace) !== pathNormalize(currentWorkspace?.path)) {
+					updateNavigationCounters({ workspace: currentWorkspace?.path || "", diffCount: 0, terminalCount: 0, terminalTotal: 0, terminalRunning: 0 })
+				}
+				if (currentDesktopTab === "terminal" && !terminalRenderedOnce) sendToServer({ type: "getTerminalLogs" })
 				renderWorkspaceInfo(msg.workspace)
 				if (msg.workspace?.path) {
 					sidebarData.currentWorkspace = msg.workspace.path
@@ -2732,9 +2745,10 @@
 				if (!selectedTerminalSessionId || terminalSessions.length === 1) {
 					selectedTerminalSessionId = id
 				}
-				renderTerminalSessions()
-				if (selectedTerminalSessionId === id) {
-					renderActiveTerminalOutput()
+				terminalDirty = true
+				if (currentDesktopTab === "terminal") {
+					renderTerminalSessions()
+					if (selectedTerminalSessionId === id) renderActiveTerminalOutput()
 				}
 				break
 			}
@@ -2742,7 +2756,7 @@
 			case "terminalOutput": {
 				const id = String(msg.id || "")
 				let session = id ? terminalSessions.find((s) => s.id === id) : undefined
-				if (!session && terminalSessions.length > 0) {
+				if (!id && !session && terminalSessions.length > 0) {
 					session = terminalSessions[0]
 				}
 				if (session) {
@@ -2764,7 +2778,7 @@
 				const id = String(msg.id || "")
 				const exitCode = typeof msg.exitCode === "number" ? msg.exitCode : 0
 				let session = id ? terminalSessions.find((s) => s.id === id) : undefined
-				if (!session && terminalSessions.length > 0) {
+				if (!id && !session && terminalSessions.length > 0) {
 					session = terminalSessions[0]
 				}
 				if (session) {
@@ -2838,51 +2852,11 @@
 					diffsDirty = false
 					diffsRenderedOnce = true
 				}
-				if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
 				break
 
 			case "workspaceFilesChanged":
 				diffsDirty = true
 				filesDirty = true
-				if (Array.isArray(msg.files) && msg.files.length > 0) {
-					msg.files.forEach((f) => {
-						const relPath = (f.path || "").replace(/\\/g, "/")
-						if (!relPath) return
-						const existingIdx = diffFiles.findIndex((d) => d.filePath.replace(/\\/g, "/") === relPath)
-						const entry = {
-							filePath: relPath,
-							status: f.changeType || "modified",
-							additions: typeof f.additions === "number" ? f.additions : 1,
-							deletions: typeof f.deletions === "number" ? f.deletions : 0,
-						}
-						if (existingIdx >= 0) {
-							diffFiles[existingIdx] = { ...diffFiles[existingIdx], ...entry }
-						} else {
-							diffFiles.push(entry)
-						}
-					})
-					if (currentDesktopTab === "diffs") {
-						renderDiffs()
-						diffsDirty = false
-						diffsRenderedOnce = true
-					}
-					if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
-				} else {
-					fetch("/api/diffs")
-						.then((r) => (r.ok ? r.json() : []))
-						.then((data) => {
-							if (Array.isArray(data)) {
-								diffFiles = data
-								if (currentDesktopTab === "diffs") {
-									renderDiffs()
-									diffsDirty = false
-									diffsRenderedOnce = true
-								}
-								if (diffsCountEl) diffsCountEl.textContent = String(diffFiles.length)
-							}
-						})
-						.catch(() => {})
-				}
 				break
 
 			case "fileContent":
@@ -3050,7 +3024,6 @@
 
 	function renderDiffs() {
 		const count = diffFiles.length
-		if (diffsCountEl) diffsCountEl.textContent = String(count)
 		if (diffFileCounterEl) diffFileCounterEl.textContent = tDesktop("filesCount", count)
 
 		const listPane = document.getElementById("diffs-list-pane")
@@ -3559,19 +3532,10 @@
 	}
 
 	function renderTerminalSessions() {
-		const runningCount = terminalSessions.filter((s) => s.status === "running").length
 		if (terminalSessionCounter) {
 			terminalSessionCounter.textContent = tDesktop("terminalSessionsCount", terminalSessions.length)
 		}
-		if (terminalCountEl) {
-			if (runningCount > 0) {
-				terminalCountEl.textContent = String(runningCount)
-				terminalCountEl.title = `${runningCount} active command(s) running (${terminalSessions.length} total)`
-			} else {
-				terminalCountEl.textContent = String(terminalSessions.length)
-				terminalCountEl.title = `${terminalSessions.length} command session(s)`
-			}
-		}
+
 
 		if (!terminalSessionsList) return
 

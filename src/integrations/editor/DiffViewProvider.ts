@@ -791,6 +791,7 @@ export class DiffViewProvider {
 			const task = this.taskRef.deref()
 			await task?.providerRef.deref()?.postMessageToWebview({
 				type: "workspaceFilesChanged",
+				workspacePath: task?.workspacePath || this.cwd,
 				files: [
 					{
 						path: relPath,

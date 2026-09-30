@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 import { RooCodeEventName, type ExtensionMessage, type WebviewMessage, type TitleSource } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
-import type { AgentStatusType, TerminalLogEntry, DiffFileEntry, SidebarChatEntry } from "../shared/types.js"
+import type { AgentStatusType, TerminalLogEntry, DiffFileEntry, SidebarChatEntry, NavigationCounts } from "../shared/types.js"
 import { canonicalizePath, arePathsEqual, loadDesktopConfig, saveDesktopConfig } from "./config.js"
 import { generateConversationTitle, sanitizeTitle, semanticFallbackTitle, isBadAutoTitle } from "./title-generator.js"
 
@@ -129,6 +129,7 @@ export class DesktopAgentHost extends EventEmitter {
 	private titleGenerationTaskIds: Set<string> = new Set()
 	private titleAiAttemptedTaskIds: Set<string> = new Set()
 	private titleRepairScheduled = false
+	private lastNavigationCounts?: NavigationCounts
 
 	constructor(options: AgentHostOptions) {
 		super()
@@ -137,6 +138,49 @@ export class DesktopAgentHost extends EventEmitter {
 		this.storageDir = options.storageDir
 			? path.normalize(path.resolve(options.storageDir))
 			: path.join(process.env.APPDATA || os.homedir(), ".roo-desktop-data")
+		// These events fire after canonical state mutations, independently of panel visibility.
+		for (const event of ["diffsUpdated", "terminalLog", "terminalLogsUpdated", "terminalLogsCleared"]) {
+			this.on(event, () => this.publishNavigationCounts())
+		}
+	}
+
+	public getNavigationCounts(): NavigationCounts {
+		let terminalRunning = 0
+		// The existing session registry is capped at 200. Inspect status only, never output/history.
+		for (const session of this.terminalLogs) {
+			if (session.status === "running") terminalRunning++
+		}
+		const terminalTotal = this.terminalLogs.length
+		return {
+			workspace: this.currentWorkspace,
+			diffCount: this.diffFiles.size,
+			terminalCount: terminalRunning || terminalTotal,
+			terminalTotal,
+			terminalRunning,
+		}
+	}
+
+	private publishNavigationCounts(): void {
+		const counts = this.getNavigationCounts()
+		const previous = this.lastNavigationCounts
+		if (
+			previous && previous.workspace === counts.workspace && previous.diffCount === counts.diffCount &&
+			previous.terminalTotal === counts.terminalTotal && previous.terminalRunning === counts.terminalRunning
+		) return
+		this.lastNavigationCounts = counts
+		this.emit("navigationCountsUpdated", counts)
+	}
+
+	private workspaceStateKey(workspace: string): string {
+		const normalized = canonicalizePath(workspace)
+		if (arePathsEqual(normalized, this.currentWorkspace)) return this.currentWorkspace
+		for (const key of this.terminalLogsByWorkspace.keys()) {
+			if (arePathsEqual(normalized, key)) return key
+		}
+		for (const key of this.diffFilesByWorkspace.keys()) {
+			if (arePathsEqual(normalized, key)) return key
+		}
+		return normalized
 	}
 
 	public getWorkspace(): string {
@@ -194,7 +238,7 @@ export class DesktopAgentHost extends EventEmitter {
 			return
 		}
 
-		const normalized = canonicalizePath(newWorkspace)
+		const normalized = this.workspaceStateKey(newWorkspace)
 		if (!fs.existsSync(normalized)) {
 			console.warn(`Directory does not exist: ${normalized}`)
 			return
@@ -1392,15 +1436,28 @@ export class DesktopAgentHost extends EventEmitter {
 
 	private processExtensionMessage(msg: ExtensionMessage): void {
 		const raw = msg as Record<string, any>
+		const workspace = raw.workspacePath ? this.workspaceStateKey(raw.workspacePath) : this.currentWorkspace
+		const isCurrentWorkspace = workspace === this.currentWorkspace
+		let terminalLogs = this.terminalLogs
+		let diffFiles = this.diffFiles
+		if (!isCurrentWorkspace) {
+			terminalLogs = this.terminalLogsByWorkspace.get(workspace) || []
+			diffFiles = this.diffFilesByWorkspace.get(workspace) || new Map()
+			this.terminalLogsByWorkspace.set(workspace, terminalLogs)
+			this.diffFilesByWorkspace.set(workspace, diffFiles)
+		}
+		const emitCurrent = (event: string, payload: unknown) => {
+			if (isCurrentWorkspace) this.emit(event, payload)
+		}
 
 		// Handle terminal session lifecycle events from extension
 		if (raw.type === "terminalSessionStarted") {
 			const id = String(raw.id || `cmd-${Date.now()}`)
 			const command = String(raw.command || "")
-			const cwd = String(raw.cwd || this.currentWorkspace || "")
+			const cwd = String(raw.cwd || workspace || "")
 			const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : Date.now()
 
-			let session = this.terminalLogs.find((s) => s.id === id)
+			let session = terminalLogs.find((s) => s.id === id)
 			if (!session) {
 				session = {
 					id,
@@ -1410,45 +1467,45 @@ export class DesktopAgentHost extends EventEmitter {
 					output: "",
 					status: "running",
 				}
-				this.terminalLogs.push(session)
-				if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+				terminalLogs.push(session)
+				if (terminalLogs.length > 200) terminalLogs.shift()
 			} else {
 				if (command) session.command = command
 				if (cwd) session.cwd = cwd
 				session.timestamp = timestamp
 				session.status = "running"
 			}
-			this.emit("terminalSessionStarted", {
+			emitCurrent("terminalSessionStarted", {
 				id: session.id,
 				command: session.command,
 				cwd: session.cwd,
 				timestamp: session.timestamp,
 			})
-			this.emit("terminalLog", session)
+			emitCurrent("terminalLog", session)
 		} else if (raw.type === "terminalOutput") {
 			const id = String(raw.id || "")
 			const data = String(raw.data || "")
-			let session = id ? this.terminalLogs.find((s) => s.id === id) : undefined
-			if (!session && this.terminalLogs.length > 0) {
-				session = this.terminalLogs[this.terminalLogs.length - 1]
+			let session = id ? terminalLogs.find((s) => s.id === id) : undefined
+			if (!id && !session && terminalLogs.length > 0) {
+				session = terminalLogs[terminalLogs.length - 1]
 			}
 			if (session) {
 				const combined = (session.output || "") + data
 				session.output = combined.length > 1024 * 1024 ? combined.slice(-1024 * 1024) : combined
-				this.emit("terminalOutput", { id: session.id, data })
+				emitCurrent("terminalOutput", { id: session.id, data })
 			}
 		} else if (raw.type === "terminalSessionEnded") {
 			const id = String(raw.id || "")
 			const exitCode = typeof raw.exitCode === "number" ? raw.exitCode : 0
-			let session = id ? this.terminalLogs.find((s) => s.id === id) : undefined
-			if (!session && this.terminalLogs.length > 0) {
-				session = this.terminalLogs[this.terminalLogs.length - 1]
+			let session = id ? terminalLogs.find((s) => s.id === id) : undefined
+			if (!id && !session && terminalLogs.length > 0) {
+				session = terminalLogs[terminalLogs.length - 1]
 			}
 			if (session) {
 				session.exitCode = exitCode
 				session.status = exitCode === 0 ? "completed" : "error"
-				this.emit("terminalSessionEnded", { id: session.id, exitCode })
-				this.emit("terminalLog", session)
+				emitCurrent("terminalSessionEnded", { id: session.id, exitCode })
+				emitCurrent("terminalLog", session)
 			}
 		} else if (raw.type === "commandExecutionStatus") {
 			let statusObj: any = null
@@ -1458,27 +1515,27 @@ export class DesktopAgentHost extends EventEmitter {
 
 			if (statusObj && statusObj.executionId) {
 				const execId = String(statusObj.executionId)
-				let session = this.terminalLogs.find((s) => s.id === execId)
+				let session = terminalLogs.find((s) => s.id === execId)
 
 				if (statusObj.status === "started") {
 					if (!session) {
 						session = {
 							id: execId,
 							command: statusObj.command || "",
-							cwd: this.currentWorkspace || "",
+							cwd: workspace || "",
 							timestamp: Date.now(),
 							output: "",
 							status: "running",
 						}
-						this.terminalLogs.push(session)
-						if (this.terminalLogs.length > 200) this.terminalLogs.shift()
-						this.emit("terminalSessionStarted", {
+						terminalLogs.push(session)
+						if (terminalLogs.length > 200) terminalLogs.shift()
+						emitCurrent("terminalSessionStarted", {
 							id: session.id,
 							command: session.command,
 							cwd: session.cwd,
 							timestamp: session.timestamp,
 						})
-						this.emit("terminalLog", session)
+						emitCurrent("terminalLog", session)
 					}
 				} else if (statusObj.status === "output") {
 					const outData = statusObj.output || ""
@@ -1486,32 +1543,34 @@ export class DesktopAgentHost extends EventEmitter {
 						session = {
 							id: execId,
 							command: "",
-							cwd: this.currentWorkspace || "",
+							cwd: workspace || "",
 							timestamp: Date.now(),
-							output: outData,
+							output: "",
 							status: "running",
 						}
-						this.terminalLogs.push(session)
-						if (this.terminalLogs.length > 200) this.terminalLogs.shift()
+						terminalLogs.push(session)
+						if (terminalLogs.length > 200) terminalLogs.shift()
+						emitCurrent("terminalLog", session)
+						session.output = outData
 					} else {
 						const combined = (session.output || "") + outData
 						session.output = combined.length > 1024 * 1024 ? combined.slice(-1024 * 1024) : combined
 					}
-					this.emit("terminalOutput", { id: execId, data: outData })
+					emitCurrent("terminalOutput", { id: execId, data: outData })
 				} else if (statusObj.status === "exited") {
 					const exitCode = typeof statusObj.exitCode === "number" ? statusObj.exitCode : 0
 					if (session) {
 						session.exitCode = exitCode
 						session.status = exitCode === 0 ? "completed" : "error"
 					}
-					this.emit("terminalSessionEnded", { id: execId, exitCode })
-					if (session) this.emit("terminalLog", session)
+					emitCurrent("terminalSessionEnded", { id: execId, exitCode })
+					if (session) emitCurrent("terminalLog", session)
 				} else if (statusObj.status === "timeout" || statusObj.status === "fallback") {
 					if (session) {
 						session.status = "error"
 						session.exitCode = -1
-						this.emit("terminalSessionEnded", { id: execId, exitCode: -1 })
-						this.emit("terminalLog", session)
+						emitCurrent("terminalSessionEnded", { id: execId, exitCode: -1 })
+						emitCurrent("terminalLog", session)
 					}
 				}
 			}
@@ -1521,9 +1580,9 @@ export class DesktopAgentHost extends EventEmitter {
 		if (raw.type === "workspaceFilesChanged" && Array.isArray(raw.files)) {
 			for (const file of raw.files) {
 				const relPath = (file.path || "").replace(/\\/g, "/")
-				const absPath = file.absolutePath || (this.currentWorkspace ? path.resolve(this.currentWorkspace, relPath) : relPath)
+				const absPath = file.absolutePath || (workspace ? path.resolve(workspace, relPath) : relPath)
 				let newContent: string | undefined = undefined
-				const existing = this.diffFiles.get(relPath)
+				const existing = diffFiles.get(relPath)
 				let oldContent: string | undefined = existing?.oldContent
 
 				if (file.changeType !== "deleted" && fs.existsSync(absPath)) {
@@ -1543,11 +1602,13 @@ export class DesktopAgentHost extends EventEmitter {
 					additions: typeof file.additions === "number" ? file.additions : 0,
 					deletions: typeof file.deletions === "number" ? file.deletions : 0,
 				}
-				this.diffFiles.set(relPath, entry)
+				diffFiles.set(relPath, entry)
 			}
-			this.emit("workspaceFilesChanged", raw.files)
-			this.emit("diffsUpdated", this.getDiffFiles())
+			emitCurrent("workspaceFilesChanged", raw.files)
+			emitCurrent("diffsUpdated", Array.from(diffFiles.values()))
 		}
+
+		if (!isCurrentWorkspace) return
 
 		// Detect agent status transitions
 		const isTool = (raw.type === "say" && raw.say === "tool") || (raw.type === "ask" && raw.ask === "tool")

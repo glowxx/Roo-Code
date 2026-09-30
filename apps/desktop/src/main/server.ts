@@ -368,6 +368,8 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	stop: () => Promise<void>
 } {
 	const { port, host = "127.0.0.1", agentHost, staticDir } = options
+	// Seed the lightweight file registry once at startup, not on tab activation.
+	agentHost.refreshDiffsFromGit()
 	const clients = new Set<WebSocket>()
 
 	function safeSend(ws: WebSocket, msg: unknown) {
@@ -421,6 +423,14 @@ export function createDesktopServer(options: DesktopServerOptions): {
 	}
 
 	// Listen to agent host events and broadcast to webview
+	const onNavigationCounts = (counts: ReturnType<DesktopAgentHost["getNavigationCounts"]>) => {
+		broadcast({ type: "navigationCounts", ...counts })
+	}
+	const onTerminalLogsUpdated = () => {
+		broadcast({ type: "terminalLogsInvalidated" })
+	}
+	agentHost.on("navigationCountsUpdated", onNavigationCounts)
+	agentHost.on("terminalLogsUpdated", onTerminalLogsUpdated)
 	agentHost.on("messageToUI", (message) => {
 		broadcast({ type: "extensionMessage", message })
 	})
@@ -460,6 +470,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 			directories: scan.directories,
 		}
 		broadcast({ type: "workspaceInfo", workspace: newWs })
+		broadcast({ type: "navigationCounts", ...agentHost.getNavigationCounts() })
 		broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 		broadcastSidebarData()
 	})
@@ -625,7 +636,7 @@ export function createDesktopServer(options: DesktopServerOptions): {
 
 						await agentHost.showTaskWithId(taskId)
 						broadcastSidebarData()
-						broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(taskId) })
+						broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 
 						res.writeHead(200, { "Content-Type": "application/json" })
 						res.end(JSON.stringify({ success: true, taskId }))
@@ -1708,6 +1719,7 @@ window.addEventListener("keydown", function(e) {
 				directories: scan.directories,
 			}
 			safeSend(ws, { type: "workspaceInfo", workspace: initialWorkspace })
+			safeSend(ws, { type: "navigationCounts", ...agentHost.getNavigationCounts() })
 			safeSend(ws, { type: "agentStatus", status: agentHost.getStatus() })
 			safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 			safeSend(ws, { type: "sidebarData", data: getSidebarData() })
@@ -1928,11 +1940,9 @@ window.addEventListener("keydown", function(e) {
 						safeSend(ws, { type: "error", message: validation.error || "Access outside workspace forbidden" })
 					}
 				} else if (clientMsg.type === "getDiffs") {
-					if (typeof (agentHost as any).refreshDiffsFromGit === "function") {
-						;(agentHost as any).refreshDiffsFromGit()
-					}
-					const taskId = clientMsg.taskId
-					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(taskId) })
+					safeSend(ws, { type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
+				} else if (clientMsg.type === "getTerminalLogs") {
+					safeSend(ws, { type: "terminalLogsUpdated", entries: agentHost.getTerminalLogs() })
 				} else if (clientMsg.type === "clearTerminalLogs") {
 					if (typeof (agentHost as any).clearTerminalLogs === "function") {
 						;(agentHost as any).clearTerminalLogs()
@@ -1970,7 +1980,7 @@ window.addEventListener("keydown", function(e) {
 					}
 					await agentHost.showTaskWithId(clientMsg.taskId)
 					broadcastSidebarData()
-					broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFilesForTask(clientMsg.taskId) })
+					broadcast({ type: "diffsUpdated", diffs: agentHost.getDiffFiles() })
 				} else if (clientMsg.type === "newChat") {
 					if (clientMsg.workspacePath && fs.existsSync(clientMsg.workspacePath)) {
 						try {
@@ -2124,6 +2134,8 @@ window.addEventListener("keydown", function(e) {
 			}),
 		stop: () =>
 			new Promise((resolve) => {
+				agentHost.off("navigationCountsUpdated", onNavigationCounts)
+				agentHost.off("terminalLogsUpdated", onTerminalLogsUpdated)
 				logStartupDebug(`[SERVER] Stopping desktopServer... Active clients: ${clients.size}`)
 				for (const client of clients) {
 					try {

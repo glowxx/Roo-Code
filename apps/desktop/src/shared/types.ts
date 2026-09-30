@@ -28,6 +28,14 @@ export interface DiffFileEntry {
 	deletions: number
 }
 
+export interface NavigationCounts {
+	workspace: string
+	diffCount: number
+	terminalCount: number
+	terminalTotal: number
+	terminalRunning: number
+}
+
 export type AgentStatusType = "idle" | "thinking" | "executing" | "waiting_approval" | "error"
 
 export interface SidebarChatEntry {
@@ -65,6 +73,7 @@ export type DesktopClientMessage =
 	| { type: "showItem"; filePath: string }
 	| { type: "openFile"; filePath: string }
 	| { type: "getDiffs"; taskId?: string }
+	| { type: "getTerminalLogs" }
 	| { type: "clearTerminalLogs" }
 	| { type: "getSidebarData" }
 	| { type: "switchChat"; taskId: string; workspacePath?: string }
@@ -79,6 +88,9 @@ export type DesktopClientMessage =
 	| { type: "reorderWorkspaces"; workspaces: string[] }
 
 export type DesktopServerMessage =
+	| ({ type: "navigationCounts" } & NavigationCounts)
+	| { type: "terminalLogsUpdated"; entries: TerminalLogEntry[] }
+	| { type: "terminalLogsInvalidated" }
 	| { type: "extensionMessage"; message: ExtensionMessage }
 	| { type: "workspaceInfo"; workspace: WorkspaceInfo }
 	| { type: "agentStatus"; status: AgentStatusType }
