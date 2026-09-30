@@ -405,8 +405,10 @@ vscode-dropdown::part(listbox) {
 	vertical-align: baseline;
 	line-height: inherit;
 	background-color: color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent);
-	border-radius: 3px;
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-badge-foreground) 25%, transparent);
+	border-radius: 4px;
+	box-shadow:
+		0 0 0 1.5px color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent),
+		0 0 0 1.75px color-mix(in srgb, var(--vscode-badge-foreground) 25%, transparent);
 	color: transparent;
 	margin: 0;
 	padding: 0;
