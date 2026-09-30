@@ -791,8 +791,25 @@ describe("ContextCompactor", () => {
 				taskId,
 				preserveTurns: 1,
 				scopedAllows: ["velune-website/"],
+				supplementalAllows: ["packages/shared/"],
 				scopedDenies: ["app/public/"],
 				activeGoal: "Frontend polish on velune-website",
+				taskContract: {
+					originalGoal: "Polish frontend and run tests",
+					currentGoal: "Polish frontend and run tests",
+					latestUserInstruction: "continue",
+					latestSubstantiveInstruction: "Polish frontend and run tests",
+					amendments: [],
+					decisions: [{ ask: "Which variant?", answer: "B" }],
+					completionCriteria: ["Polish frontend", "Run tests"],
+					authorization: {
+						explicitConstraints: ["DO NOT modify files in app/public/"],
+						scopedWriteAllows: ["velune-website/"],
+						supplementalWriteAllows: ["packages/shared/"],
+						scopedWriteDenies: ["app/public/"],
+						canonicalConstraints: [],
+					},
+				},
 				workspacePath: "/workspace/project",
 				todoList: [
 					{ id: "1", content: "Inspect public", status: "completed" },
@@ -808,9 +825,16 @@ describe("ContextCompactor", () => {
 			expect(summaryText).toContain("- **Workspace Root**: /workspace/project")
 			expect(summaryText).toContain("- **Active Substantive Goal**: Frontend polish on velune-website")
 			expect(summaryText).toContain("- **Scoped Modification Authorizations (ALLOW)**: velune-website/")
+			expect(summaryText).toContain("- **Additional Modification Authorizations (ALLOW)**: packages/shared/")
 			expect(summaryText).toContain("- **Scoped Modification Denials (DENY)**: app/public/")
 			expect(summaryText).toContain("- **TodoList Progress**: 1/2 completed")
-			expect(summaryText).toContain("[ACTIVE CANONICAL STATE & RECENT INSTRUCTIONS PREVAIL OVER ORIGINAL PROMPT]")
+			expect(summaryText).toContain("- **Task Contract JSON**:")
+			expect(summaryText).toContain('"originalGoal":"Polish frontend and run tests"')
+			expect(summaryText).toContain('"answer":"B"')
+			expect(summaryText).toContain('"supplementalWriteAllows":["packages/shared/"]')
+			expect(summaryText).toContain('"completionCriteria":["Polish frontend","Run tests"]')
+			expect(summaryText).toContain("- **Pending Requirements JSON**:")
+			expect(summaryText).toContain("[CANONICAL TASK CONTRACT AND EXPLICIT AMENDMENTS GOVERN CURRENT WORK]")
 		})
 	})
 })

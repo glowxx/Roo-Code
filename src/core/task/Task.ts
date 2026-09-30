@@ -158,6 +158,7 @@ import { validateAndFixToolResultIds } from "./validateToolResultIds"
 import { mergeConsecutiveApiMessages } from "./mergeConsecutiveApiMessages"
 import { classifyApiError } from "../../api/providers/utils/error-classifier"
 import { StreamAuditTracker, type StreamPhase } from "./StreamAudit"
+import { buildTaskContract } from "./TaskContract"
 
 const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
@@ -1389,6 +1390,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private extractExplicitConstraints(): {
 		constraints: string[]
 		scopedWriteAllows: string[]
+		supplementalWriteAllows: string[]
 		scopedWriteDenies: string[]
 		scopedGitAllows: string[]
 		scopedGitDenies: string[]
@@ -1399,7 +1401,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		const initialGoal = this.metadata?.task || ""
 
 		// Negative modification directives
-		const noModifyRegex = /(?:nie\s+modyfikuj(?:\s+kodu|\s+source)?|do\s+not\s+modify(?:\s+code|\s+source)?|don't\s+modify|read-only|tylko\s+do\s+odczytu)/i
+		const noModifyRegex = /(?:nie\s+(?:modyfikuj|zmieniaj|ruszaj|poprawiaj|naprawiaj)|do\s+not\s+(?:modify|change|touch)|don't\s+(?:modify|change|touch)|read-only|tylko\s+do\s+odczytu)/i
+		const globalNoModifyRegex = /(?:(?:do\s+not|don't)\s+(?:modify|change|touch)\s+(?:code|files|anything)(?!\s+in\b)|nie\s+(?:modyfikuj|zmieniaj|ruszaj|poprawiaj|naprawiaj)\s+(?:kodu|plików|niczego)(?!\s+w\b)|read-only|tylko\s+do\s+odczytu)/i
 		// Deactivation / lifting directives (positive overrides)
 		const deactivationModifyRegex =
 			/(?:disable.*read-only|lift.*read-only|remove.*read-only|allow.*modify|zezwalam.*modyfikacj|wyłącz.*read-only|zdejmij.*read-only|odblokuj.*edycj|odblokuj.*modyfikacj|you\s+can\s+modify|możesz(?:\s+jednak)?\s+modyfikować|now\s+fix|napraw|popraw|zaimplementuj|implement|update|edit|refactor|write\s+authorization)/i
@@ -1416,8 +1419,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		const scopedWriteDenies: string[] = []
 		const scopedWriteAllows: string[] = []
+		const supplementalWriteAllows: string[] = []
 		const scopedGitDenies: string[] = []
 		const scopedGitAllows: string[] = []
+		const scopedNoTouch = /(?:nie\s+(?:ruszaj|zmieniaj|modyfikuj)|do\s+not\s+(?:touch|change|modify)|don't\s+(?:touch|change|modify))\s+(?:już\s+)?([^\n,;.]+)/i
+		const scopedPostfixDeny = /([a-z0-9_./\\-]+)\s+(?:już\s+)?nie\s+(?:ruszaj|zmieniaj|modyfikuj)/i
+		const normalizeScope = (scope: string) => scope.trim().replace(/^(backend|frontend)u$/i, "$1")
 
 		// Scoped modify in initial goal
 		const scopedModifyDenyMatch = initialGoal.match(
@@ -1430,6 +1437,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const clean = scopedModifyDenyMatch[1].replace(/[\(\)].*$/, "").trim()
 			if (clean && !/^(kodu|code|all\s+files|wszystko)$/i.test(clean)) {
 				scopedWriteDenies.push(clean)
+			}
+		}
+		const initialNoTouchMatches = [
+			...initialGoal.matchAll(new RegExp(scopedNoTouch.source, "gi")),
+			...initialGoal.matchAll(new RegExp(scopedPostfixDeny.source, "gi")),
+		]
+		for (const match of initialNoTouchMatches) {
+			if (match[1] && !/^(?:code|files|anything|kodu|plików|niczego)$/i.test(match[1].trim())) {
+				const scope = normalizeScope(match[1])
+				if (!scopedWriteDenies.includes(scope)) scopedWriteDenies.push(scope)
 			}
 		}
 		if (scopedModifyAllowMatch && scopedModifyAllowMatch[1]) {
@@ -1454,20 +1471,54 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		// Initial prompt flags
-		let hasNoModify = noModifyRegex.test(initialGoal) && scopedWriteAllows.length === 0
+		const explicitGlobalNoModify = globalNoModifyRegex.test(initialGoal)
+		let hasNoModify = explicitGlobalNoModify || (noModifyRegex.test(initialGoal) && scopedWriteDenies.length === 0 && scopedWriteAllows.length === 0)
 		let hasNoCommit = noCommitRegex.test(initialGoal) && !scopedCommitDenyMatch && !scopedCommitAllowMatch
 		let hasNoBuild = noBuildRegex.test(initialGoal)
 		let hasNoSign = noSignRegex.test(initialGoal)
 		let hasNoActivate = noActivateRegex.test(initialGoal)
 		let hasNoPromote = noPromoteRegex.test(initialGoal)
+		let pendingScopeAsk: ClineMessage | undefined
 
 		// Check subsequent user instructions in conversation history
 		for (const msg of this.clineMessages) {
+			if (msg.type === "ask" && !msg.partial) {
+				pendingScopeAsk = msg
+				continue
+			}
 			if (msg.type === "say" && msg.say === "user_feedback" && msg.text) {
 				const text = msg.text
+				if (pendingScopeAsk?.ask === "followup" && /^(?:tak|yes|ok|proceed|go ahead)[.!]?$/i.test(text.trim())) {
+					const askedScope = pendingScopeAsk.text?.match(/(?:modify|edit|change|touch|zmodyfikować|modyfikować|edytować|zmieniać|ruszać)\s+([a-z0-9_./\\-]+)/i)?.[1]
+					if (askedScope && (/[./\\]/.test(askedScope) || /^(?:backend|frontend|shared)$/i.test(askedScope))) {
+						const scope = normalizeScope(askedScope)
+						if (!supplementalWriteAllows.includes(scope)) supplementalWriteAllows.push(scope)
+						const priorDeny = scopedWriteDenies.indexOf(scope)
+						if (priorDeny !== -1) scopedWriteDenies.splice(priorDeny, 1)
+					}
+				}
+				pendingScopeAsk = undefined
+				const noTouch = text.match(scopedNoTouch) || text.match(scopedPostfixDeny)
+				const scopedDeny = Boolean(noTouch?.[1] && !/^(?:code|files|anything|kodu|plików|niczego)$/i.test(noTouch[1].trim()))
+				if (scopedDeny && noTouch?.[1]) {
+					const scope = normalizeScope(noTouch[1])
+					if (!scopedWriteDenies.includes(scope)) scopedWriteDenies.push(scope)
+					const priorAllow = supplementalWriteAllows.indexOf(scope)
+					if (priorAllow !== -1) supplementalWriteAllows.splice(priorAllow, 1)
+				}
+				const additiveAllow = text.match(
+					/(?:możesz(?:\s+teraz)?\s+(?:modyfikować|zmieniać|edytować)|you\s+may\s+(?:modify|change|edit))\s+([^\n,;.]+)/i,
+				)
+				const isScopedAdditive = Boolean(additiveAllow?.[1] && !/^(?:wyłącznie|tylko|only|code|files|anything|kodu|pliki|wszystko)\b/i.test(additiveAllow[1]))
+				if (isScopedAdditive && additiveAllow?.[1]) {
+					const scope = normalizeScope(additiveAllow[1])
+					if (scope && !supplementalWriteAllows.includes(scope)) supplementalWriteAllows.push(scope)
+					const priorDeny = scopedWriteDenies.indexOf(scope)
+					if (priorDeny !== -1) scopedWriteDenies.splice(priorDeny, 1)
+				}
 
 				// Positive override checking for modification (Lexical Override Trap Prevention)
-				if (deactivationModifyRegex.test(text)) {
+				if (deactivationModifyRegex.test(text) && !isScopedAdditive) {
 					hasNoModify = false
 					// Reconcile todoList items that were blocked by read-only constraint
 					if (this.todoList && this.todoList.length > 0) {
@@ -1477,7 +1528,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							}
 						}
 					}
-				} else if (noModifyRegex.test(text) && !/applies\s+only|tylko\s+do/i.test(text)) {
+				} else if (noModifyRegex.test(text) && (!scopedDeny || globalNoModifyRegex.test(text)) && !/applies\s+only|tylko\s+do/i.test(text)) {
 					hasNoModify = true
 				}
 
@@ -1521,7 +1572,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				if (noPromoteRegex.test(text)) hasNoPromote = true
 			}
 		}
-
 		if (hasNoModify) {
 			constraints.push("DO NOT modify code (READ-ONLY review)")
 			canonicalConstraints.push({
@@ -1549,6 +1599,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				scope: a,
 				decision: "ALLOW",
 				priority: "USER_SCOPED",
+				reason: `User explicitly authorized modifications to ${a}`,
+			})
+		}
+		for (const a of supplementalWriteAllows) {
+			constraints.push(`ALLOWED to modify ${a}`)
+			canonicalConstraints.push({
+				action: "file_write",
+				scope: a,
+				decision: "ALLOW",
+				priority: "LATEST_SCOPED_USER",
 				reason: `User explicitly authorized modifications to ${a}`,
 			})
 		}
@@ -1592,6 +1652,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		return {
 			constraints,
 			scopedWriteAllows,
+			supplementalWriteAllows,
 			scopedWriteDenies,
 			scopedGitAllows,
 			scopedGitDenies,
@@ -1610,21 +1671,24 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		isProtected?: boolean
 		askTs: number
 	}): UnifiedApprovalRequest {
-		const userMessages = this.clineMessages
-			.filter((m) => m.type === "say" && m.say === "user_feedback" && m.text && m.text.trim().length > 0)
-			.map((m) => m.text!.trim())
-
-		const trivialPattern = /^(?:continue|ok|proceed|idź dalej|dalej|tak|yes|go)\.?$/i
-		const latestSubstantive = [...userMessages].reverse().find((txt) => !trivialPattern.test(txt))
-		const latestUserInstruction =
-			userMessages.length > 0 ? userMessages[userMessages.length - 1] : (this.metadata?.task || "")
-		const activeGoal = latestSubstantive || this.metadata?.task || ""
+		const authorizationState = this.extractExplicitConstraints()
 		const {
 			constraints: explicitConstraints,
 			scopedWriteAllows,
+			supplementalWriteAllows,
 			scopedWriteDenies,
 			canonicalConstraints,
-		} = this.extractExplicitConstraints()
+		} = authorizationState
+		const contract = buildTaskContract(this.metadata?.task || "", this.clineMessages, {
+			explicitConstraints,
+			scopedWriteAllows,
+			supplementalWriteAllows,
+			scopedWriteDenies,
+			canonicalConstraints,
+		})
+		const latestSubstantive = contract.latestSubstantiveInstruction
+		const latestUserInstruction = contract.latestUserInstruction
+		const activeGoal = contract.currentGoal
 
 		let activeStep: string | undefined = undefined
 		if (this.todoList && this.todoList.length > 0) {
@@ -1771,6 +1835,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				recentActionSignatures: [...(this.deniedActionHistory || [])],
 				explicitConstraints,
 				scopedWriteAllows,
+				supplementalWriteAllows,
 				scopedWriteDenies,
 				canonicalConstraints,
 			},
@@ -1812,7 +1877,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	private extractCompletionCriteria(): string[] {
-		const criteria: string[] = []
+		const criteria = buildTaskContract(this.metadata?.task || "", this.clineMessages).completionCriteria
+		if (criteria.length > 0) return criteria.map((c) => (c.length > 300 ? c.slice(0, 297) + "..." : c))
 
 		// 1. Check for context compaction handoff in conversation history
 		for (const msg of [...this.clineMessages].reverse()) {
@@ -2958,13 +3024,15 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			await this.flushPendingToolResultsToHistory()
 
 			const systemPrompt = await this.getSystemPrompt()
-			const { scopedWriteAllows, scopedWriteDenies } = this.extractExplicitConstraints()
-			const userMessages = this.clineMessages
-				.filter((m) => m.type === "say" && m.say === "user_feedback" && m.text && m.text.trim().length > 0)
-				.map((m) => m.text!.trim())
-			const trivialPattern = /^(?:continue|ok|proceed|idź dalej|dalej|tak|yes|go)\.?$/i
-			const latestSubstantive = [...userMessages].reverse().find((txt) => !trivialPattern.test(txt))
-			const activeGoal = latestSubstantive || this.metadata?.task || ""
+			const authorizationState = this.extractExplicitConstraints()
+			const { scopedWriteAllows, supplementalWriteAllows, scopedWriteDenies } = authorizationState
+			const taskContract = buildTaskContract(this.metadata?.task || "", this.clineMessages, {
+				explicitConstraints: authorizationState.constraints,
+				scopedWriteAllows,
+				supplementalWriteAllows,
+				scopedWriteDenies,
+				canonicalConstraints: authorizationState.canonicalConstraints,
+			})
 
 			const {
 				newHistory,
@@ -2981,8 +3049,10 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				rooIgnoreController: this.rooIgnoreController,
 				abortSignal: this.compactionAbortController.signal,
 				scopedAllows: scopedWriteAllows,
+				supplementalAllows: supplementalWriteAllows,
 				scopedDenies: scopedWriteDenies,
-				activeGoal,
+				activeGoal: taskContract.currentGoal,
+				taskContract,
 				todoList: this.todoList,
 				workspacePath: this.workspacePath || this.cwd,
 			})
@@ -3094,13 +3164,15 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			await this.flushPendingToolResultsToHistory()
 
 			const systemPrompt = await this.getSystemPrompt()
-			const { scopedWriteAllows, scopedWriteDenies } = this.extractExplicitConstraints()
-			const userMessages = this.clineMessages
-				.filter((m) => m.type === "say" && m.say === "user_feedback" && m.text && m.text.trim().length > 0)
-				.map((m) => m.text!.trim())
-			const trivialPattern = /^(?:continue|ok|proceed|idź dalej|dalej|tak|yes|go)\.?$/i
-			const latestSubstantive = [...userMessages].reverse().find((txt) => !trivialPattern.test(txt))
-			const activeGoal = latestSubstantive || this.metadata?.task || ""
+			const authorizationState = this.extractExplicitConstraints()
+			const { scopedWriteAllows, supplementalWriteAllows, scopedWriteDenies } = authorizationState
+			const taskContract = buildTaskContract(this.metadata?.task || "", this.clineMessages, {
+				explicitConstraints: authorizationState.constraints,
+				scopedWriteAllows,
+				supplementalWriteAllows,
+				scopedWriteDenies,
+				canonicalConstraints: authorizationState.canonicalConstraints,
+			})
 
 			const {
 				newHistory,
@@ -3118,8 +3190,10 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				rooIgnoreController: this.rooIgnoreController,
 				abortSignal: this.compactionAbortController.signal,
 				scopedAllows: scopedWriteAllows,
+				supplementalAllows: supplementalWriteAllows,
 				scopedDenies: scopedWriteDenies,
-				activeGoal,
+				activeGoal: taskContract.currentGoal,
+				taskContract,
 				todoList: this.todoList,
 				workspacePath: this.workspacePath || this.cwd,
 			})
@@ -4302,6 +4376,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				let cacheReadTokens = 0
 				let inputTokens = 0
 				let outputTokens = 0
+				let usageReported = false
 				let totalCost: number | undefined
 
 				// We can't use `api_req_finished` anymore since it's a unique case
@@ -4394,6 +4469,9 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 						tokensOut: costResult.totalOutputTokens,
 						cacheWrites: cacheWriteTokens,
 						cacheReads: cacheReadTokens,
+						tokenUsageSource: usageReported
+							? this.apiConfiguration.apiProvider === "vscode-lm" ? "estimated" : "provider"
+							: effectiveInputTokens > 0 ? "estimated" : "unavailable",
 						cost: finalCost,
 						costSource,
 						precision,
@@ -4662,6 +4740,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							}
 							case "usage":
 								streamAudit.recordChunk("usage")
+								usageReported ||= chunk.inputTokens > 0 || chunk.outputTokens > 0
 								inputTokens += chunk.inputTokens
 								outputTokens += chunk.outputTokens
 								cacheWriteTokens += chunk.cacheWriteTokens ?? 0
@@ -4987,6 +5066,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 								if (chunk && chunk.type === "usage") {
 									usageFound = true
+									usageReported ||= chunk.inputTokens > 0 || chunk.outputTokens > 0
 									bgInputTokens += chunk.inputTokens
 									bgOutputTokens += chunk.outputTokens
 									bgCacheWriteTokens += chunk.cacheWriteTokens ?? 0

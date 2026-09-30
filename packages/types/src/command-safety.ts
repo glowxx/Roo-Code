@@ -358,6 +358,7 @@ export interface CompactApprovalContext {
 	explicitConstraints?: string[]
 	latestSubstantiveInstruction?: string
 	scopedWriteAllows?: string[]
+	supplementalWriteAllows?: string[]
 	scopedWriteDenies?: string[]
 	canonicalConstraints?: CanonicalConstraint[]
 	workspacePath: string
@@ -401,6 +402,7 @@ export const compactApprovalContextSchema = z.object({
 	explicitConstraints: z.array(z.string()).optional(),
 	latestSubstantiveInstruction: z.string().optional(),
 	scopedWriteAllows: z.array(z.string()).optional(),
+	supplementalWriteAllows: z.array(z.string()).optional(),
 	scopedWriteDenies: z.array(z.string()).optional(),
 	canonicalConstraints: z.array(z.any()).optional(),
 	workspacePath: z.string(),

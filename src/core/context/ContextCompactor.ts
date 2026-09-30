@@ -5,6 +5,7 @@ import { ApiMessage } from "../task-persistence/apiMessages"
 import { RooIgnoreController } from "../ignore/RooIgnoreController"
 import { convertToolBlocksToText, toolUseToText, toolResultToText } from "../condense"
 import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
+import type { TaskContract } from "../task/TaskContract"
 
 export const STATE_HANDOFF_HEADER = "### CONTEXT COMPACTION HANDOFF"
 
@@ -52,8 +53,10 @@ export interface CompactHistoryOptions {
 	metadata?: ApiHandlerCreateMessageMetadata
 	abortSignal?: AbortSignal
 	scopedAllows?: string[]
+	supplementalAllows?: string[]
 	scopedDenies?: string[]
 	activeGoal?: string
+	taskContract?: TaskContract
 	todoList?: TodoItem[]
 	workspacePath?: string
 }
@@ -69,10 +72,7 @@ export interface CompactHistoryResult {
 /**
  * Extracts content blocks from an array of ApiMessages for token counting.
  */
-function extractContentBlocks(
-	messages: ApiMessage[],
-	systemPrompt?: string,
-): Anthropic.Messages.ContentBlockParam[] {
+function extractContentBlocks(messages: ApiMessage[], systemPrompt?: string): Anthropic.Messages.ContentBlockParam[] {
 	const blocks: Anthropic.Messages.ContentBlockParam[] = []
 
 	if (systemPrompt && systemPrompt.trim()) {
@@ -249,10 +249,7 @@ export function extractCleanInitialBlocks(
 			return false
 		}
 		if (block.type === "text" && typeof block.text === "string") {
-			if (
-				block.text.includes("[Context Compacted Summary]") ||
-				block.text.includes(STATE_HANDOFF_HEADER)
-			) {
+			if (block.text.includes("[Context Compacted Summary]") || block.text.includes(STATE_HANDOFF_HEADER)) {
 				return false
 			}
 			// Stale environment details block from initial task setup
@@ -322,11 +319,7 @@ export function findLatestUserInstruction(messages: ApiMessage[]): string | unde
 								.map((b) => (b as any).text)
 								.join("\n")
 						: ""
-			if (
-				text &&
-				!text.includes("[Context Compacted Summary]") &&
-				!text.includes(STATE_HANDOFF_HEADER)
-			) {
+			if (text && !text.includes("[Context Compacted Summary]") && !text.includes(STATE_HANDOFF_HEADER)) {
 				const trimmed = text.trim()
 				if (!fallbackFound) {
 					fallbackFound = trimmed
@@ -392,9 +385,7 @@ export function sanitizeRoleAlternation(history: ApiMessage[]): ApiMessage[] {
  * Normalizes messages to ensure strictly alternating user/assistant roles
  * and that the first message has role "user", which is required by LLM providers.
  */
-function normalizeMessagesForApi(
-	messages: Anthropic.Messages.MessageParam[],
-): Anthropic.Messages.MessageParam[] {
+function normalizeMessagesForApi(messages: Anthropic.Messages.MessageParam[]): Anthropic.Messages.MessageParam[] {
 	if (messages.length === 0) {
 		return []
 	}
@@ -437,15 +428,7 @@ function normalizeMessagesForApi(
  * the last N turns to maintain immediate train of thought and recently edited lines.
  */
 export async function compactHistory(options: CompactHistoryOptions): Promise<CompactHistoryResult> {
-	const {
-		messages,
-		apiHandler,
-		systemPrompt,
-		taskId,
-		customInstructions,
-		preserveTurns = 2,
-		metadata,
-	} = options
+	const { messages, apiHandler, systemPrompt, taskId, customInstructions, preserveTurns = 2, metadata } = options
 
 	// Minimum messages required: Message 0 + intermediate messages + preserved turns
 	if (!messages || messages.length < 4) {
@@ -581,11 +564,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 	let iterator: AsyncIterator<any> | undefined
 
 	try {
-		const stream = apiHandler.createMessage(
-			CONDENSING_SYSTEM_PROMPT,
-			requestMessages,
-			condensingMetadata,
-		)
+		const stream = apiHandler.createMessage(CONDENSING_SYSTEM_PROMPT, requestMessages, condensingMetadata)
 		iterator = stream[Symbol.asyncIterator]()
 
 		while (true) {
@@ -596,11 +575,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 				throw new Error("Context condensation timed out after 60 seconds.")
 			}
 
-			const { value: chunk, done } = await Promise.race([
-				iterator.next(),
-				timeoutPromise,
-				abortPromise,
-			])
+			const { value: chunk, done } = await Promise.race([iterator.next(), timeoutPromise, abortPromise])
 
 			if (done) {
 				break
@@ -651,9 +626,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 
 	// Verify finish_reason
 	if (finishReason === "max_tokens" || finishReason === "length") {
-		throw new Error(
-			`Context condensation incomplete: model output was truncated (finish_reason: ${finishReason}).`,
-		)
+		throw new Error(`Context condensation incomplete: model output was truncated (finish_reason: ${finishReason}).`)
 	}
 
 	summary = summary.trim()
@@ -675,8 +648,17 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 	if (options.activeGoal) {
 		stateLines.push(`- **Active Substantive Goal**: ${options.activeGoal}`)
 	}
+	if (options.taskContract) {
+		const { originalGoal, currentGoal, amendments, decisions, completionCriteria, authorization } = options.taskContract
+		stateLines.push(
+			`- **Task Contract JSON**: ${JSON.stringify({ originalGoal, currentGoal, amendments, decisions, completionCriteria, authorization })}`,
+		)
+	}
 	if (options.scopedAllows && options.scopedAllows.length > 0) {
 		stateLines.push(`- **Scoped Modification Authorizations (ALLOW)**: ${options.scopedAllows.join(", ")}`)
+	}
+	if (options.supplementalAllows && options.supplementalAllows.length > 0) {
+		stateLines.push(`- **Additional Modification Authorizations (ALLOW)**: ${options.supplementalAllows.join(", ")}`)
 	}
 	if (options.scopedDenies && options.scopedDenies.length > 0) {
 		stateLines.push(`- **Scoped Modification Denials (DENY)**: ${options.scopedDenies.join(", ")}`)
@@ -684,9 +666,12 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 	if (options.todoList && options.todoList.length > 0) {
 		const completed = options.todoList.filter((t) => t.status === "completed").length
 		stateLines.push(`- **TodoList Progress**: ${completed}/${options.todoList.length} completed`)
+		stateLines.push(
+			`- **Pending Requirements JSON**: ${JSON.stringify(options.todoList.filter((t) => t.status !== "completed"))}`,
+		)
 	}
 	if (stateLines.length > 0) {
-		structuredStateBlock = `\n\n### CANONICAL STATE SNAPSHOT (ACTIVE CONSTRAINTS & PERMISSIONS)\n${stateLines.join("\n")}\n*(Note: This canonical snapshot and recent instructions take precedence over initial prompt constraints)*\n`
+		structuredStateBlock = `\n\n### CANONICAL STATE SNAPSHOT (ACTIVE CONSTRAINTS & PERMISSIONS)\n${stateLines.join("\n")}\n*(The original goal remains active. Explicit later amendments update its scope; a short decision answers only its associated question.)*\n`
 	}
 
 	// Construct synthetic summary message
@@ -695,7 +680,7 @@ export async function compactHistory(options: CompactHistoryOptions): Promise<Co
 		content: [
 			{
 				type: "text",
-				text: `[Context Compacted Summary]\n\n[ACTIVE CANONICAL STATE & RECENT INSTRUCTIONS PREVAIL OVER ORIGINAL PROMPT]\n\n${formattedSummary}${structuredStateBlock}`,
+				text: `[Context Compacted Summary]\n\n[CANONICAL TASK CONTRACT AND EXPLICIT AMENDMENTS GOVERN CURRENT WORK]\n\n${formattedSummary}${structuredStateBlock}`,
 			},
 		],
 		ts: Date.now(),

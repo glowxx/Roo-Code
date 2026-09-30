@@ -348,6 +348,7 @@ export interface BuildAutonomousApprovalPromptOptions {
 		currentStep?: string
 		explicitConstraints?: string[]
 		scopedWriteAllows?: string[]
+		supplementalWriteAllows?: string[]
 		scopedWriteDenies?: string[]
 		workspacePath: string
 		isWithinWorkspace: boolean
@@ -412,6 +413,7 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 		riskFindings: options.stage1Reason ? [options.stage1Reason] : [],
 		explicitUserConstraints: options.taskContext.explicitConstraints || [],
 		scopedWriteAllows: options.taskContext.scopedWriteAllows || [],
+		supplementalWriteAllows: options.taskContext.supplementalWriteAllows || [],
 		scopedWriteDenies: options.taskContext.scopedWriteDenies || [],
 		previousDenial: options.previousDenial || null,
 	}

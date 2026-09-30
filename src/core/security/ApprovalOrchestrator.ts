@@ -480,7 +480,7 @@ export class ApprovalOrchestrator {
 				(t) => t.status === "in_progress"
 			)
 			const isMutatingTask = (content: string) =>
-				/implement|edit|modify|fix|polish|write|patch|create\s+file|delete|build|add|ensure|verify|test|setup/i.test(content)
+				/implement|edit|modify|fix|polish|patch|create\s+file|delete|build|setup|write\s+(?:code|files?)|add\s+(?:code|files?)/i.test(content)
 
 			const actionableInProgress = inProgress.filter((t) => {
 				if ((hasNoModifyConstraint || isReadOnlyOrReportScope) && isMutatingTask(t.content)) {
@@ -499,7 +499,7 @@ export class ApprovalOrchestrator {
 						type: "in_progress_todo",
 						content: t.content,
 						guidance:
-							"Finish this in-progress item, or if out of scope or no longer applicable, use update_todo_list to mark it [c] (cancelled).",
+							"Finish this in-progress item. If blocked, mark it blocked and report the blocker; if out of scope, use update_todo_list to mark it [c] (cancelled).",
 					})),
 				}
 			}
@@ -669,8 +669,12 @@ export class ApprovalOrchestrator {
 			const scopedDenies: string[] = [
 				...(request.taskContext.scopedWriteDenies || []).map((s) => s.replace(/\\/g, "/").toLowerCase().trim()),
 			]
+			const supplementalAllows = (request.taskContext.supplementalWriteAllows || []).map((s) =>
+				s.replace(/\\/g, "/").toLowerCase().trim(),
+			)
+			const hasCanonicalScope = request.taskContext.canonicalConstraints !== undefined
 
-			for (const c of explicitConstraints) {
+			for (const c of hasCanonicalScope ? [] : explicitConstraints) {
 				const allowMatch = c.match(
 					/(?:ALLOWED\s+to\s+modify|możesz\s+modyfikować|modyfikuj\s+wyłącznie|modify\s+only)\s*(.+)/i
 				)
@@ -696,7 +700,7 @@ export class ApprovalOrchestrator {
 
 			const allowSectionRegex =
 				/(?:modify\s+only|you\s+(?:may|can)\s+modify\s+only|commit\s+only|change\s+only|edit\s+only|modyfikuj\s+wyłącznie|zmieniaj\s+tylko|edytuj\s+tylko|commituj\s+tylko|popraw\s+tylko|napraw\s+tylko|fix\s+only|zakres\s+zapisu(?:\s*:\s*|\s+)wyłącznie(?:\s*w)?|authorized\s+to\s+modify\s+only):?([\s\S]*?)(?=(?:\n\s*\n|\b(?:do\s+not|nie\s+(?:modyfikuj|commituj|zmieniaj|ruszaj)|zakaz|goals?|instructions?|uwaga)\b|$))/i
-			const allowSectionMatch = promptText.match(allowSectionRegex)
+			const allowSectionMatch = hasCanonicalScope ? null : promptText.match(allowSectionRegex)
 			if (allowSectionMatch && allowSectionMatch[1]) {
 				const lines = allowSectionMatch[1].split(/\n|;|,|\/|\s+and\s+|\s+or\s+|\s+oraz\s+|\s+i\s+/)
 				for (const line of lines) {
@@ -722,7 +726,7 @@ export class ApprovalOrchestrator {
 
 			const denySectionRegex =
 				/(?:do\s+not\s+(?:modify|commit|touch|edit)\s*(?:files\s+in|code\s+in)?|nie\s+(?:modyfikuj|commituj|ruszaj|zmieniaj)\s*(?:plików\s+w|kodu\s+w)?|zakaz\s+modyfikacji):?([\s\S]*?)(?=(?:\n\s*\n|\b(?:modify\s+only|commit\s+only|change\s+only|modyfikuj\s+wyłącznie|zmieniaj\s+tylko|edytuj\s+tylko|commituj\s+tylko|popraw\s+tylko|napraw\s+tylko|fix\s+only|ale\s+popraw|zamiast\s+tego|goals?|instructions?|uwaga)\b|$))/i
-			const denySectionMatch = promptText.match(denySectionRegex)
+			const denySectionMatch = hasCanonicalScope ? null : promptText.match(denySectionRegex)
 			if (denySectionMatch && denySectionMatch[1]) {
 				const lines = denySectionMatch[1].split(/\n|;|,|\/|\s+and\s+|\s+or\s+|\s+oraz\s+|\s+i\s+/)
 				for (const line of lines) {
@@ -753,7 +757,7 @@ export class ApprovalOrchestrator {
 					.replace(/\/$/, "")
 					.replace(/[.,:;!]+$/, "")
 					.trim()
-				return filePath.includes(clean)
+				return Boolean(clean && (filePath === clean || filePath.startsWith(`${clean}/`) || filePath.endsWith(`/${clean}`) || filePath.includes(`/${clean}/`)))
 			}
 
 			// 1. Check scoped denials
@@ -768,6 +772,15 @@ export class ApprovalOrchestrator {
 					isUserConstraintViolation: true,
 					violatedConstraint: `DO NOT modify files in ${forbiddenScope}`,
 					replanGuidance: `Do not modify files in forbidden scope '${forbiddenScope}'. Only work within authorized scopes.`,
+				}
+			}
+			const supplementalAllow = supplementalAllows.find((a) => isScopeMatch(normTarget, a))
+			if (supplementalAllow) {
+				return {
+					decision: "ALLOW_AUTO",
+					risk: "low",
+					reason: `File modification matches an additional user-authorized scope '${supplementalAllow}'.`,
+					taskAligned: true,
 				}
 			}
 
@@ -1102,6 +1115,9 @@ export class ApprovalOrchestrator {
 				explicitConstraints: request.taskContext.explicitConstraints?.map((c) =>
 					sanitizeForSafetyPrompt(c, knownSecrets)
 				),
+				scopedWriteAllows: request.taskContext.scopedWriteAllows?.map((s) => sanitizeForSafetyPrompt(s, knownSecrets)),
+				supplementalWriteAllows: request.taskContext.supplementalWriteAllows?.map((s) => sanitizeForSafetyPrompt(s, knownSecrets)),
+				scopedWriteDenies: request.taskContext.scopedWriteDenies?.map((s) => sanitizeForSafetyPrompt(s, knownSecrets)),
 				workspacePath: request.taskContext.workspacePath,
 				isWithinWorkspace: request.taskContext.isWithinWorkspace,
 			},

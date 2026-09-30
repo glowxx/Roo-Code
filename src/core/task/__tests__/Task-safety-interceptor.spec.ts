@@ -578,6 +578,70 @@ describe("Task safety interceptor", () => {
 			expect(req.target.workerReason).toContain("verify license enforcement")
 		})
 
+		it("does not replace the task or completion criteria with a short follow-up decision", () => {
+			;(task as any).metadata = { task: "Fix A, B and C:\n- Fix A\n- Fix B\n- Fix C\n- Run tests" }
+			;(task as any).clineMessages = [
+				{ ts: 1, type: "ask", ask: "followup", text: "Which variant, A or B?" },
+				{ ts: 2, type: "say", say: "user_feedback", text: "B" },
+			]
+
+			const req = (task as any).buildApprovalRequest({
+				askType: "completion_result",
+				text: "Done",
+				askTs: 3,
+			})
+
+			expect(req.taskContext.activeGoal).toContain("Fix A, B and C")
+			expect(req.taskContext.activeGoal).not.toBe("B")
+			expect(req.target.completionCriteria).toEqual(["Fix A", "Fix B", "Fix C", "Run tests"])
+		})
+
+		it("keeps a later scoped prohibition alongside the original task", () => {
+			;(task as any).metadata = { task: "Fix frontend and backend." }
+			;(task as any).clineMessages = [
+				{ ts: 1, type: "say", say: "user_feedback", text: "Nie ruszaj backendu, popraw frontend." },
+			]
+			const req = (task as any).buildApprovalRequest({ askType: "tool", text: '{"tool":"editedExistingFile","path":"backend/api.ts"}', askTs: 2 })
+
+			expect(req.taskContext.activeGoal).toContain("Fix frontend and backend.")
+			expect(req.taskContext.scopedWriteDenies).toContain("backend")
+			expect(req.taskContext.canonicalConstraints).toContainEqual(expect.objectContaining({
+				action: "file_write", scope: "backend", decision: "DENY",
+			}))
+		})
+
+		it("treats later do-not-modify backend as scoped, leaving frontend writable", () => {
+			;(task as any).metadata = { task: "Fix frontend and backend." }
+			;(task as any).clineMessages = [
+				{ ts: 1, type: "say", say: "user_feedback", text: "Do not modify backend; continue frontend." },
+			]
+			const constraints = (task as any).extractExplicitConstraints()
+			expect(constraints.scopedWriteDenies).toContain("backend")
+			expect(constraints.constraints).not.toContain("DO NOT modify code (READ-ONLY review)")
+		})
+
+		it("binds a short approval to its question and lets a later scoped denial win", () => {
+			;(task as any).metadata = { task: "Fix frontend and backend." }
+			;(task as any).clineMessages = [
+				{ ts: 1, type: "ask", ask: "followup", text: "Can I modify packages/shared?" },
+				{ ts: 2, type: "say", say: "user_feedback", text: "tak" },
+			]
+			let constraints = (task as any).extractExplicitConstraints()
+			expect(constraints.supplementalWriteAllows).toContain("packages/shared")
+			expect(constraints.scopedWriteAllows).toEqual([])
+			;(task as any).clineMessages.push({ ts: 3, type: "say", say: "user_feedback", text: "Nie ruszaj packages/shared." })
+			constraints = (task as any).extractExplicitConstraints()
+			expect(constraints.supplementalWriteAllows).not.toContain("packages/shared")
+			expect(constraints.scopedWriteDenies).toContain("packages/shared")
+		})
+
+		it("retains a global read-only rule when the same task also names a forbidden folder", () => {
+			;(task as any).metadata = { task: "Do not modify code. Do not touch backend." }
+			const constraints = (task as any).extractExplicitConstraints()
+			expect(constraints.constraints).toContain("DO NOT modify code (READ-ONLY review)")
+			expect(constraints.scopedWriteDenies).toContain("backend")
+		})
+
 		it("auto-denies with replan guidance on infrastructure timeout in AUTO mode without stopping task", async () => {
 			;(task as any).taskId = "task-auto-timeout-1"
 			;(task as any).metadata = { task: "Automated regression testing" }
@@ -762,11 +826,11 @@ describe("Task safety interceptor", () => {
 			;(task as any).retryRetransmissionTokens = 5000
 			;(task as any).getTokenUsage = vi.fn().mockReturnValue({ totalTokensIn: 85000 })
 
-			// Switch to a new model
+			// Force an explicit configuration change; active task model changes are otherwise locked.
 			task.updateApiConfiguration({
 				apiProvider: "openai",
 				apiModelId: "gpt-4o-mini",
-			} as any)
+			} as any, true)
 
 			expect((task as any).requestsSinceLastCompaction).toBe(0)
 			expect((task as any).tokensInAtLastCompaction).toBe(85000)
@@ -777,7 +841,7 @@ describe("Task safety interceptor", () => {
 			task.updateApiConfiguration({
 				apiProvider: "openai",
 				apiModelId: "gpt-4o-mini",
-			} as any)
+			} as any, true)
 			expect((task as any).requestsSinceLastCompaction).toBe(10)
 		})
 	})

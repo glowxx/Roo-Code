@@ -699,6 +699,33 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.violatedConstraint).toContain("app/public")
 		})
 
+		it("uses canonical supplemental approval without narrowing the original task, then honors a later deny", async () => {
+			const request: UnifiedApprovalRequest = {
+				id: "req-supplemental-1",
+				taskId: "task-supplemental-1",
+				actionType: "write_to_file",
+				timestamp: Date.now(),
+				target: { filePath: "packages/shared/types.ts" },
+				taskContext: {
+					latestUserInstruction: "tak",
+					activeGoal: "Fix frontend and backend.",
+					workspacePath: "/workspace/project",
+					isWithinWorkspace: true,
+					canonicalConstraints: [],
+					supplementalWriteAllows: ["packages/shared"],
+				},
+			}
+			expect((await orchestrator.evaluate(request, mockState)).decision).toBe("ALLOW_AUTO")
+			request.target.filePath = "frontend/app.ts"
+			expect((await orchestrator.evaluate(request, mockState)).decision).toBe("ALLOW_AUTO")
+			request.target.filePath = "packages/shared/types.ts"
+			request.taskContext.scopedWriteDenies = ["packages/shared"]
+			request.taskContext.supplementalWriteAllows = []
+			expect((await orchestrator.evaluate(request, mockState)).decision).toBe("DENY_AND_REPLAN")
+			request.target.filePath = "other-packages/shared/types.ts"
+			expect((await orchestrator.evaluate(request, mockState)).decision).toBe("ALLOW_AUTO")
+		})
+
 		it("AUTO + protected file is HARD_BLOCK even if user granted ALLOWED to modify all files (System Safety P0 invariant)", async () => {
 			const request: UnifiedApprovalRequest = {
 				id: "req-write-protected-1",
