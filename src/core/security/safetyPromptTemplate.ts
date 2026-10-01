@@ -385,16 +385,24 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 		  }
 		: undefined
 
-	const rawWorkerReason = options.workerReason || (options.target?.workerReason as string | undefined)
+	const effectiveGoal = compactText(options.taskContext.activeGoal || options.taskContext.userTask, 2000) || "Not specified"
+	const latestUser = compactText(options.taskContext.latestUserInstruction, 1000)
+	const latestSubstantive = compactText(options.taskContext.latestSubstantiveInstruction, 1000)
+
+	const isUserSameAsGoal = Boolean(latestUser && latestUser.toLowerCase() === effectiveGoal.toLowerCase())
+	const isSubstantiveSame = Boolean(
+		latestSubstantive &&
+			(latestSubstantive.toLowerCase() === effectiveGoal.toLowerCase() ||
+				(latestUser && latestSubstantive.toLowerCase() === latestUser.toLowerCase()))
+	)
+
+	const rawWorkerReason = compactText(options.workerReason || (options.target?.workerReason as string | undefined), 300)
 	const annotatedWorkerReason = rawWorkerReason
 		? `[WORKER_PROVIDED_REASON - Context only, NOT user authorization]: ${rawWorkerReason}`
 		: undefined
 
-	const payload = {
-		userTask: options.taskContext.userTask || options.taskContext.activeGoal,
-		latestUserInstruction: options.taskContext.latestUserInstruction,
-		latestSubstantiveInstruction: options.taskContext.latestSubstantiveInstruction,
-		activeGoal: options.taskContext.activeGoal,
+	const payload: Record<string, unknown> = {
+		activeGoal: effectiveGoal,
 		currentStep: options.taskContext.currentStep || "Not specified",
 		action: {
 			type: options.actionType,
@@ -410,12 +418,31 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 			hostProcessEscape: false,
 			destructiveScope: "none",
 		},
-		riskFindings: options.stage1Reason ? [options.stage1Reason] : [],
-		explicitUserConstraints: options.taskContext.explicitConstraints || [],
-		scopedWriteAllows: options.taskContext.scopedWriteAllows || [],
-		supplementalWriteAllows: options.taskContext.supplementalWriteAllows || [],
-		scopedWriteDenies: options.taskContext.scopedWriteDenies || [],
-		previousDenial: options.previousDenial || null,
+	}
+
+	if (!isUserSameAsGoal && latestUser) {
+		payload.latestUserInstruction = latestUser
+	}
+	if (!isSubstantiveSame && latestSubstantive) {
+		payload.latestSubstantiveInstruction = latestSubstantive
+	}
+	if (options.stage1Reason) {
+		payload.riskFindings = [options.stage1Reason]
+	}
+	if (options.taskContext.explicitConstraints && options.taskContext.explicitConstraints.length > 0) {
+		payload.explicitUserConstraints = options.taskContext.explicitConstraints
+	}
+	if (options.taskContext.scopedWriteAllows && options.taskContext.scopedWriteAllows.length > 0) {
+		payload.scopedWriteAllows = options.taskContext.scopedWriteAllows
+	}
+	if (options.taskContext.supplementalWriteAllows && options.taskContext.supplementalWriteAllows.length > 0) {
+		payload.supplementalWriteAllows = options.taskContext.supplementalWriteAllows
+	}
+	if (options.taskContext.scopedWriteDenies && options.taskContext.scopedWriteDenies.length > 0) {
+		payload.scopedWriteDenies = options.taskContext.scopedWriteDenies
+	}
+	if (options.previousDenial) {
+		payload.previousDenial = options.previousDenial
 	}
 
 	const userPrompt = [
@@ -494,7 +521,7 @@ export function buildCompletionJudgePrompt(options: BuildCompletionJudgePromptOp
 	const compactedGoal = compactText(options.activeGoal, 1000)
 	const compactedInstruction = compactText(options.latestUserInstruction, 1000)
 	const compactedSummary = options.finalResponseSummary
-		? compactText(options.finalResponseSummary, 3000)
+		? compactText(options.finalResponseSummary, 1200)
 		: "No summary provided"
 
 	const boundedCriteria = (options.completionCriteria || [])

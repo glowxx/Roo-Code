@@ -19,6 +19,9 @@ import {
 	sanitizeForSafetyPrompt,
 } from "./safetyPromptTemplate"
 import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
+import { createHash } from "crypto"
+import { parseCommand } from "../../shared/parse-command"
+import { containsDangerousSubstitution } from "../auto-approval/commands"
 
 export function createFailClosedResult(detail: string): SafetyEvaluationResult {
 	return {
@@ -36,10 +39,12 @@ export const DEFAULT_TIMEOUT_MS = 15000
 
 const FAST_PATH_PATTERNS = [
 	// Safe git read-only inspection commands
-	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote\s+-v)(\s+[^\n;&|`$<>]+)?$/i,
+	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote(?:\s+-v)?|check-ignore|config\s+--get)(\s+[^\n;&|`$<>]+)?$/i,
 	// Directory & basic file reading without composition
 	/^(ls|dir|pwd)(\s+[^\n;&|`$<>]+)?$/i,
 	/^(cat|type|head|tail)(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe wait / pause commands (e.g. timeout 90, timeout /t 10)
+	/^(?:timeout(?:\s+\/t)?\s+\d+(?:\s+\/nobreak)?)$/i,
 	// Pure echo without redirection
 	/^echo(\s+[^\n;&|`$<>]+)?$/i,
 	// Safe test & lint runners for Node ecosystems
@@ -57,9 +62,13 @@ const FAST_PATH_PATTERNS = [
 	// TypeScript and ESLint standalone binaries
 	/^(?:tsc|eslint)(\s+[^\n;&|`$<>]+)?$/i,
 	// Search and binary location utilities
-	/^(?:which|where|findstr|grep)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(?:which|where|findstr|grep|rg)(\s+[^\n;&|`$<>]+)?$/i,
 	// Harmless system information
 	/^(?:uname|whoami|date|hostname)(\s+[^\n;&|`$<>]+)?$/i,
+]
+
+const PASSIVE_FILTER_PATTERNS = [
+	/^(?:grep|rg|findstr|head|tail|wc|cat|type|sort|uniq)(\s+[^\n;&|`$<>]+)?$/i,
 ]
 
 export interface EvaluateSafetyOptions {
@@ -140,70 +149,139 @@ export class CommandSafetyJudge {
 		}
 
 		const trimmed = command.trim()
-
-		// Check command prefixed by simple directory change: `cd <dir> && <cmd>`
-		const cdMatch = trimmed.match(/^(?:cd\s+[^;&|<>`$]+\s*(?:&&|;)\s*)(.+)$/i)
-		if (cdMatch && cdMatch[1]) {
-			const subCmd = cdMatch[1].trim()
-			// Subcommand must have NO further chaining, redirection, or escalation
-			const subHasModifier =
-				/[><|;&`\n]/.test(subCmd) ||
-				/\$\(/.test(subCmd) ||
-				/\b(sudo|doas|runas)\b/i.test(subCmd) ||
-				/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(subCmd) ||
-				/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(subCmd)
-			if (!subHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(subCmd))) {
-				return {
-					isSafe: true,
-					riskLevel: "safe",
-					reason: `Verified command (${subCmd}) via fast-path`,
-				}
-			}
+		if (!trimmed) {
 			return null
 		}
 
-		// Fast-path requires single-command execution without uninspected shell composition,
-		// redirection, subshell interpolation, or destructive/privilege escalation operators.
+		// 1. Hard block dangerous shell parameter substitutions
+		if (containsDangerousSubstitution(trimmed)) {
+			return null
+		}
+
+		// 2. Unwrapped command evaluation (WSL / Docker / cmd / powershell wrapper)
+		// Check unwrapped execution boundary FIRST before modifier filtering
+		try {
+			const boundary = ExecutionBoundaryAnalyzer.analyze(trimmed)
+			if (!boundary.hostImpact.isHostEscape && boundary.innerCommand && boundary.innerCommand.trim() !== trimmed) {
+				const innerResult = this.evaluateFastPath(boundary.innerCommand.trim())
+				if (innerResult && innerResult.isSafe) {
+					return {
+						isSafe: true,
+						riskLevel: "safe",
+						reason: `Verified read-only guest command (${boundary.innerCommand.trim()}) via fast-path`,
+					}
+				}
+			}
+		} catch {
+			// fallback
+		}
+
+		// 3. Pipe composition check: left command safe read-only, right command passive filter
+		// e.g. cat file.txt | grep text or git log | head -n 10
+		if (trimmed.includes("|") && !trimmed.includes("||")) {
+			const rawClean = trimmed.replace(/\s+\d*>&[0-2]/g, "")
+			if (!/[><;&`\n]/.test(rawClean)) {
+				const pipeSegments = trimmed.split("|").map((s) => s.trim())
+				if (pipeSegments.length > 1) {
+					const firstSegment = pipeSegments[0]
+					const restSegments = pipeSegments.slice(1)
+					const firstResult = this.evaluateFastPathSingle(firstSegment)
+					const restAllPassive = restSegments.every((seg) => {
+						const normSeg = seg.replace(/\s+\d*>&[0-2]/g, "").trim()
+						return (
+							!/[><|;&`\n]/.test(normSeg) &&
+							!/\$\(/.test(normSeg) &&
+							PASSIVE_FILTER_PATTERNS.some((p) => p.test(normSeg))
+						)
+					})
+					if (firstResult && firstResult.isSafe && restAllPassive) {
+						return {
+							isSafe: true,
+							riskLevel: "safe",
+							reason: "Verified read-only command via fast-path",
+						}
+					}
+				}
+			}
+		}
+
+		// 4. Command chaining decomposition (&& or ;)
+		// e.g. git status && git diff or cd src && npm test
+		if (/(?:&&|;)/.test(trimmed)) {
+			// Check command prefixed by simple directory change: `cd <dir> && <cmd>`
+			const cdMatch = trimmed.match(/^(?:cd\s+[^;&|<>`$]+\s*(?:&&|;)\s*)(.+)$/i)
+			if (cdMatch && cdMatch[1]) {
+				const subCmd = cdMatch[1].trim()
+				const subResult = this.evaluateFastPath(subCmd)
+				if (subResult && subResult.isSafe) {
+					return {
+						isSafe: true,
+						riskLevel: "safe",
+						reason: `Verified command (${subCmd}) via fast-path`,
+					}
+				}
+				return null
+			}
+
+			const parsed = parseCommand(trimmed)
+			if (parsed.length > 1) {
+				let allSafe = true
+				for (const subCmd of parsed) {
+					const subTrimmed = subCmd.trim()
+					if (!subTrimmed) continue
+					const isSimpleCd = /^cd\s+[^;&|<>`$]+$/i.test(subTrimmed)
+					if (isSimpleCd) {
+						continue
+					}
+					const subResult = this.evaluateFastPath(subTrimmed)
+					if (!subResult || !subResult.isSafe) {
+						allSafe = false
+						break
+					}
+				}
+				if (allSafe) {
+					return {
+						isSafe: true,
+						riskLevel: "safe",
+						reason: "Verified read-only command via fast-path",
+					}
+				}
+				return null
+			}
+		}
+
+		// 5. Single command evaluation
+		return this.evaluateFastPathSingle(trimmed)
+	}
+
+	private evaluateFastPathSingle(command: string): SafetyEvaluationResult | null {
+		const trimmed = command.trim()
+		if (!trimmed) {
+			return null
+		}
+
+		// Strip harmless descriptor redirections (e.g. 2>&1 or 1>&2)
+		const normalized = trimmed.replace(/\s+\d*>&[0-2]/g, "").trim()
+
+		// Disqualifying modifiers: file redirection, subshells, privilege escalation, destructive commands
 		const hasDisqualifyingModifier =
-			/[><|;&`\n]/.test(trimmed) ||
-			/\$\(/.test(trimmed) ||
-			/\b(sudo|doas|runas)\b/i.test(trimmed) ||
-			/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(trimmed) ||
-			/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(trimmed)
+			/[><|;&`\n]/.test(normalized) ||
+			/\$\(/.test(normalized) ||
+			/\b(sudo|doas|runas)\b/i.test(normalized) ||
+			/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(normalized) ||
+			/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(normalized)
 
 		if (hasDisqualifyingModifier) {
 			return null
 		}
 
-		const isMatch = FAST_PATH_PATTERNS.some((pattern) => pattern.test(trimmed))
+		const isMatch = FAST_PATH_PATTERNS.some((pattern) => pattern.test(normalized))
 		if (isMatch) {
 			return {
 				isSafe: true,
 				riskLevel: "safe",
 				reason: "Verified read-only command via fast-path",
 			}
-		}
-
-		// Check wrapped command (WSL / Docker / subshell) if boundary analysis confirms no host escape
-		try {
-			const boundary = ExecutionBoundaryAnalyzer.analyze(trimmed)
-			if (!boundary.hostImpact.isHostEscape && boundary.innerCommand && boundary.innerCommand !== trimmed) {
-				const innerTrimmed = boundary.innerCommand.trim()
-				const innerHasModifier =
-					innerTrimmed.includes(">") ||
-					/\bsudo\b/i.test(innerTrimmed) ||
-					/\|\s*(rm|bash|sh|zsh|powershell|pwsh)\b/i.test(innerTrimmed)
-
-				if (!innerHasModifier && FAST_PATH_PATTERNS.some((pattern) => pattern.test(innerTrimmed))) {
-					return {
-						isSafe: true,
-						riskLevel: "safe",
-						reason: `Verified read-only guest command (${innerTrimmed}) via fast-path`,
-					}
-				}
-			}
-		} catch {
-			// fallback to full LLM evaluation
 		}
 
 		return null
@@ -485,7 +563,10 @@ export class CommandSafetyJudge {
 		// 2. Cache lookup (bypass cache in unit tests where evaluate is mocked)
 		const isMockMode = Boolean((CommandSafetyJudge.evaluate as any)?.mock)
 		const normalizedCmd = command.trim().replace(/\s+/g, " ")
-		const cacheKey = `${taskId || ""}:${boundary.target.type}:${boundary.target.name || "default"}:${cwd || ""}:${normalizedCmd}`
+		const constraintHash = context?.explicitConstraints?.length
+			? createHash("sha256").update(context.explicitConstraints.join(";")).digest("hex").slice(0, 8)
+			: "none"
+		const cacheKey = `${taskId || ""}:${boundary.target.type}:${boundary.target.name || "default"}:${cwd || ""}:${constraintHash}:${normalizedCmd}`
 		if (!isMockMode) {
 			const cached = CommandSafetyJudge.twoStageCache.get(cacheKey)
 			if (cached) {
@@ -1021,6 +1102,12 @@ export class CommandSafetyJudge {
 			...(isReasoningModel
 				? { reasoning_effort: "low", max_completion_tokens: params.maxTokens || 150 }
 				: { temperature: 0.0, max_tokens: params.maxTokens || 150 }),
+		}
+
+		if (params.provider === "openrouter") {
+			;(requestParams as any).extra_body = { reasoning: { max_tokens: 0 } }
+		} else if (params.provider === "xkiro" && !isReasoningModel) {
+			;(requestParams as any).reasoning_effort = "low"
 		}
 
 		if (params.responseFormat === "json_object" && !isReasoningModel) {
