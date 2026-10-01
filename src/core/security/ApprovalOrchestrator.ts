@@ -42,12 +42,33 @@ export interface ApprovalOrchestratorOptions {
 
 export function classifyVerifierError(error: any): VerifierFailureCategory {
 	if (!error) return VerifierFailureCategory.OTHER_TRANSIENT
-	const status = error.status || error.statusCode || error.response?.status
+	const status = error.status || error.statusCode || error.response?.status || error.$metadata?.httpStatusCode
+	const code = (error.code || error.cause?.code || "").toString().toLowerCase()
 	const msg = (error.message || "").toLowerCase()
+	const name = (error.name || "").toString()
 
-	if (status === 429 || msg.includes("rate limit") || msg.includes("too many requests") || msg.includes("resource_exhausted")) {
+	// 1. Cancellation (AbortError not caused by timeout or budget limit)
+	if (
+		name === "AbortError" &&
+		!msg.includes("timed out") &&
+		!msg.includes("timeout") &&
+		!msg.includes("budget exceeded")
+	) {
+		return VerifierFailureCategory.CANCELLED
+	}
+
+	// 2. Rate limiting (429)
+	if (
+		status === 429 ||
+		code === "rate_limit_exceeded" ||
+		msg.includes("rate limit") ||
+		msg.includes("too many requests") ||
+		msg.includes("resource_exhausted")
+	) {
 		return VerifierFailureCategory.RATE_LIMIT
 	}
+
+	// 3. Quota & Billing
 	if (
 		status === 402 ||
 		msg.includes("quota") ||
@@ -59,47 +80,95 @@ export function classifyVerifierError(error: any): VerifierFailureCategory {
 	) {
 		return VerifierFailureCategory.FREE_QUOTA_EXHAUSTED
 	}
-	if (status === 401 || status === 403 || msg.includes("unauthorized") || msg.includes("invalid api key") || msg.includes("forbidden")) {
+
+	// 4. Auth
+	if (
+		status === 401 ||
+		status === 403 ||
+		msg.includes("unauthorized") ||
+		msg.includes("invalid api key") ||
+		msg.includes("forbidden")
+	) {
 		return VerifierFailureCategory.AUTH
 	}
-	if (status === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("invalid model")) {
-		return VerifierFailureCategory.INVALID_MODEL
-	}
+
+	// 5. Genuine Model Not Found / Invalid Model (404, explicit model_not_found, removed/deprecated)
 	if (
+		status === 404 ||
+		code === "model_not_found" ||
+		msg.includes("model not found") ||
+		msg.includes("model does not exist") ||
+		msg.includes("does not exist") ||
+		msg.includes("invalid model") ||
+		msg.includes("unknown model") ||
+		msg.includes("model has been deleted") ||
+		msg.includes("model deprecated") ||
+		msg.includes("model is not available") ||
+		msg.includes("no such model")
+	) {
+		return VerifierFailureCategory.MODEL_UNAVAILABLE
+	}
+
+	// 6. Timeouts (Deadline, request timeout, client abort on timeout)
+	if (
+		status === 408 ||
+		status === 524 ||
+		code === "etimedout" ||
+		code === "esockettimedout" ||
+		name === "TimeoutError" ||
+		msg.includes("timed out") ||
+		msg.includes("timeout") ||
+		msg.includes("etimedout") ||
+		msg.includes("deadline exceeded") ||
+		msg.includes("budget exceeded")
+	) {
+		return VerifierFailureCategory.TIMEOUT
+	}
+
+	// 7. Transient Provider Errors: 500, 502, 503, 504, 529, service unavailable, bad gateway, overloaded
+	if (
+		status === 500 ||
 		status === 502 ||
 		status === 503 ||
 		status === 504 ||
 		status === 529 ||
 		msg.includes("service unavailable") ||
 		msg.includes("bad gateway") ||
-		msg.includes("overloaded")
+		msg.includes("gateway timeout") ||
+		msg.includes("server error") ||
+		msg.includes("internal server error") ||
+		msg.includes("overloaded") ||
+		msg.includes("temporarily unavailable")
 	) {
-		return VerifierFailureCategory.MODEL_UNAVAILABLE
+		return VerifierFailureCategory.PROVIDER_ERROR
 	}
+
+	// 8. Network & Transport Errors: ECONNRESET, ECONNREFUSED, socket hang up, fetch failed
 	if (
-		error.name === "AbortError" ||
-		msg.includes("timed out") ||
-		msg.includes("timeout") ||
-		msg.includes("etimedout")
-	) {
-		return VerifierFailureCategory.TIMEOUT
-	}
-	if (
+		code === "econnreset" ||
+		code === "econnrefused" ||
+		code === "enotfound" ||
+		code === "und_err_socket" ||
+		code === "und_err_body_timeout" ||
+		code === "err_stream_premature_close" ||
+		msg.includes("connection reset") ||
+		msg.includes("econnreset") ||
 		msg.includes("econnrefused") ||
 		msg.includes("enotfound") ||
+		msg.includes("socket hang up") ||
 		msg.includes("network") ||
 		msg.includes("fetch failed")
 	) {
 		return VerifierFailureCategory.NETWORK
 	}
+
 	return VerifierFailureCategory.OTHER_TRANSIENT
 }
 
 export function isTransientVerifierError(category: VerifierFailureCategory): boolean {
 	return (
-		category === VerifierFailureCategory.RATE_LIMIT ||
-		category === VerifierFailureCategory.MODEL_UNAVAILABLE ||
 		category === VerifierFailureCategory.TIMEOUT ||
+		category === VerifierFailureCategory.PROVIDER_ERROR ||
 		category === VerifierFailureCategory.NETWORK ||
 		category === VerifierFailureCategory.OTHER_TRANSIENT
 	)
@@ -144,11 +213,15 @@ export class ApprovalOrchestrator {
 		current.lastCategory = category
 
 		// Cooldown policy:
-		// - INVALID_MODEL: 5 minutes (300,000ms) - model does not exist
+		// - INVALID_MODEL / MODEL_UNAVAILABLE: 5 minutes (300,000ms) - model does not exist
 		// - RATE_LIMIT or FREE_QUOTA_EXHAUSTED: 30 seconds (30,000ms)
-		// - TIMEOUT or MODEL_UNAVAILABLE or NETWORK or OTHER:
-		//   If >= 2 consecutive failures: trip circuit breaker for 30 seconds (30,000ms)
-		if (category === VerifierFailureCategory.INVALID_MODEL) {
+		// - TIMEOUT / PROVIDER_ERROR / NETWORK / OTHER_TRANSIENT:
+		//   Only repeated verification failures (>= 2 consecutive failures across verifications):
+		//   trips circuit breaker for 30 seconds (30,000ms)
+		if (
+			category === VerifierFailureCategory.INVALID_MODEL ||
+			category === VerifierFailureCategory.MODEL_UNAVAILABLE
+		) {
 			current.cooldownUntil = now + 300000
 		} else if (
 			category === VerifierFailureCategory.RATE_LIMIT ||
@@ -216,6 +289,8 @@ export class ApprovalOrchestrator {
 		maxTokens?: number
 		responseFormat?: "json_object" | "text"
 		validateResponse?: (raw: string) => boolean
+		logicalVerificationId?: string
+		signal?: AbortSignal
 	}): Promise<{
 		rawResponse: string | null
 		usedCandidate: VerifierCandidate | null
@@ -257,7 +332,7 @@ export class ApprovalOrchestrator {
 				rawResponse: null,
 				usedCandidate: null,
 				lastError: new Error("All safety verifier candidates are currently in cooldown"),
-				lastCategory: health?.lastCategory || VerifierFailureCategory.MODEL_UNAVAILABLE,
+				lastCategory: health?.lastCategory || VerifierFailureCategory.OTHER_TRANSIENT,
 				attempts: 0,
 				inCooldown: true,
 			}
@@ -265,6 +340,7 @@ export class ApprovalOrchestrator {
 
 		const TOTAL_BUDGET_MS = this.timeoutMs
 		const deadline = Date.now() + TOTAL_BUDGET_MS
+		const logicalVerificationId = params.logicalVerificationId || `verif-${Date.now()}`
 		let totalAttempts = 0
 		let lastError: Error | null = null
 		let lastCategory: VerifierFailureCategory = VerifierFailureCategory.OTHER_TRANSIENT
@@ -277,8 +353,15 @@ export class ApprovalOrchestrator {
 
 			let candidateAttempts = 0
 			const maxAttemptsForCandidate = 2
+			let candidateSucceeded = false
 
 			while (candidateAttempts < maxAttemptsForCandidate) {
+				if (params.signal?.aborted) {
+					lastError = new Error("Approval verification cancelled by user")
+					lastCategory = VerifierFailureCategory.CANCELLED
+					break
+				}
+
 				const remainingBudget = deadline - Date.now()
 				if (remainingBudget <= 500) {
 					if (!lastError) {
@@ -290,6 +373,7 @@ export class ApprovalOrchestrator {
 
 				candidateAttempts++
 				totalAttempts++
+				const attemptId = `${logicalVerificationId}-attempt-${candidateAttempts}`
 
 				// Separate bounded queue wait timeout (max 5000ms or remaining budget)
 				const queueTimeoutMs = Math.min(5000, remainingBudget)
@@ -301,6 +385,13 @@ export class ApprovalOrchestrator {
 				const queueTimeoutId = setTimeout(() => {
 					queueAbort.abort(new Error(`Approval AI queue wait timed out after ${queueTimeoutMs}ms`))
 				}, queueTimeoutMs)
+
+				const onParentAbortQueue = () => {
+					queueAbort.abort(new Error("Approval AI verification cancelled by user"))
+				}
+				if (params.signal) {
+					params.signal.addEventListener("abort", onParentAbortQueue, { once: true })
+				}
 
 				const queueStart = Date.now()
 				let queueWaitMs = 0
@@ -314,8 +405,17 @@ export class ApprovalOrchestrator {
 						})
 					} finally {
 						clearTimeout(queueTimeoutId)
+						if (params.signal) {
+							params.signal.removeEventListener("abort", onParentAbortQueue)
+						}
 						queueWaitMs = Date.now() - queueStart
 						lastQueueWaitMs = queueWaitMs
+					}
+
+					if (params.signal?.aborted) {
+						lastError = new Error("Approval verification cancelled by user")
+						lastCategory = VerifierFailureCategory.CANCELLED
+						break
 					}
 
 					const remainingAfterQueue = deadline - Date.now()
@@ -327,6 +427,13 @@ export class ApprovalOrchestrator {
 					const genTimeoutMs = Math.min(15000, remainingAfterQueue)
 					const genAbort = new AbortController()
 					let genTimeoutId: NodeJS.Timeout | undefined
+
+					const onParentAbortGen = () => {
+						genAbort.abort(new Error("Approval AI verification cancelled by user"))
+					}
+					if (params.signal) {
+						params.signal.addEventListener("abort", onParentAbortGen, { once: true })
+					}
 
 					const timeoutPromise = new Promise<never>((_, reject) => {
 						genTimeoutId = setTimeout(() => {
@@ -352,6 +459,8 @@ export class ApprovalOrchestrator {
 						signal: genAbort.signal,
 						maxTokens: isRetry ? (params.maxTokens ?? 350) * 2 : (params.maxTokens ?? 350),
 						responseFormat: params.responseFormat,
+						attemptId,
+						logicalVerificationId,
 					}
 
 					const requestStart = Date.now()
@@ -361,8 +470,15 @@ export class ApprovalOrchestrator {
 							? this.judge.callProviderDetails(callParams)
 							: this.judge.callProvider(callParams)
 
-					const callRes = await Promise.race([providerCall, timeoutPromise])
-					if (genTimeoutId) clearTimeout(genTimeoutId)
+					let callRes: any
+					try {
+						callRes = await Promise.race([providerCall, timeoutPromise])
+					} finally {
+						if (genTimeoutId) clearTimeout(genTimeoutId)
+						if (params.signal) {
+							params.signal.removeEventListener("abort", onParentAbortGen)
+						}
+					}
 					const requestMs = Date.now() - requestStart
 					lastRequestMs = requestMs
 
@@ -372,10 +488,14 @@ export class ApprovalOrchestrator {
 					if (params.validateResponse && !params.validateResponse(rawResponse)) {
 						lastError = new Error(`Approval response failed schema or JSON extraction`)
 						lastCategory = VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
-						ApprovalOrchestrator.recordVerifierFailure(candidateKey, lastCategory)
-						continue
+						if (candidateAttempts < maxAttemptsForCandidate && deadline - Date.now() > 1000 && !params.signal?.aborted) {
+							await new Promise((r) => setTimeout(r, 300))
+							continue
+						}
+						break
 					}
 
+					candidateSucceeded = true
 					coordinator.reportSuccess(providerKey)
 					ApprovalOrchestrator.recordVerifierSuccess(candidateKey)
 
@@ -393,21 +513,51 @@ export class ApprovalOrchestrator {
 				} catch (error: any) {
 					lastError = error instanceof Error ? error : new Error(String(error))
 					lastCategory = classifyVerifierError(lastError)
+
+					if (params.signal?.aborted || lastCategory === VerifierFailureCategory.CANCELLED) {
+						break
+					}
+
 					if (lastCategory === VerifierFailureCategory.RATE_LIMIT) {
 						coordinator.reportRateLimit(providerKey, 5)
+						break
 					}
-					ApprovalOrchestrator.recordVerifierFailure(candidateKey, lastCategory)
 
 					if (!isTransientVerifierError(lastCategory)) {
 						break
 					}
 
-					if (candidateAttempts < maxAttemptsForCandidate && deadline - Date.now() > 2000) {
-						await new Promise((r) => setTimeout(r, 500))
+					const remainingTime = deadline - Date.now()
+					if (candidateAttempts < maxAttemptsForCandidate && remainingTime > 1000 && !params.signal?.aborted) {
+						const backoffMs = Math.min(500, Math.max(100, remainingTime - 1000))
+						await new Promise<void>((resolve) => {
+							const timer = setTimeout(resolve, backoffMs)
+							if (params.signal) {
+								params.signal.addEventListener("abort", () => {
+									clearTimeout(timer)
+									resolve()
+								}, { once: true })
+							}
+						})
+						if (params.signal?.aborted) {
+							lastCategory = VerifierFailureCategory.CANCELLED
+							break
+						}
+						continue
+					} else {
+						break
 					}
 				} finally {
 					ticket?.release()
 				}
+			}
+
+			if (!candidateSucceeded && lastCategory !== VerifierFailureCategory.CANCELLED) {
+				ApprovalOrchestrator.recordVerifierFailure(candidateKey, lastCategory)
+			}
+
+			if (params.signal?.aborted || lastCategory === VerifierFailureCategory.CANCELLED) {
+				break
 			}
 		}
 
@@ -469,7 +619,8 @@ export class ApprovalOrchestrator {
 	 */
 	public async evaluate(
 		request: UnifiedApprovalRequest,
-		state?: Partial<ExtensionState> | null
+		state?: Partial<ExtensionState> | null,
+		options?: { signal?: AbortSignal }
 	): Promise<ApprovalDecisionResult> {
 		const approvalConfig = state?.commandSafetyConfig
 		const workerConfig = state?.apiConfiguration
@@ -543,10 +694,10 @@ export class ApprovalOrchestrator {
 		}
 
 		if (request.actionType === "attempt_completion") {
-			return await this.evaluateCompletionWithApprovalAi(request, state!)
+			return await this.evaluateCompletionWithApprovalAi(request, state!, options)
 		}
 
-		return await this.evaluateWithApprovalAi(request, state!)
+		return await this.evaluateWithApprovalAi(request, state!, options)
 	}
 
 	/**
@@ -1221,7 +1372,8 @@ export class ApprovalOrchestrator {
 	 */
 	private async evaluateWithApprovalAi(
 		request: UnifiedApprovalRequest,
-		state: Partial<ExtensionState>
+		state: Partial<ExtensionState>,
+		options?: { signal?: AbortSignal }
 	): Promise<ApprovalDecisionResult> {
 		const approvalConfig = state.commandSafetyConfig!
 		const provider = approvalConfig.provider.toLowerCase().trim()
@@ -1270,6 +1422,8 @@ export class ApprovalOrchestrator {
 			userPrompt,
 			state,
 			maxTokens: 350,
+			logicalVerificationId: request.id,
+			signal: options?.signal,
 			validateResponse: (raw: string) => safeExtractJson(raw, approvalDecisionResultSchema).success,
 		})
 
@@ -1277,16 +1431,23 @@ export class ApprovalOrchestrator {
 			const extraction = safeExtractJson(execResult.rawResponse, approvalDecisionResultSchema)
 			if (extraction.success && extraction.data) {
 				const parsed = extraction.data
+				let finalReason = parsed.reason
+				if (
+					(parsed.decision === "DENY_AND_REPLAN" || parsed.decision === "HARD_BLOCK") &&
+					!finalReason.toLowerCase().startsWith("safety verification rejected")
+				) {
+					finalReason = `Safety verification rejected this action. ${finalReason}`
+				}
 				const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
 				const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
 				const extractionNote = extraction.category !== "VALID_JSON" ? ` jsonCategory=${extraction.category}` : ""
 				const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0} approvalPromptApproxTokens=${promptApproxTokens}`
-				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote}${timingText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
+				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote}${timingText} finalDecision=${parsed.decision} reason="${finalReason}"`
 
 				const result: ApprovalDecisionResult = {
 					decision: parsed.decision,
 					risk: parsed.risk as CommandSafetyRiskLevel,
-					reason: parsed.reason,
+					reason: finalReason,
 					taskAligned: parsed.taskAligned ?? false,
 					boundary: parsed.boundary ?? undefined,
 					hostImpact: parsed.hostImpact ?? undefined,
@@ -1310,16 +1471,44 @@ export class ApprovalOrchestrator {
 
 		// Infrastructure failure or schema invalidity across all candidate models
 		const isSchemaInvalid = execResult.lastCategory === VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
+		const isModelUnavailable =
+			execResult.lastCategory === VerifierFailureCategory.MODEL_UNAVAILABLE ||
+			execResult.lastCategory === VerifierFailureCategory.INVALID_MODEL
+		const isVerifierUnavailable =
+			isModelUnavailable ||
+			execResult.lastCategory === VerifierFailureCategory.FREE_QUOTA_EXHAUSTED ||
+			execResult.lastCategory === VerifierFailureCategory.AUTH
 		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown verification failure"
 
 		const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0} approvalPromptApproxTokens=${promptApproxTokens}`
 		const cooldownText = execResult.inCooldown ? " inCooldown=true" : ""
-		const reason = execResult.inCooldown
-			? "Safety verification is in cooldown after repeated failures. Review this action manually."
-			: isSchemaInvalid
-				? `Approval response schema validation failed (${errorMsg}). Fail closed.`
-				: `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
-		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=${!isSchemaInvalid}${cooldownText} verifierCategory=${execResult.lastCategory}${timingText} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+
+		let reason: string
+		if (execResult.inCooldown) {
+			reason = "Safety verification is in cooldown after repeated failures. Review this action manually."
+		} else if (isSchemaInvalid) {
+			reason = `Approval response schema validation failed (${errorMsg}). Fail closed.`
+		} else if (isModelUnavailable) {
+			reason = `Safety verification model is unavailable. Configured model no longer exists or cannot be used. (${execResult.lastCategory}: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.FREE_QUOTA_EXHAUSTED) {
+			reason = `Safety verification quota exhausted. Review this action manually. (FREE_QUOTA_EXHAUSTED: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.AUTH) {
+			reason = `Safety verification authentication failed. Review your API key. (AUTH: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.RATE_LIMIT) {
+			reason = `Safety verification is temporarily rate limited. Review this action manually. (RATE_LIMIT: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.TIMEOUT) {
+			reason = `Safety verification temporarily unavailable. Review this action manually. (TIMEOUT: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.PROVIDER_ERROR) {
+			reason = `Safety verification temporarily unavailable. Review this action manually. (PROVIDER_ERROR: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.NETWORK) {
+			reason = `Safety verification temporarily unavailable. Review this action manually. (NETWORK: ${errorMsg})`
+		} else if (execResult.lastCategory === VerifierFailureCategory.CANCELLED) {
+			reason = `Safety verification was cancelled. Review this action manually. (CANCELLED: ${errorMsg})`
+		} else {
+			reason = `Safety verification temporarily unavailable. Review this action manually. (${execResult.lastCategory || "VERIFIER_FAILED"}: ${errorMsg})`
+		}
+
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=${isVerifierUnavailable}${cooldownText} verifierCategory=${execResult.lastCategory}${timingText} finalDecision=MANUAL_APPROVAL reason="${reason}"`
 
 		const highestRisk = request.executionBoundary?.hostImpact.highestRisk
 		const fallbackRisk: CommandSafetyRiskLevel = highestRisk && highestRisk !== "none" ? highestRisk : "medium"
@@ -1330,7 +1519,7 @@ export class ApprovalOrchestrator {
 			reason,
 			taskAligned: false,
 			infrastructureFailure: true,
-			verifierUnavailable: !isSchemaInvalid,
+			verifierUnavailable: isVerifierUnavailable,
 			verifierFailureCategory: execResult.lastCategory,
 			approvalAttemptCount: execResult.attempts,
 			queueWaitMs: execResult.queueWaitMs,
@@ -1402,7 +1591,8 @@ export class ApprovalOrchestrator {
 	 */
 	private async evaluateCompletionWithApprovalAi(
 		request: UnifiedApprovalRequest,
-		state: Partial<ExtensionState>
+		state: Partial<ExtensionState>,
+		options?: { signal?: AbortSignal }
 	): Promise<ApprovalDecisionResult> {
 		const approvalConfig = state.commandSafetyConfig!
 		const provider = approvalConfig.provider.toLowerCase().trim()
@@ -1448,6 +1638,8 @@ export class ApprovalOrchestrator {
 				userPrompt: currentPrompt,
 				state,
 				maxTokens,
+				logicalVerificationId: `${request.id}-judge-${judgeAttempt}`,
+				signal: options?.signal,
 				responseFormat: "json_object",
 			})
 
@@ -1502,12 +1694,18 @@ export class ApprovalOrchestrator {
 
 		// If bounded retries exhausted or verifier failed: FAIL CLOSED TO MANUAL_APPROVAL
 		// Invariant: NEVER throw uncaught error that reinvokes worker model or causes infinite regeneration loop!
-		const verifierUnavailable =
-			lastErrorCategory === "RATE_LIMIT" ||
-			lastErrorCategory === "AUTH_ERROR" ||
-			lastErrorCategory === "NETWORK_TIMEOUT" ||
-			lastErrorCategory === "VERIFIER_FAILED"
-		const reason = `Completion Judge verification could not produce a valid decision (${lastErrorCategory}: ${lastErrorMessage}). Task completion requires manual approval.`
+		const isModelUnavailable =
+			lastErrorCategory === VerifierFailureCategory.MODEL_UNAVAILABLE ||
+			lastErrorCategory === VerifierFailureCategory.INVALID_MODEL
+		const verifierUnavailable = isModelUnavailable
+		let reason: string
+		if (isModelUnavailable) {
+			reason = `Safety verification model is unavailable. Configured model no longer exists or cannot be used. (${lastErrorCategory}: ${lastErrorMessage})`
+		} else if (lastErrorCategory === VerifierFailureCategory.RATE_LIMIT || lastErrorCategory === "RATE_LIMIT") {
+			reason = `Safety verification is temporarily rate limited. Review this action manually. (RATE_LIMIT: ${lastErrorMessage})`
+		} else {
+			reason = `Completion Judge verification could not produce a valid decision (${lastErrorCategory}: ${lastErrorMessage}). Task completion requires manual approval.`
+		}
 		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=attempt_completion mode=auto fastPath=false approvalModelCalled=true attempt=${totalAttempts} infrastructureFailure=true verifierUnavailable=${verifierUnavailable} verifierCategory=${lastErrorCategory} finalDecision=MANUAL_APPROVAL reason="${reason}" workerReinvoked=false`
 
 		let mappedFailureCategory: VerifierFailureCategory | undefined

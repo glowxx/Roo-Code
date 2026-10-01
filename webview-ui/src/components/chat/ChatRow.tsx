@@ -1751,14 +1751,32 @@ export const ChatRowContent = ({
 						infrastructureFailure?: boolean
 					}>(message.text || "{}")
 					if (!evaluation) return null
+					const isRejected = evaluation.reason?.includes("Safety verification rejected this action")
+					const isModelUnavailable =
+						evaluation.reason?.includes("Safety verification model is unavailable") ||
+						evaluation.reason?.includes("Verification model unavailable")
+					const isRateLimited = evaluation.reason?.includes("temporarily rate limited")
+					const isTemporarilyUnavailable =
+						evaluation.reason?.includes("Safety verification temporarily unavailable") ||
+						evaluation.reason?.includes("Safety verification is in cooldown")
 					const isInfra =
 						evaluation.infrastructureFailure ||
+						isModelUnavailable ||
+						isRateLimited ||
+						isTemporarilyUnavailable ||
 						evaluation.reason?.includes("Approval response schema validation") ||
-						evaluation.reason?.includes("Verification model unavailable") ||
 						evaluation.reason?.includes("Malformed JSON response from Approval Authority model")
-					const title = isInfra
-						? `🛡️ AI Command Safety Guardrail: VERIFICATION FAILED (Fail-Closed)`
-						: `🛡️ AI Command Safety Guardrail: ${(evaluation.riskLevel || "unknown").toUpperCase()} RISK DETECTED`
+					const title = isRejected
+						? `🛡️ AI Command Safety Guardrail: ACTION REJECTED`
+						: isModelUnavailable
+							? `🛡️ AI Command Safety Guardrail: VERIFIER MODEL UNAVAILABLE`
+							: isRateLimited
+								? `🛡️ AI Command Safety Guardrail: VERIFIER RATE LIMITED`
+								: isTemporarilyUnavailable
+									? `🛡️ AI Command Safety Guardrail: VERIFICATION TEMPORARILY UNAVAILABLE`
+									: isInfra
+										? `🛡️ AI Command Safety Guardrail: VERIFICATION FAILED (Fail-Closed)`
+										: `🛡️ AI Command Safety Guardrail: ${(evaluation.riskLevel || "unknown").toUpperCase()} RISK DETECTED`
 					return (
 						<WarningRow
 							title={title}

@@ -211,7 +211,7 @@ describe("ApprovalOrchestrator", () => {
 
 			const result = await orchestrator.evaluate(request, mockState)
 			expect(result.decision).toBe("MANUAL_APPROVAL")
-			expect(result.reason).toContain("Fail closed")
+			expect(result.reason).toContain("Safety verification temporarily unavailable")
 		})
 	})
 
@@ -310,9 +310,10 @@ describe("ApprovalOrchestrator", () => {
 
 			expect(result.decision).toBe("MANUAL_APPROVAL")
 			expect(result.infrastructureFailure).toBe(true)
-			expect(result.verifierUnavailable).toBe(true)
+			expect(result.verifierUnavailable).toBe(false)
 			expect(result.approvalAttemptCount).toBe(2)
-			expect(result.reason).toContain("Verification model unavailable")
+			expect(result.reason).toContain("Safety verification temporarily unavailable")
+			expect(result.reason).toContain("TIMEOUT")
 			expect(result.auditLog).toContain("infrastructureFailure=true")
 			expect(result.auditLog).toContain("finalDecision=MANUAL_APPROVAL")
 		})

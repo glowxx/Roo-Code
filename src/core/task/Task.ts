@@ -2110,20 +2110,24 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				try {
 					// The worker can be locked to a task-specific profile while the global
 					// selection changes in another chat. Compare the verifier to this worker.
-					decisionResult = await this.approvalOrchestrator.evaluate(request, {
-						...state,
-						apiConfiguration: this.apiConfiguration,
-					})
+					decisionResult = await this.approvalOrchestrator.evaluate(
+						request,
+						{
+							...state,
+							apiConfiguration: this.apiConfiguration,
+						},
+						{ signal: this.currentRequestAbortController?.signal }
+					)
 				} catch (err) {
 					const errorMsg = err instanceof Error ? err.message : String(err)
 					console.error(`[ApprovalOrchestrator] evaluate threw an unexpected error:`, err)
 					decisionResult = {
 						decision: "MANUAL_APPROVAL",
 						risk: "high",
-						reason: `Safety evaluation infrastructure error: ${errorMsg}. Falling back to manual user approval.`,
+						reason: `Safety verification temporarily unavailable. Review this action manually. (INFRASTRUCTURE_ERROR: ${errorMsg})`,
 						taskAligned: false,
 						infrastructureFailure: true,
-						verifierUnavailable: true,
+						verifierUnavailable: false,
 						approvalAttemptCount: 1,
 						auditLog: `[ApprovalAudit] taskId=${this.taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false infrastructureFailure=true finalDecision=MANUAL_APPROVAL reason="Unexpected evaluate error: ${errorMsg}" workerReinvoked=false`,
 					}

@@ -425,7 +425,9 @@ ForEach-Object { '{0}:{1}:{2}' -f $_.Path,$_.LineNumber,$_.Line.Trim() }
 			const result = await orchestrator.evaluate(request, realUserSettingsFixture)
 			expect(result.decision).toBe("MANUAL_APPROVAL")
 			expect(result.infrastructureFailure).toBe(true)
-			expect(result.reason).toContain("Verification model unavailable")
+			expect(result.verifierUnavailable).toBe(false)
+			expect(result.reason).toContain("Safety verification temporarily unavailable")
+			expect(result.reason).toContain("TIMEOUT")
 		})
 
 		// 13. Verifier timeout safe action -> should not occur because verifier not invoked
