@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react"
-import { Check, CheckCheck, ChevronUp, X } from "lucide-react"
+import { Check, ChevronUp, SlidersHorizontal, X } from "lucide-react"
 import { cn } from "../../lib/utils"
 import { useTranslation } from "react-i18next"
 import { StandardTooltip } from "../ui/standard-tooltip"
@@ -73,7 +73,7 @@ export const CommandPatternSelector: React.FC<CommandPatternSelectorProps> = ({
 							"text-sm flex-1 group-hover:opacity-100",
 							isExpanded ? "opacity-100" : "opacity-40",
 						)}>
-						<CheckCheck className="size-3 inline-block mr-2" />
+						<SlidersHorizontal className="size-3 inline-block mr-2" />
 						{t("chat:commandExecution.manageCommands")}
 					</span>
 					<ChevronUp

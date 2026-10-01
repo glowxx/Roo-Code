@@ -634,6 +634,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					experiments,
 					customSupportPrompts,
 					commandSafetyConfig: cachedState.commandSafetyConfig,
+					approvalMode: cachedState.approvalMode ?? "manual",
 				},
 			})
 
@@ -642,6 +643,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 			if (cachedState.autoApprovalEnabled !== cleanOriginalState.autoApprovalEnabled) {
 				vscode.postMessage({ type: "autoApprovalEnabled", bool: cachedState.autoApprovalEnabled })
+			}
+
+			if (cachedState.approvalMode !== cleanOriginalState.approvalMode && cachedState.approvalMode) {
+				vscode.postMessage({ type: "approvalMode", approvalMode: cachedState.approvalMode })
 			}
 
 			setCleanOriginalState(cachedState)

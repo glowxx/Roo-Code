@@ -355,9 +355,11 @@ export const ChatRowContent = ({
 			case "mistake_limit_reached":
 				return [null, null] // These will be handled by ErrorRow component
 			case "command": {
-				const isAwaitingApproval = isLast && message.type === "ask" && !isCommandExecuting
+				const isEvaluating = message.approvalState === "EVALUATING"
+				const isApproved = message.approvalState === "AUTO_APPROVED"
+				const isAwaitingApproval = isLast && message.type === "ask" && !isCommandExecuting && !isEvaluating
 				return [
-					isCommandExecuting ? (
+					isCommandExecuting || isEvaluating ? (
 						<ProgressIndicator />
 					) : (
 						<TerminalSquare className="size-4" aria-label="Terminal icon" />
@@ -365,6 +367,10 @@ export const ChatRowContent = ({
 					<span style={{ color: normalColor, fontWeight: "bold" }}>
 						{isCommandExecuting
 							? t("chat:commandExecution.running")
+							: isEvaluating
+							? t("chat:commandExecution.checkingSafety", { defaultValue: "Checking command safety..." })
+							: isApproved
+							? t("chat:commandExecution.autoApproved", { defaultValue: "Auto-approved" })
 							: isAwaitingApproval
 							? t("chat:commandExecution.awaitingApproval")
 							: t("chat:commandExecution.command", { defaultValue: "Command" })}
