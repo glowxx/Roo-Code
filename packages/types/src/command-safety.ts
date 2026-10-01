@@ -149,6 +149,15 @@ export const DEFAULT_SAFE_COMMANDS: readonly string[] = [
 	"Get-Location",
 	"gl",
 	"Test-Path",
+	"Select-String",
+	"sls",
+	"Select-Object",
+	"select",
+	"Measure-Object",
+	"Sort-Object",
+	"Out-String",
+	"Format-Table",
+	"tsc",
 ]
 
 /**

@@ -1337,8 +1337,8 @@ export class ApprovalOrchestrator {
 		// Strict deterministic fallback: commands MUST be proven safe by fast-path heuristics
 		const isFastPathSafeCmd = Boolean(
 			cmd &&
-			typeof this.judge?.evaluateFastPath === "function" &&
-			this.judge.evaluateFastPath(cmd) !== null &&
+			((typeof this.judge?.evaluateFastPath === "function" && this.judge.evaluateFastPath(cmd)?.isSafe === true) ||
+				CommandSafetyJudge.evaluateFastPath(cmd)?.isSafe === true) &&
 			!isDangerousCmd
 		)
 

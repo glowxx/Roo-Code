@@ -37,6 +37,84 @@ export const SAFETY_EVALUATION_FALLBACK_RESULT: SafetyEvaluationResult = createF
 
 export const DEFAULT_TIMEOUT_MS = 15000
 
+export const SAFE_FOREACH_FILTER_PATTERN =
+	/^(?:ForEach-Object|%|foreach)(?:\s+-Process)?\s*\{\s*(?:(?:'[^'\r\n]*'|"[^"$\r\n]*")\s+-f\s+(?:(?:\$_|\$PSItem)(?:\.[a-zA-Z0-9_]+)*(?:\.(?:Trim|TrimStart|TrimEnd|ToLower|ToUpper|ToString)\(\))?(?:\s*,\s*)?)+|(?:\$_|\$PSItem)(?:\.[a-zA-Z0-9_]+)*(?:\.(?:Trim|TrimStart|TrimEnd|ToLower|ToUpper|ToString)\(\))?)\s*\}\s*$/i
+
+export const SAFE_WHERE_FILTER_PATTERN =
+	/^(?:Where-Object|where|\?)(?:\s+-FilterScript)?\s*\{\s*(?:\$_|\$PSItem)(?:\.[a-zA-Z0-9_]+)?\s+-(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains)\s+(?:'[^'\r\n]*'|"[^"$\r\n]*"|\d+|\$true|\$false|\$null)\s*\}\s*$/i
+
+/**
+ * Split command line into pipeline segments respecting single/double quotes and scriptblocks {}.
+ * Returns null if the command contains unclosed quotes, unbalanced braces, or || (logical OR).
+ */
+export function splitPipelineSegments(command: string): string[] | null {
+	if (!command || typeof command !== "string") return null
+	const trimmed = command.trim()
+	if (!trimmed) return null
+	if (trimmed.includes("||")) return null
+	if (!trimmed.includes("|")) return [trimmed]
+
+	const segments: string[] = []
+	let current = ""
+	let inQuote: "none" | "single" | "double" = "none"
+	let braceDepth = 0
+	let escape = false
+
+	for (let i = 0; i < trimmed.length; i++) {
+		const char = trimmed[i]
+		if (escape) {
+			current += char
+			escape = false
+			continue
+		}
+		if (char === "\\") {
+			if (inQuote === "single") {
+				current += char
+			} else {
+				escape = true
+				current += char
+			}
+			continue
+		}
+		if (inQuote === "none") {
+			if (char === "'") {
+				inQuote = "single"
+				current += char
+			} else if (char === '"') {
+				inQuote = "double"
+				current += char
+			} else if (char === "{") {
+				braceDepth++
+				current += char
+			} else if (char === "}") {
+				braceDepth = Math.max(0, braceDepth - 1)
+				current += char
+			} else if (char === "|" && braceDepth === 0) {
+				const seg = current.trim()
+				if (!seg) return null
+				segments.push(seg)
+				current = ""
+			} else {
+				current += char
+			}
+		} else if (inQuote === "single") {
+			if (char === "'") inQuote = "none"
+			current += char
+		} else if (inQuote === "double") {
+			if (char === '"') inQuote = "none"
+			current += char
+		}
+	}
+
+	if (inQuote !== "none" || braceDepth !== 0) {
+		return null
+	}
+	if (current.trim().length > 0) {
+		segments.push(current.trim())
+	}
+	return segments.length > 0 ? segments : null
+}
+
 const FAST_PATH_PATTERNS = [
 	// Safe git read-only inspection commands
 	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote(?:\s+-v)?|check-ignore|config\s+--get)(\s+[^\n;&|`$<>{}\0]+)?$/i,
@@ -48,12 +126,13 @@ const FAST_PATH_PATTERNS = [
 	/^(?:Get-Content|gc)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	/^(?:Get-Item|gi|Get-Location|gl)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	/^(?:Test-Path)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Select-String|sls)(?:\s+(?:-(?:Pattern|SimpleMatch|CaseSensitive|Quiet|AllMatches|Context|Encoding|Path|LiteralPath)\b|'[^'\r\n]*'|"[^"$\r\n]*"|[a-zA-Z0-9_,\.\-\*\/\\:]+))*\s*$/i,
 	// Safe wait / pause commands (e.g. timeout 90, timeout /t 10)
 	/^(?:timeout(?:\s+\/t)?\s+\d+(?:\s+\/nobreak)?)$/i,
 	// Pure echo without redirection
 	/^echo(\s+[^\n;&|`$<>]+)?$/i,
 	// Safe test & lint runners for Node ecosystems
-	/^(?:pnpm|npm|yarn|bun)\s+(?:test|run\s+test|run\s+check-types|run\s+lint|check-types|lint|ls|list|why|outdated|audit)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(?:pnpm|npm|yarn|bun)\s+(?:test(?:[:_-][a-zA-Z0-9_-]+)?|run\s+test(?:[:_-][a-zA-Z0-9_-]+)?|check-types|run\s+check-types|typecheck|run\s+typecheck|lint(?:[:_-][a-zA-Z0-9_-]+)?|run\s+lint(?:[:_-][a-zA-Z0-9_-]+)?|ls|list|why|outdated|audit)(\s+[^\n;&|`$<>]+)?$/i,
 	/^(?:vitest|jest|npx\s+(?:vitest|jest))(\s+[^\n;&|`$<>]+)?$/i,
 	/^node\s+([^\n;&|`$<>]*test[^\n;&|`$<>]*)$/i,
 	// Safe test & lint runners for Python
@@ -65,7 +144,7 @@ const FAST_PATH_PATTERNS = [
 	// Safe inspection / test commands for .NET
 	/^dotnet\s+(test|--version)(\s+[^\n;&|`$<>]+)?$/i,
 	// TypeScript and ESLint standalone binaries
-	/^(?:tsc|eslint)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(?:tsc|eslint|npx\s+tsc|pnpm\s+exec\s+tsc)(\s+[^\n;&|`$<>]+)?$/i,
 	// Search and binary location utilities
 	/^(?:which|where|findstr|grep|rg)(\s+[^\n;&|`$<>]+)?$/i,
 	// Harmless system information
@@ -75,12 +154,13 @@ const FAST_PATH_PATTERNS = [
 const PASSIVE_FILTER_PATTERNS = [
 	// Safe Unix filters
 	/^(?:grep|rg|findstr|head|tail|wc|cat|type|sort|uniq)(\s+[^\n;&|`$<>{}\0]+)?$/i,
-	// Safe PowerShell output formatting & passive filtering cmdlets (strictly forbidding scriptblocks {} and redirections)
+	// Safe PowerShell output formatting & passive filtering cmdlets
 	/^(?:Out-String)(?:\s+-(?:Width\s+\d+|Stream))*$/i,
 	/^(?:Out-Host(?:\s+-Paging)?|Out-Null)$/i,
 	/^(?:Format-Table|ft|Format-List|fl|Format-Wide|fw)(?:\s+-(?:AutoSize|Wrap|GroupBy\s+[a-zA-Z0-9_]+|Property\s+[a-zA-Z0-9_,\s]+|[a-zA-Z0-9_]+))*\s*$/i,
 	/^(?:Select-Object|select)(?:\s+-(?:First|Last|Skip|Index)\s+\d+|\s+-Property\s+[a-zA-Z0-9_,\s]+|\s+-Unique|\s+-ExpandProperty\s+[a-zA-Z0-9_]+)+$/i,
-	/^(?:Select-String|sls)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Select-String|sls)(?:\s+(?:-(?:Pattern|SimpleMatch|CaseSensitive|Quiet|AllMatches|Context|Encoding|Path|LiteralPath)\b|'[^'\r\n]*'|"[^"$\r\n]*"|[a-zA-Z0-9_,\.\-\*\/\\:]+))*\s*$/i,
+	/^(?:Sort-Object|sort)(?:\s+-(?:Property\s+[a-zA-Z0-9_,\s]+|Descending|Ascending|Unique|CaseSensitive)|\s+[a-zA-Z0-9_]+)*\s*$/i,
 	/^(?:Measure-Object|measure)(?:\s+-(?:Line|Word|Character|IgnoreWhiteSpace))*$/i,
 ]
 
@@ -190,29 +270,19 @@ export class CommandSafetyJudge {
 		}
 
 		// 3. Pipe composition check: left command safe read-only, right command passive filter
-		// e.g. cat file.txt | grep text or git log | head -n 10
+		// e.g. cat file.txt | grep text, git log | head -n 10, or Get-ChildItem | Select-String | ForEach-Object { ... }
 		if (trimmed.includes("|") && !trimmed.includes("||")) {
-			const rawClean = trimmed.replace(/\s+\d*>&[0-2]/g, "")
-			if (!/[><;&`\n{}]/.test(rawClean)) {
-				const pipeSegments = trimmed.split("|").map((s) => s.trim())
-				if (pipeSegments.length > 1) {
-					const firstSegment = pipeSegments[0]
-					const restSegments = pipeSegments.slice(1)
-					const firstResult = this.evaluateFastPathSingle(firstSegment)
-					const restAllPassive = restSegments.every((seg) => {
-						const normSeg = seg.replace(/\s+\d*>&[0-2]/g, "").trim()
-						return (
-							!/[><|;&`\n{}]/.test(normSeg) &&
-							!/\$\(/.test(normSeg) &&
-							PASSIVE_FILTER_PATTERNS.some((p) => p.test(normSeg))
-						)
-					})
-					if (firstResult && firstResult.isSafe && restAllPassive) {
-						return {
-							isSafe: true,
-							riskLevel: "safe",
-							reason: "Verified read-only command via fast-path",
-						}
+			const pipeSegments = splitPipelineSegments(trimmed)
+			if (pipeSegments && pipeSegments.length > 1) {
+				const firstSegment = pipeSegments[0]
+				const restSegments = pipeSegments.slice(1)
+				const firstResult = this.evaluateFastPathSingle(firstSegment)
+				const restAllPassive = restSegments.every((seg) => this.isPassiveFilterOrSafeTransform(seg))
+				if (firstResult && firstResult.isSafe && restAllPassive) {
+					return {
+						isSafe: true,
+						riskLevel: "safe",
+						reason: "Verified read-only command via fast-path",
 					}
 				}
 			}
@@ -265,6 +335,40 @@ export class CommandSafetyJudge {
 
 		// 5. Single command evaluation
 		return this.evaluateFastPathSingle(trimmed)
+	}
+
+	/**
+	 * Checks whether a single pipeline segment is a guaranteed passive filter
+	 * or safe pure-formatting / transformation cmdlet.
+	 */
+	public isPassiveFilterOrSafeTransform(seg: string): boolean {
+		const normSeg = seg.replace(/\s+\d*>&[0-2]/g, "").trim()
+		if (!normSeg) return false
+
+		// Disqualifying characters and tokens: file redirection, chaining, subshells, privilege escalation, or destructive calls
+		if (
+			/[><;&`]|(?:\$\()|\b(sudo|doas|runas)\b/i.test(normSeg) ||
+			/\b(Start-Process|Invoke-Expression|iex|Invoke-Command|icm|Out-File|Set-Content|sc|Add-Content|ac|Clear-Content|Remove-Item|rmdir|format|del|rm)\b/i.test(normSeg)
+		) {
+			return false
+		}
+
+		// Check safe ForEach-Object / % / foreach pure formatting
+		if (SAFE_FOREACH_FILTER_PATTERN.test(normSeg)) {
+			return true
+		}
+
+		// Check safe Where-Object / where / ? pure filter
+		if (SAFE_WHERE_FILTER_PATTERN.test(normSeg)) {
+			return true
+		}
+
+		// Check standard passive filter patterns (must not contain unwhitelisted curly braces)
+		if (!/[{}]/.test(normSeg) && PASSIVE_FILTER_PATTERNS.some((p) => p.test(normSeg))) {
+			return true
+		}
+
+		return false
 	}
 
 	private evaluateFastPathSingle(command: string): SafetyEvaluationResult | null {

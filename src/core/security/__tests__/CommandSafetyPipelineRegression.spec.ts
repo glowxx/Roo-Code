@@ -32,8 +32,18 @@ describe("CommandSafetyPipelineRegression - Strict Audit Suite", () => {
 		},
 	}
 
-	const exactScreenshotCommand =
+	const exactDiffScreenshotCommand =
 		'powershell -NoProfile -Command "git diff -- license-api-system/src/api/routes.ts license-api-system/src/database/PgDatabaseClient.ts license-api-system/migrations/008_activation_idempotency.sql licensing-obfuscation/src/security/transport/FutureHttpLicenseTransport.js licensing-obfuscation/src/security/license/LicenseManager.js licensing-obfuscation/src/security/device/DeviceBinding.js | Out-String -Width 240"'
+
+	const exactPowerShellPipelineCommand = `powershell -NoProfile -Command "
+Get-ChildItem -Recurse -File license-api-system,licensing-obfuscation |
+Select-String -Pattern 'activation_attempt_id|activationAttemptId|READY=1|systemd-notify|attempt.marker' |
+Select-Object -First 240 |
+ForEach-Object { '{0}:{1}:{2}' -f $_.Path,$_.LineNumber,$_.Line.Trim() }
+"`
+
+	const exactPowerShellSingleLineCommand =
+		'powershell -NoProfile -Command "Get-ChildItem -Recurse -File license-api-system,licensing-obfuscation | Select-String -Pattern \'activation_attempt_id|activationAttemptId|READY=1|systemd-notify|attempt.marker\' | Select-Object -First 240 | ForEach-Object { \'{0}:{1}:{2}\' -f $_.Path,$_.LineNumber,$_.Line.Trim() }"'
 
 	beforeEach(() => {
 		CommandSafetyJudge.clearCache()
@@ -43,24 +53,22 @@ describe("CommandSafetyPipelineRegression - Strict Audit Suite", () => {
 	})
 
 	describe("PHASE 19 & 22: Exact Screenshot Command Incident Replay", () => {
-		it("fast-paths exact screenshot command deterministically with 0 AI verifier calls", async () => {
-			// Fast-path evaluation directly on CommandSafetyJudge
-			const fastPath = judge.evaluateFastPath(exactScreenshotCommand)
+		it("fast-paths exact screenshot git diff pipeline deterministically with 0 AI verifier calls", async () => {
+			const fastPath = judge.evaluateFastPath(exactDiffScreenshotCommand)
 			expect(fastPath).not.toBeNull()
 			expect(fastPath?.isSafe).toBe(true)
 			expect(fastPath?.riskLevel).toBe("safe")
 
-			// Orchestrator evaluation in real user AUTO mode
 			const callProviderMock = vi.fn()
 			;(orchestrator as any).judge = { callProvider: callProviderMock }
 
 			const request: UnifiedApprovalRequest = {
-				id: "req_screenshot_incident_replay",
+				id: "req_screenshot_diff_replay",
 				taskId: "01a0ef29-4a83-71ca-99e3-c3b06d31aabd",
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: exactScreenshotCommand,
+					command: exactDiffScreenshotCommand,
 				},
 				taskContext: {
 					latestUserInstruction: "Compare modified files with git diff",
@@ -77,6 +85,109 @@ describe("CommandSafetyPipelineRegression - Strict Audit Suite", () => {
 			expect(callProviderMock).toHaveBeenCalledTimes(0) // Approval AI call count = 0
 			expect(result.auditLog).toContain("approvalModelCalled=false")
 			expect(result.auditLog).toContain("fastPath=true")
+		})
+
+		it("fast-paths exact screenshot PowerShell enumeration/search/format pipeline with 0 AI verifier calls", async () => {
+			// Test single-line format
+			const fastPathSingle = judge.evaluateFastPath(exactPowerShellSingleLineCommand)
+			expect(fastPathSingle).not.toBeNull()
+			expect(fastPathSingle?.isSafe).toBe(true)
+			expect(fastPathSingle?.riskLevel).toBe("safe")
+
+			// Test multi-line format with newlines
+			const fastPathMulti = judge.evaluateFastPath(exactPowerShellPipelineCommand)
+			expect(fastPathMulti).not.toBeNull()
+			expect(fastPathMulti?.isSafe).toBe(true)
+			expect(fastPathMulti?.riskLevel).toBe("safe")
+
+			// Orchestrator evaluation in real user AUTO mode
+			const callProviderMock = vi.fn()
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			const request: UnifiedApprovalRequest = {
+				id: "req_screenshot_ps_pipeline_replay",
+				taskId: "01a0ef29-4a83-71ca-99e3-c3b06d31aabd",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: {
+					command: exactPowerShellPipelineCommand,
+				},
+				taskContext: {
+					latestUserInstruction: "Find license attempt markers in codebase",
+					activeGoal: "Audit license api and obfuscation",
+					workspacePath: "c:/Users/Kamil/Documents/Roo-Code",
+					isWithinWorkspace: true,
+				},
+			}
+
+			const result = await orchestrator.evaluate(request, realUserSettingsFixture)
+
+			expect(result.decision).toBe("ALLOW_AUTO")
+			expect(result.risk).toBe("safe")
+			expect(callProviderMock).toHaveBeenCalledTimes(0) // Approval AI call count = 0
+			expect(result.auditLog).toContain("approvalModelCalled=false")
+			expect(result.auditLog).toContain("fastPath=true")
+		})
+
+		it("fast-paths routine verification commands (npm run typecheck, tsc --noEmit, pnpm test) with 0 AI verifier calls", async () => {
+			const verificationCommands = [
+				"npm run typecheck",
+				"pnpm run check-types",
+				"tsc --noEmit",
+				"npx tsc",
+				"pnpm test",
+			]
+
+			for (const cmd of verificationCommands) {
+				const fastPath = judge.evaluateFastPath(cmd)
+				expect(fastPath, `Command '${cmd}' should be fast-path safe`).not.toBeNull()
+				expect(fastPath?.isSafe, `Command '${cmd}' isSafe should be true`).toBe(true)
+			}
+		})
+
+		it("evaluates deterministic-safe command to ALLOW_AUTO even when verifier is actively in COOLDOWN", async () => {
+			const callProviderMock = vi.fn().mockRejectedValue(new Error("Approval AI evaluation timed out after 9478ms"))
+			;(orchestrator as any).judge = { callProvider: callProviderMock }
+
+			// 1. Trigger cooldown with an ambiguous command that times out
+			const ambiguousRequest: UnifiedApprovalRequest = {
+				id: "req_ambiguous_trigger_cooldown",
+				taskId: "01a0ef29-4a83-71ca-99e3-c3b06d31aabd",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: { command: "python ./unknown-custom-script.py" },
+				taskContext: {
+					latestUserInstruction: "Run custom tool",
+					activeGoal: "Execution",
+					workspacePath: "c:/Users/Kamil/Documents/Roo-Code",
+					isWithinWorkspace: true,
+				},
+			}
+			const ambiguousResult = await orchestrator.evaluate(ambiguousRequest, realUserSettingsFixture)
+			expect(ambiguousResult.decision).toBe("MANUAL_APPROVAL")
+			expect(ambiguousResult.infrastructureFailure).toBe(true)
+			expect(callProviderMock).toHaveBeenCalledTimes(2) // Initial attempt + 1 retry on timeout before trip to cooldown
+
+			// 2. Now verifier circuit breaker is in cooldown!
+			// Subsequent deterministic safe action MUST STILL auto-approve with ZERO verifier calls!
+			const safeRequest: UnifiedApprovalRequest = {
+				id: "req_safe_during_cooldown",
+				taskId: "01a0ef29-4a83-71ca-99e3-c3b06d31aabd",
+				actionType: "execute_command",
+				timestamp: Date.now(),
+				target: { command: exactPowerShellPipelineCommand },
+				taskContext: {
+					latestUserInstruction: "Search files",
+					activeGoal: "Search",
+					workspacePath: "c:/Users/Kamil/Documents/Roo-Code",
+					isWithinWorkspace: true,
+				},
+			}
+			const safeResult = await orchestrator.evaluate(safeRequest, realUserSettingsFixture)
+			expect(safeResult.decision).toBe("ALLOW_AUTO")
+			expect(safeResult.risk).toBe("safe")
+			// Verifier was NOT called during cooldown for the safe action! Still exactly 2 calls from the prior failure.
+			expect(callProviderMock).toHaveBeenCalledTimes(2)
 		})
 	})
 
@@ -262,7 +373,7 @@ describe("CommandSafetyPipelineRegression - Strict Audit Suite", () => {
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: exactScreenshotCommand,
+					command: exactDiffScreenshotCommand,
 				},
 				taskContext: {
 					latestUserInstruction: "Check diff",
