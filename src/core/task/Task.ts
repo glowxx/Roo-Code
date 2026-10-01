@@ -190,6 +190,8 @@ export interface TaskOptions extends CreateTaskOptions {
 	workspacePath?: string
 	/** Initial status for the task's history item (e.g., "active" for child tasks) */
 	initialStatus?: "active" | "delegated" | "completed" | "interrupted"
+	/** Initial in-memory clineMessages to prevent empty-state flicker during rehydration */
+	initialClineMessages?: ClineMessage[]
 }
 
 export class Task extends EventEmitter<TaskEvents> implements TaskLike {
@@ -417,6 +419,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.isTaskCompleted = true
 		this.isStreaming = false
 		this.isWaitingForFirstChunk = false
+		if (this.historyItem) {
+			this.historyItem.status = "completed"
+			this.historyItem.needsAttention = false
+		}
 
 		// Clean up any trailing unclosed api_req_started messages from previous sessions
 		const lastApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
@@ -539,6 +545,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		initialTodos,
 		workspacePath,
 		initialStatus,
+		initialClineMessages,
 	}: TaskOptions) {
 		super()
 
@@ -604,6 +611,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.taskNumber = taskNumber
 		this.initialStatus = initialStatus
 		this.historyItem = historyItem
+
+		if (initialClineMessages && initialClineMessages.length > 0) {
+			this.clineMessages = [...initialClineMessages]
+		}
 
 		if (this.initialStatus === "completed" || this.historyItem?.status === "completed") {
 			this.isTaskCompleted = true
@@ -1342,6 +1353,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				await this.taskApiConfigReady
 			}
 
+			const currentStatus =
+				this.isTaskCompleted || this.historyItem?.status === "completed"
+					? "completed"
+					: this.initialStatus
+
 			const { historyItem, tokenUsage } = await taskMetadata({
 				taskId: this.taskId,
 				rootTaskId: this.rootTaskId,
@@ -1352,11 +1368,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				workspace: this.cwd,
 				mode: this._taskMode || defaultModeSlug, // Use the task's own mode, not the current provider mode.
 				apiConfigName: this._taskApiConfigName, // Use the task's own provider profile, not the current provider profile.
-				initialStatus: this.initialStatus,
+				initialStatus: currentStatus,
 				chatModelId: this.historyItem?.chatModelId || getModelId(this.apiConfiguration),
 				chatProvider: this.historyItem?.chatProvider || this.apiConfiguration?.apiProvider,
 				chatReasoningEffort: this.historyItem?.chatReasoningEffort ?? (this.apiConfiguration as any)?.reasoningEffort,
 			})
+
+			this.historyItem = historyItem
 
 			// Emit token/tool usage updates using debounced function
 			// The debounce with maxWait ensures:
@@ -3641,6 +3659,11 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 			let askType: ClineAsk
 			if (isTaskCompletedOrIdle) {
+				this.isTaskCompleted = true
+				if (this.historyItem) {
+					this.historyItem.status = "completed"
+					this.historyItem.needsAttention = false
+				}
 				askType = "resume_completed_task"
 			} else {
 				askType = "resume_task"
@@ -5308,11 +5331,16 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							  ].join("\n")
 							: ""
 
+						const errorPrefix =
+							classification.category === "network_error"
+								? t("common:interruption.responseInterruptedByApiError")
+								: t("common:interruption.streamTerminatedByProvider")
+
 						const streamingFailedMessage = this.abort
 							? undefined
 							: streamingFailedDetails
-							? `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}\n\n${streamingFailedDetails}`
-							: `${t("common:interruption.streamTerminatedByProvider")}: ${rawErrorMessage}`
+							? `${errorPrefix}: ${rawErrorMessage}\n\n${streamingFailedDetails}`
+							: `${errorPrefix}: ${rawErrorMessage}`
 
 						// Clean up partial state
 						if (!this.didFinishAbortingStream) {

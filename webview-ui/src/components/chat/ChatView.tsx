@@ -951,7 +951,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	// Handle stop button click from textarea or header
 	const handleStopTask = useCallback(() => {
-		const taskId = currentTaskItem?.id
+		const taskId = currentTaskItem?.id || currentTaskId
 		if (!taskId) return
 		if (stopRequestIdRef.current?.startsWith(`${taskId}:`)) return
 		const requestId = `${taskId}:${Date.now()}`
@@ -968,7 +968,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				setStopError(true)
 			}
 		}, 15000)
-	}, [setDidClickCancel, currentTaskItem?.id])
+	}, [setDidClickCancel, currentTaskItem?.id, currentTaskId])
 
 	// Handle enqueue button click from textarea
 	const handleEnqueueCurrentMessage = useCallback(() => {

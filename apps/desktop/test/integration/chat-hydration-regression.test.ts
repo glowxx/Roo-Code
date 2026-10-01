@@ -97,5 +97,27 @@ describe("Chat Hydration & Selection Synchronization Regression Suite", () => {
 		it("suppresses WorktreeSelector on task hydration screen", () => {
 			expect(chatViewCode).toContain("!task && !isHydratingPersistedTask && showWorktreesInHomeScreen")
 		})
+
+		it("allows handleStopTask to resolve taskId from currentTaskId when currentTaskItem is not yet populated", () => {
+			expect(chatViewCode).toContain("const taskId = currentTaskItem?.id || currentTaskId")
+		})
+	})
+
+	describe("5. Stop Task Conversation Preservation Contract (ClineProvider.ts & Task.ts)", () => {
+		it("preserves in-memory clineMessages across cancelTask rehydration", () => {
+			expect(clineProviderCode).toContain("initialClineMessages")
+			expect(clineProviderCode).toContain("rehydrated.overwriteClineMessages(initialClineMessages)")
+			expect(clineProviderCode).toContain("await this.postStateToWebview()")
+		})
+
+		it("Task constructor immediately initializes clineMessages from initialClineMessages", () => {
+			expect(taskCode).toContain("initialClineMessages?: ClineMessage[]")
+			expect(taskCode).toContain("this.clineMessages = [...initialClineMessages]")
+		})
+
+		it("marks interrupted status and sets needsAttention on user cancellation", () => {
+			expect(clineProviderCode).toContain('historyItem.status = "interrupted"')
+			expect(clineProviderCode).toContain("historyItem.needsAttention = true")
+		})
 	})
 })
