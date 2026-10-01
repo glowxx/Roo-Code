@@ -1416,7 +1416,13 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			break
 		}
 		case "cancelTask":
-			await provider.cancelTask(message.taskId)
+			try {
+				const target = message.taskId ? provider.runningTasks.get(message.taskId) : undefined
+				if (target) await provider.cancelTask(message.taskId)
+				await provider.postMessageToWebview({ type: "taskStopAcknowledged", id: message.taskId, requestId: message.requestId, success: Boolean(target?.abort || target?.abandoned) })
+			} catch (error) {
+				await provider.postMessageToWebview({ type: "taskStopAcknowledged", id: message.taskId, requestId: message.requestId, success: false, error: String(error) })
+			}
 			break
 		case "cancelAutoApproval": {
 			// Cancel any pending auto-approval timeout for the targeted or current task

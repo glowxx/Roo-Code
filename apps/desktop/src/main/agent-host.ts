@@ -1088,7 +1088,7 @@ export class DesktopAgentHost extends EventEmitter {
 
 		try {
 			if (typeof this.provider?.cancelTask === "function") {
-				await this.provider.cancelTask(runningTask)
+				await this.provider.cancelTask(taskId)
 			} else {
 				runningTask.cancelCurrentRequest?.()
 				runningTask.abortCompaction?.()

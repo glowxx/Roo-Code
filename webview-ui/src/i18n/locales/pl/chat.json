@@ -89,7 +89,8 @@
 	},
 	"stop": {
 		"title": "Zatrzymaj",
-		"tooltip": "Zatrzymaj bieżące zadanie"
+		"tooltip": "Zatrzymaj bieżące zadanie",
+		"failed": "Nie udało się potwierdzić zatrzymania zadania. Spróbuj ponownie."
 	},
 	"cancel": {
 		"title": "Anuluj",

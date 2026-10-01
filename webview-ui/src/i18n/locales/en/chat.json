@@ -120,7 +120,8 @@
 	},
 	"stop": {
 		"title": "Stop",
-		"tooltip": "Stop the current task"
+		"tooltip": "Stop the current task",
+		"failed": "Could not confirm this task stopped. Try again."
 	},
 	"enqueueMessage": "Add message to queue (will be sent after current task completes)",
 	"editMessage": {

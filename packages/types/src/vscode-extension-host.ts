@@ -28,6 +28,7 @@ export interface ExtensionMessage {
 		| "state"
 		| "taskHistoryUpdated"
 		| "taskHistoryItemUpdated"
+		| "taskStopAcknowledged"
 		| "selectedImages"
 		| "theme"
 		| "workspaceUpdated"

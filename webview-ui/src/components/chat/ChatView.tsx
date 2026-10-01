@@ -159,6 +159,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const [secondaryButtonText, setSecondaryButtonText] = useState<string | undefined>(undefined)
 	const [_didClickCancel, setDidClickCancel] = useState(false)
 	const [isStopping, setIsStopping] = useState(false)
+	const [stopError, setStopError] = useState(false)
+	const stopRequestIdRef = useRef<string | null>(null)
+	const stopAckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const virtuosoRef = useRef<VirtuosoHandle>(null)
 	const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({})
 	const prevExpandedRowsRef = useRef<Record<number, boolean>>()
@@ -718,7 +721,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	}, [modifiedMessages, clineAsk, enableButtons, primaryButtonText])
 
 	useEffect(() => {
-		if (isStopping) {
+		if (isStopping && !stopRequestIdRef.current) {
 			const isTaskStopped =
 				!isStreaming &&
 				(clineAsk === "resume_task" ||
@@ -732,8 +735,16 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	}, [isStopping, isStreaming, clineAsk, modifiedMessages])
 
 	useEffect(() => {
+		if (stopAckTimeoutRef.current) clearTimeout(stopAckTimeoutRef.current)
+		stopAckTimeoutRef.current = null
+		stopRequestIdRef.current = null
 		setIsStopping(false)
+		setStopError(false)
 	}, [currentTaskItem?.id])
+
+	useEffect(() => () => {
+		if (stopAckTimeoutRef.current) clearTimeout(stopAckTimeoutRef.current)
+	}, [])
 
 	const isTaskActive = useMemo(() => {
 		if (!currentTaskItem) {
@@ -940,10 +951,23 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 
 	// Handle stop button click from textarea or header
 	const handleStopTask = useCallback(() => {
+		const taskId = currentTaskItem?.id
+		if (!taskId) return
+		if (stopRequestIdRef.current?.startsWith(`${taskId}:`)) return
+		const requestId = `${taskId}:${Date.now()}`
+		stopRequestIdRef.current = requestId
+		setStopError(false)
 		setIsStopping(true)
-		vscode.postMessage({ type: "cancelTask", taskId: currentTaskItem?.id })
+		vscode.postMessage({ type: "cancelTask", taskId, requestId })
 		setDidClickCancel(true)
-		setTimeout(() => setIsStopping(false), 5000)
+		if (stopAckTimeoutRef.current) clearTimeout(stopAckTimeoutRef.current)
+		stopAckTimeoutRef.current = setTimeout(() => {
+			if (stopRequestIdRef.current === requestId) {
+				stopRequestIdRef.current = null
+				setIsStopping(false)
+				setStopError(true)
+			}
+		}, 15000)
 	}, [setDidClickCancel, currentTaskItem?.id])
 
 	// Handle enqueue button click from textarea
@@ -1055,8 +1079,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			const trimmedInput = text?.trim()
 
 			if (isStreaming) {
-				vscode.postMessage({ type: "cancelTask", taskId: currentTaskItem?.id })
-				setDidClickCancel(true)
+				handleStopTask()
 				return
 			}
 
@@ -1070,8 +1093,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						secondaryButtonText === t("chat:cancel.title") ||
 						messagesRef.current.at(-1)?.text?.includes(COMMAND_OUTPUT_STRING)
 					) {
-						vscode.postMessage({ type: "cancelTask", taskId: currentTaskItem?.id })
-						setDidClickCancel(true)
+						handleStopTask()
 						break
 					}
 					// Only send text/images if they exist
@@ -1118,7 +1140,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			setClineAsk(undefined)
 			setEnableButtons(false)
 		},
-		[clineAsk, startNewTask, isStreaming, setDidClickCancel, secondaryButtonText, t, currentTaskItem?.id],
+		[clineAsk, startNewTask, isStreaming, setDidClickCancel, secondaryButtonText, t, currentTaskItem?.id, handleStopTask],
 	)
 
 	const { info: model } = useSelectedModel(apiConfiguration)
@@ -1132,6 +1154,15 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			const message: ExtensionMessage = e.data
 
 			switch (message.type) {
+				case "taskStopAcknowledged":
+					if (message.requestId === stopRequestIdRef.current) {
+						if (stopAckTimeoutRef.current) clearTimeout(stopAckTimeoutRef.current)
+						stopAckTimeoutRef.current = null
+						stopRequestIdRef.current = null
+						setIsStopping(false)
+						setStopError(message.success !== true)
+					}
+					break
 				case "action":
 					switch (message.action!) {
 						case "didBecomeVisible":
@@ -1929,6 +1960,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						onStop={handleStopTask}
 						onNewChat={startNewTask}
 					/>
+					{stopError && <div role="alert" className="px-4 text-vscode-errorForeground">{t("chat:stop.failed")}</div>}
 
 					{checkpointWarning && (
 						<div className="w-full canvas-narrative">

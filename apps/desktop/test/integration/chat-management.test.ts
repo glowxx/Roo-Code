@@ -139,6 +139,20 @@ describe("Chat Management & Safe Deletion Flow", () => {
 		expect(fs.existsSync(tasksDir)).toBe(false)
 	})
 
+	it("passes the selected task ID to cancellation even when another chat is foreground", async () => {
+		const host = new DesktopAgentHost({ workspacePath: workspaceA, extensionPath: tempDir })
+		const taskA = { taskId: "task-A", isStreaming: true }
+		const taskB = { taskId: "task-B", isStreaming: true }
+		const cancelTask = vi.fn().mockResolvedValue(undefined)
+		host.registerWebviewProvider("mockView", {
+			runningTasks: new Map([["task-A", taskA], ["task-B", taskB]]),
+			getCurrentTask: () => taskB,
+			cancelTask,
+		} as any)
+		expect(await host.stopTask("task-A")).toBe(true)
+		expect(cancelTask).toHaveBeenCalledExactlyOnceWith("task-A")
+	})
+
 	it("tombstone guard drops late async messages and prevents ghost chat resurrection", async () => {
 		const host = new DesktopAgentHost({
 			workspacePath: workspaceA,

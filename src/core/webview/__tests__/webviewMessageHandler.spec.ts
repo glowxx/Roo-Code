@@ -163,6 +163,40 @@ vi.mock("../../mentions/resolveImageMentions", () => ({
 
 import { resolveImageMentions } from "../../mentions/resolveImageMentions"
 
+describe("webviewMessageHandler - targeted Stop acknowledgement", () => {
+	beforeEach(() => vi.clearAllMocks())
+
+	it("acknowledges the exact task only after cancellation settles", async () => {
+		const taskA = { taskId: "A", abort: false }
+		const taskB = { taskId: "B", abort: false }
+		;(mockClineProvider as any).runningTasks = new Map([["A", taskA], ["B", taskB]])
+		let finish!: () => void
+		;(mockClineProvider as any).cancelTask = vi.fn(() => new Promise<void>((resolve) => {
+			finish = () => { taskA.abort = true; resolve() }
+		}))
+		const request = webviewMessageHandler(mockClineProvider, { type: "cancelTask", taskId: "A", requestId: "stop-A" })
+		await Promise.resolve()
+		expect(mockClineProvider.postMessageToWebview).not.toHaveBeenCalled()
+		finish()
+		await request
+		expect((mockClineProvider as any).cancelTask).toHaveBeenCalledExactlyOnceWith("A")
+		expect(taskB.abort).toBe(false)
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "taskStopAcknowledged", id: "A", requestId: "stop-A", success: true,
+		})
+	})
+
+	it("rejects a stale task ID without cancelling the foreground task", async () => {
+		;(mockClineProvider as any).runningTasks = new Map([["B", { taskId: "B" }]])
+		;(mockClineProvider as any).cancelTask = vi.fn()
+		await webviewMessageHandler(mockClineProvider, { type: "cancelTask", taskId: "A", requestId: "stop-stale" })
+		expect((mockClineProvider as any).cancelTask).not.toHaveBeenCalled()
+		expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "taskStopAcknowledged", id: "A", requestId: "stop-stale", success: false,
+		})
+	})
+})
+
 describe("webviewMessageHandler - requestLmStudioModels", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()

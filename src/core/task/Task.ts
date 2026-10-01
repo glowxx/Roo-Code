@@ -2090,7 +2090,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 				let decisionResult: ApprovalDecisionResult
 				try {
-					decisionResult = await this.approvalOrchestrator.evaluate(request, state)
+					// The worker can be locked to a task-specific profile while the global
+					// selection changes in another chat. Compare the verifier to this worker.
+					decisionResult = await this.approvalOrchestrator.evaluate(request, {
+						...state,
+						apiConfiguration: this.apiConfiguration,
+					})
 				} catch (err) {
 					const errorMsg = err instanceof Error ? err.message : String(err)
 					console.error(`[ApprovalOrchestrator] evaluate threw an unexpected error:`, err)
