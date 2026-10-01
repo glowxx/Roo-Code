@@ -845,7 +845,7 @@ describe("ApprovalOrchestrator", () => {
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+					command: 'node ./scripts/analyze-ast.js --target ./src',
 				},
 				taskContext: {
 					latestUserInstruction: "Inspect repo status",
@@ -890,7 +890,7 @@ describe("ApprovalOrchestrator", () => {
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+					command: 'node ./scripts/analyze-ast.js --target ./src',
 				},
 				taskContext: {
 					latestUserInstruction: "Check node version",
@@ -939,7 +939,7 @@ describe("ApprovalOrchestrator", () => {
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+					command: 'node ./scripts/analyze-ast.js --target ./src',
 				},
 				taskContext: {
 					latestUserInstruction: "Run unit tests",
@@ -972,7 +972,7 @@ describe("ApprovalOrchestrator", () => {
 				actionType: "execute_command",
 				timestamp: Date.now(),
 				target: {
-					command: 'powershell.exe -NoProfile -Command "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"',
+					command: 'node ./scripts/analyze-ast.js --target ./src',
 				},
 				taskContext: {
 					latestUserInstruction: "Lint code",

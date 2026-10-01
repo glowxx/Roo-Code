@@ -140,6 +140,15 @@ export const DEFAULT_SAFE_COMMANDS: readonly string[] = [
 	"ls",
 	"dir",
 	"pwd",
+	"Get-ChildItem",
+	"gci",
+	"Get-Content",
+	"gc",
+	"Get-Item",
+	"gi",
+	"Get-Location",
+	"gl",
+	"Test-Path",
 ]
 
 /**

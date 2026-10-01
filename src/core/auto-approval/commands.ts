@@ -1,5 +1,6 @@
 import { parseCommand } from "../../shared/parse-command"
 import { DEFAULT_SAFE_COMMANDS } from "@roo-code/types"
+import { ExecutionBoundaryAnalyzer } from "../security/ExecutionBoundaryAnalyzer"
 
 /**
  * Detect dangerous parameter substitutions that could lead to command execution.
@@ -267,8 +268,25 @@ export function getCommandDecision(
 		return "auto_approve"
 	}
 
+	const trimmed = command.trim()
+
+	// 1. If the full outer command is explicitly denied, reject immediately
+	if (isAutoDeniedSingleCommand(trimmed, allowedCommands, deniedCommands)) {
+		return "auto_deny"
+	}
+
+	// 2. Check if this is a subshell-wrapped command (e.g. powershell -Command "..." or cmd /c "...")
+	try {
+		const boundary = ExecutionBoundaryAnalyzer.analyze(trimmed)
+		if (!boundary.hostImpact.isHostEscape && boundary.innerCommand && boundary.innerCommand.trim() !== trimmed) {
+			return getCommandDecision(boundary.innerCommand.trim(), allowedCommands, deniedCommands)
+		}
+	} catch {
+		// fallback to standard parsing
+	}
+
 	// Parse into sub-commands (split by &&, ||, ;, |)
-	const subCommands = parseCommand(command)
+	const subCommands = parseCommand(trimmed)
 
 	// Check each sub-command and collect decisions
 	const decisions: CommandDecision[] = subCommands.map((cmd) => {

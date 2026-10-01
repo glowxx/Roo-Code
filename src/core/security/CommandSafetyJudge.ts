@@ -39,10 +39,15 @@ export const DEFAULT_TIMEOUT_MS = 15000
 
 const FAST_PATH_PATTERNS = [
 	// Safe git read-only inspection commands
-	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote(?:\s+-v)?|check-ignore|config\s+--get)(\s+[^\n;&|`$<>]+)?$/i,
+	/^git\s+(diff|status|log|show|branch|rev-parse|describe|remote(?:\s+-v)?|check-ignore|config\s+--get)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	// Directory & basic file reading without composition
-	/^(ls|dir|pwd)(\s+[^\n;&|`$<>]+)?$/i,
-	/^(cat|type|head|tail)(\s+[^\n;&|`$<>]+)?$/i,
+	/^(ls|dir|pwd)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(cat|type|head|tail)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	// Safe PowerShell read-only inspection cmdlets (strictly forbidding scriptblocks {} and subshells $())
+	/^(?:Get-ChildItem|gci)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Get-Content|gc)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Get-Item|gi|Get-Location|gl)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Test-Path)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	// Safe wait / pause commands (e.g. timeout 90, timeout /t 10)
 	/^(?:timeout(?:\s+\/t)?\s+\d+(?:\s+\/nobreak)?)$/i,
 	// Pure echo without redirection
@@ -68,7 +73,15 @@ const FAST_PATH_PATTERNS = [
 ]
 
 const PASSIVE_FILTER_PATTERNS = [
-	/^(?:grep|rg|findstr|head|tail|wc|cat|type|sort|uniq)(\s+[^\n;&|`$<>]+)?$/i,
+	// Safe Unix filters
+	/^(?:grep|rg|findstr|head|tail|wc|cat|type|sort|uniq)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	// Safe PowerShell output formatting & passive filtering cmdlets (strictly forbidding scriptblocks {} and redirections)
+	/^(?:Out-String)(?:\s+-(?:Width\s+\d+|Stream))*$/i,
+	/^(?:Out-Host(?:\s+-Paging)?|Out-Null)$/i,
+	/^(?:Format-Table|ft|Format-List|fl|Format-Wide|fw)(?:\s+-(?:AutoSize|Wrap|GroupBy\s+[a-zA-Z0-9_]+|Property\s+[a-zA-Z0-9_,\s]+|[a-zA-Z0-9_]+))*\s*$/i,
+	/^(?:Select-Object|select)(?:\s+-(?:First|Last|Skip|Index)\s+\d+|\s+-Property\s+[a-zA-Z0-9_,\s]+|\s+-Unique|\s+-ExpandProperty\s+[a-zA-Z0-9_]+)+$/i,
+	/^(?:Select-String|sls)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	/^(?:Measure-Object|measure)(?:\s+-(?:Line|Word|Character|IgnoreWhiteSpace))*$/i,
 ]
 
 export interface EvaluateSafetyOptions {
@@ -168,7 +181,7 @@ export class CommandSafetyJudge {
 					return {
 						isSafe: true,
 						riskLevel: "safe",
-						reason: `Verified read-only guest command (${boundary.innerCommand.trim()}) via fast-path`,
+						reason: `Verified read-only command (${boundary.innerCommand.trim()}) via fast-path`,
 					}
 				}
 			}
@@ -180,7 +193,7 @@ export class CommandSafetyJudge {
 		// e.g. cat file.txt | grep text or git log | head -n 10
 		if (trimmed.includes("|") && !trimmed.includes("||")) {
 			const rawClean = trimmed.replace(/\s+\d*>&[0-2]/g, "")
-			if (!/[><;&`\n]/.test(rawClean)) {
+			if (!/[><;&`\n{}]/.test(rawClean)) {
 				const pipeSegments = trimmed.split("|").map((s) => s.trim())
 				if (pipeSegments.length > 1) {
 					const firstSegment = pipeSegments[0]
@@ -189,7 +202,7 @@ export class CommandSafetyJudge {
 					const restAllPassive = restSegments.every((seg) => {
 						const normSeg = seg.replace(/\s+\d*>&[0-2]/g, "").trim()
 						return (
-							!/[><|;&`\n]/.test(normSeg) &&
+							!/[><|;&`\n{}]/.test(normSeg) &&
 							!/\$\(/.test(normSeg) &&
 							PASSIVE_FILTER_PATTERNS.some((p) => p.test(normSeg))
 						)
@@ -265,11 +278,11 @@ export class CommandSafetyJudge {
 
 		// Disqualifying modifiers: file redirection, subshells, privilege escalation, destructive commands
 		const hasDisqualifyingModifier =
-			/[><|;&`\n]/.test(normalized) ||
+			/[><|;&`\n{}]/.test(normalized) ||
 			/\$\(/.test(normalized) ||
 			/\b(sudo|doas|runas)\b/i.test(normalized) ||
 			/\b(powershell|pwsh|cmd)(\.exe)?\s+(-[a-z0-9/]+|\/[a-z0-9]+)/i.test(normalized) ||
-			/\b(Start-Process|Invoke-Expression|iex|rmdir|format|del|rm)\b/i.test(normalized)
+			/\b(Start-Process|Invoke-Expression|iex|Invoke-Command|icm|Out-File|Set-Content|sc|Add-Content|ac|Clear-Content|Remove-Item|rmdir|format|del|rm)\b/i.test(normalized)
 
 		if (hasDisqualifyingModifier) {
 			return null
@@ -1108,6 +1121,7 @@ export class CommandSafetyJudge {
 			;(requestParams as any).extra_body = { reasoning: { max_tokens: 0 } }
 		} else if (params.provider === "xkiro" && !isReasoningModel) {
 			;(requestParams as any).reasoning_effort = "low"
+			;(requestParams as any).extra_body = { reasoning: { max_tokens: 0 } }
 		}
 
 		if (params.responseFormat === "json_object" && !isReasoningModel) {
