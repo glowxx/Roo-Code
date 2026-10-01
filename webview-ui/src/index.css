@@ -416,6 +416,18 @@ vscode-dropdown::part(listbox) {
 	-webkit-box-decoration-break: clone;
 }
 
+/* The mirror must occupy the same text width as the textarea. Shadow supplies
+   symmetric visual padding without shifting subsequent characters. */
+.skill-command-textarea-highlight {
+	display: inline-flex;
+	align-items: center;
+	vertical-align: baseline;
+	line-height: 1.5;
+	padding: 0;
+	border-radius: 4px;
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-badge-foreground) 30%, transparent);
+}
+
 .mention-context-highlight {
 	background-color: color-mix(in srgb, var(--vscode-badge-foreground) 15%, transparent);
 	border-radius: 6px;

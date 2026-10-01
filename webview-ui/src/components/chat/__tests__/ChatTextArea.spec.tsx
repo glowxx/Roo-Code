@@ -928,7 +928,7 @@ describe("ChatTextArea", () => {
 
 			// The highlighting is applied via innerHTML, so we need to check the content
 			// The valid command "/setup" should be highlighted
-			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight">/setup</mark>')
+			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/setup</mark>')
 		})
 
 		it("should not highlight invalid slash commands", () => {
@@ -953,7 +953,7 @@ describe("ChatTextArea", () => {
 
 			// Only "/deploy" should be highlighted, not "to production"
 			expect(highlightLayer.innerHTML).toContain(
-				'<mark class="mention-context-textarea-highlight">/deploy</mark>',
+				'<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/deploy</mark>',
 			)
 			expect(highlightLayer.innerHTML).not.toContain(
 				'<mark class="mention-context-textarea-highlight">/deploy to production</mark>',
@@ -968,7 +968,7 @@ describe("ChatTextArea", () => {
 
 			// The command with dash should be highlighted
 			expect(highlightLayer.innerHTML).toContain(
-				'<mark class="mention-context-textarea-highlight">/test-command</mark>',
+				'<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/test-command</mark>',
 			)
 		})
 
@@ -992,9 +992,9 @@ describe("ChatTextArea", () => {
 			expect(highlightLayer).toBeInTheDocument()
 
 			// Both valid commands should be highlighted
-			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight">/setup</mark>')
+			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/setup</mark>')
 			expect(highlightLayer.innerHTML).toContain(
-				'<mark class="mention-context-textarea-highlight">/deploy</mark>',
+				'<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/deploy</mark>',
 			)
 		})
 
@@ -1007,9 +1007,9 @@ describe("ChatTextArea", () => {
 			expect(highlightLayer).toBeInTheDocument()
 
 			// Valid commands should be highlighted
-			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight">/setup</mark>')
+			expect(highlightLayer.innerHTML).toContain('<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/setup</mark>')
 			expect(highlightLayer.innerHTML).toContain(
-				'<mark class="mention-context-textarea-highlight">/deploy</mark>',
+				'<mark class="mention-context-textarea-highlight skill-command-textarea-highlight">/deploy</mark>',
 			)
 
 			// Invalid command should not be highlighted
@@ -1038,6 +1038,18 @@ describe("ChatTextArea", () => {
 				'<mark class="mention-context-textarea-highlight">/setup</mark>',
 			)
 			expect(highlightLayer.innerHTML).toContain("/setup")
+		})
+
+		it("uses the same skill frame for short and long slash tags", () => {
+			const names = ["graphify", "context-engineering", "frontend-ui-engineering", "browser-testing-with-devtools", "code-review-and-quality"]
+			;(useExtensionState as ReturnType<typeof vi.fn>).mockReturnValue({
+				filePaths: [], openedTabs: [], taskHistory: [], cwd: "/test/workspace",
+				commands: names.map((name) => ({ name, source: "global" })),
+			})
+			const { getByTestId } = render(<ChatTextArea {...defaultProps} inputValue={names.map((name) => `/${name}`).join(" ")} />)
+			const marks = getByTestId("highlight-layer").querySelectorAll("mark.skill-command-textarea-highlight")
+			expect(marks).toHaveLength(names.length)
+			expect(Array.from(marks, (mark) => mark.textContent)).toEqual(names.map((name) => `/${name}`))
 		})
 	})
 

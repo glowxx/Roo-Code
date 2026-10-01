@@ -782,9 +782,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			const text = textAreaRef.current.value
 
 			// Helper function to check if a command is valid
-			const isValidCommand = (commandName: string): boolean => {
-				return effectiveCommands?.some((cmd) => cmd.name === commandName) || false
-			}
+			const findCommand = (commandName: string): Command | undefined =>
+				effectiveCommands?.find((cmd) => cmd.name === commandName)
 
 			// Process the text to highlight mentions and valid commands
 			let processedText = text
@@ -795,11 +794,15 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			// Custom replacement for commands - only highlight valid ones
 			processedText = processedText.replace(commandRegexGlobal, (match, commandName) => {
 				// Only highlight if the command exists in the valid commands list
-				if (isValidCommand(commandName)) {
+				const command = findCommand(commandName)
+				if (command) {
 					const leadingWhitespace = match.match(/^\s/)?.[0] || ""
 					const commandPart = `/${commandName}`
+					const className = command.source === "built-in"
+						? "mention-context-textarea-highlight"
+						: "mention-context-textarea-highlight skill-command-textarea-highlight"
 
-					return `${leadingWhitespace}<mark class="mention-context-textarea-highlight">${commandPart}</mark>`
+					return `${leadingWhitespace}<mark class="${className}">${commandPart}</mark>`
 				}
 				return match // Return unhighlighted if command is not valid
 			})
