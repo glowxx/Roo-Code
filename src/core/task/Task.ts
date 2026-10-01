@@ -2625,6 +2625,12 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		this.askResponseText = text
 		this.askResponseImages = images
 
+		this.idleAsk = undefined
+		this.resumableAsk = undefined
+		this.interactiveAsk = undefined
+		this.emit(RooCodeEventName.TaskActive, this.taskId)
+		this.emit(RooCodeEventName.TaskAskResponded)
+
 		// Reset turn-boundary loop counters and unresolved denial state when user responds or approves
 		if (askResponse === "messageResponse" || askResponse === "yesButtonClicked") {
 			this.consecutiveAttemptCompletionCount = 0

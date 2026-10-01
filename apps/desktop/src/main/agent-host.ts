@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename)
 import { RooCodeEventName, type ExtensionMessage, type WebviewMessage, type TitleSource } from "@roo-code/types"
 import { createVSCodeAPI, setRuntimeConfigValues } from "@roo-code/vscode-shim"
 import type { AgentStatusType, TerminalLogEntry, DiffFileEntry, SidebarChatEntry, NavigationCounts } from "../shared/types.js"
+export type { SidebarChatEntry }
 import { canonicalizePath, arePathsEqual, loadDesktopConfig, saveDesktopConfig } from "./config.js"
 import { generateConversationTitle, sanitizeTitle, semanticFallbackTitle, isBadAutoTitle } from "./title-generator.js"
 
@@ -564,6 +565,8 @@ export class DesktopAgentHost extends EventEmitter {
 			this.provider.on(RooCodeEventName.TaskActive, onTaskChanged)
 			this.provider.on(RooCodeEventName.TaskIdle, onTaskChanged)
 			this.provider.on(RooCodeEventName.TaskInteractive, onTaskChanged)
+			this.provider.on(RooCodeEventName.TaskResumable, onTaskChanged)
+			this.provider.on(RooCodeEventName.TaskAskResponded, onTaskChanged)
 
 			this.providerCleanupFns.push(
 				() => this.provider?.off?.(RooCodeEventName.TaskStarted, onTaskStarted),
@@ -572,7 +575,14 @@ export class DesktopAgentHost extends EventEmitter {
 				() => this.provider?.off?.(RooCodeEventName.TaskActive, onTaskChanged),
 				() => this.provider?.off?.(RooCodeEventName.TaskIdle, onTaskChanged),
 				() => this.provider?.off?.(RooCodeEventName.TaskInteractive, onTaskChanged),
+				() => this.provider?.off?.(RooCodeEventName.TaskResumable, onTaskChanged),
+				() => this.provider?.off?.(RooCodeEventName.TaskAskResponded, onTaskChanged),
 			)
+		}
+		if (this.provider?.taskHistoryStore?.initialized) {
+			void this.provider.taskHistoryStore.initialized.then(() => {
+				this.emit("taskHistoryChanged")
+			})
 		}
 	}
 
@@ -763,16 +773,22 @@ export class DesktopAgentHost extends EventEmitter {
 				const lastAsk = runningTask.clineMessages
 					? [...runningTask.clineMessages].reverse().find((m: any) => m.type === "ask")
 					: undefined
+
+				const isAnswered =
+					runningTask.askResponse !== undefined || lastAsk?.isAnswered === true
+
 				const pendingAskType =
-					runningTask.currentAskType ??
-					runningTask.taskAsk?.ask ??
-					(runningTask.askResponse === undefined && !runningTask.isStreaming ? lastAsk?.ask : undefined)
+					isAnswered
+						? undefined
+						: (runningTask.currentAskType ??
+							runningTask.taskAsk?.ask ??
+							(!runningTask.isStreaming ? lastAsk?.ask : undefined))
 
 				const isUserDecisionRequired =
-					lastAsk?.approvalState === "USER_DECISION_REQUIRED"
+					!isAnswered && lastAsk?.approvalState === "USER_DECISION_REQUIRED"
 
 				const isEvaluating =
-					lastAsk?.approvalState === "EVALUATING"
+					!isAnswered && lastAsk?.approvalState === "EVALUATING"
 
 				const isAutoApproved =
 					lastAsk?.approvalState === "AUTO_APPROVED"
@@ -793,6 +809,7 @@ export class DesktopAgentHost extends EventEmitter {
 					status = item.status === "failed" ? "failed" : "completed"
 				} else {
 					const isWaitingInteractiveUser =
+						!isAnswered &&
 						!runningTask.isStreaming &&
 						!runningTask.isWaitingForFirstChunk &&
 						!runningTask.autoApprovalTimeoutRef &&
@@ -800,6 +817,7 @@ export class DesktopAgentHost extends EventEmitter {
 						!isAutoApproved &&
 						(isUserDecisionRequired ||
 							runningTask.taskStatus === "interactive" ||
+							pendingAskType === "resume_task" ||
 							pendingAskType === "followup" ||
 							pendingAskType === "plan_mode_response" ||
 							pendingAskType === "mistake_limit_reached" ||
@@ -813,6 +831,7 @@ export class DesktopAgentHost extends EventEmitter {
 					if (isWaitingInteractiveUser) {
 						status = "needs_attention"
 					} else if (
+						isAnswered ||
 						runningTask.isStreaming ||
 						runningTask.isWaitingForFirstChunk ||
 						runningTask.autoApprovalTimeoutRef ||
@@ -825,11 +844,15 @@ export class DesktopAgentHost extends EventEmitter {
 						status = isUserDecisionRequired ? "needs_attention" : (runningTask.taskStatus === "idle" ? "completed" : "running")
 					}
 				}
-				if (runningTask.isStarted === false && !runningTask.isStreaming) {
-					status = item.status === "interrupted" ? "needs_attention" : "completed"
+				if (runningTask.isStarted === false && !runningTask.isStreaming && !isAnswered && !isTaskRunning) {
+					status = (item.status === "interrupted" || pendingAskType === "resume_task" || isUserDecisionRequired)
+						? "needs_attention"
+						: "completed"
 				}
 			} else if (item.status === "failed") {
 				status = "failed"
+			} else if (item.status === "completed" || item.status === "cancelled") {
+				status = "completed"
 			} else if (item.status === "interrupted" || item.status === "active" || (item as any).needsAttention === true) {
 				status = "needs_attention"
 			} else {
@@ -841,10 +864,11 @@ export class DesktopAgentHost extends EventEmitter {
 
 			const creationTs = item.createdAt ?? extractCreationTimestamp(String(item.id), typeof item.ts === "number" ? item.ts : 0)
 			const list = result[ws] ?? []
+			const fallback = semanticFallbackTitle(item.task)
 			const displayTitle = item.titleSource === "manual"
 				? formatChatTitle(item.task, item.title)
 				: (!item.title || isBadAutoTitle(item.title, item.titleSource))
-					? semanticFallbackTitle(item.task)
+					? (fallback !== "New conversation task" ? fallback : formatChatTitle(item.task, item.title))
 					: formatChatTitle(item.task, item.title)
 			list.push({
 				id: String(item.id),
@@ -1427,6 +1451,12 @@ export class DesktopAgentHost extends EventEmitter {
 
 	public sendToExtension(message: WebviewMessage): void {
 		this.emit("webviewMessage", message)
+		if (
+			message.type === "askResponse" ||
+			message.type === "newTask"
+		) {
+			this.emit("taskHistoryChanged")
+		}
 	}
 
 	public setStatus(status: AgentStatusType): void {
