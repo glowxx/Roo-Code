@@ -27,6 +27,13 @@ import { ProviderRequestCoordinator } from "../../api/coordination/ProviderReque
 import { RequestPriority, RequestTicket } from "../../api/coordination/types"
 import { safeExtractJson, type SafeJsonExtractResult } from "./SafeJsonExtractor"
 
+export interface VerifierHealthState {
+	consecutiveFailures: number
+	lastFailureAt: number
+	cooldownUntil: number
+	lastCategory?: VerifierFailureCategory
+}
+
 export interface ApprovalOrchestratorOptions {
 	timeoutMs?: number
 	judge?: CommandSafetyJudge
@@ -105,6 +112,56 @@ export interface VerifierCandidate {
 }
 
 export class ApprovalOrchestrator {
+	private static readonly verifierHealth = new Map<string, VerifierHealthState>()
+
+	public static getVerifierHealth(candidateKey: string): VerifierHealthState | undefined {
+		return ApprovalOrchestrator.verifierHealth.get(candidateKey.toLowerCase())
+	}
+
+	public static resetVerifierHealth(): void {
+		ApprovalOrchestrator.verifierHealth.clear()
+	}
+
+	public static recordVerifierSuccess(candidateKey: string): void {
+		ApprovalOrchestrator.verifierHealth.delete(candidateKey.toLowerCase())
+	}
+
+	public static recordVerifierFailure(
+		candidateKey: string,
+		category: VerifierFailureCategory,
+		now: number = Date.now()
+	): VerifierHealthState {
+		const key = candidateKey.toLowerCase()
+		const current = ApprovalOrchestrator.verifierHealth.get(key) || {
+			consecutiveFailures: 0,
+			lastFailureAt: 0,
+			cooldownUntil: 0,
+		}
+
+		current.consecutiveFailures += 1
+		current.lastFailureAt = now
+		current.lastCategory = category
+
+		// Cooldown policy:
+		// - INVALID_MODEL: 5 minutes (300,000ms) - model does not exist
+		// - RATE_LIMIT or FREE_QUOTA_EXHAUSTED: 30 seconds (30,000ms)
+		// - TIMEOUT or MODEL_UNAVAILABLE or NETWORK or OTHER:
+		//   If >= 2 consecutive failures: trip circuit breaker for 30 seconds (30,000ms)
+		if (category === VerifierFailureCategory.INVALID_MODEL) {
+			current.cooldownUntil = now + 300000
+		} else if (
+			category === VerifierFailureCategory.RATE_LIMIT ||
+			category === VerifierFailureCategory.FREE_QUOTA_EXHAUSTED
+		) {
+			current.cooldownUntil = now + 30000
+		} else if (current.consecutiveFailures >= 2) {
+			current.cooldownUntil = now + 30000
+		}
+
+		ApprovalOrchestrator.verifierHealth.set(key, current)
+		return current
+	}
+
 	private readonly timeoutMs: number
 	private readonly judge: CommandSafetyJudge
 
@@ -176,13 +233,56 @@ export class ApprovalOrchestrator {
 		lastCategory: VerifierFailureCategory
 		attempts: number
 		callDetails?: ProviderCallDetails | null
+		queueWaitMs?: number
+		requestMs?: number
+		totalMs?: number
+		inCooldown?: boolean
 	}> {
 		const candidates = this.getVerifierCandidates(params.state)
+		if (candidates.length === 0) {
+			return {
+				rawResponse: null,
+				usedCandidate: null,
+				lastError: new Error("No verifier candidates configured"),
+				lastCategory: VerifierFailureCategory.INVALID_MODEL,
+				attempts: 0,
+			}
+		}
+
+		const now = Date.now()
+		const availableCandidates = candidates.filter((c) => {
+			const candidateKey = `${c.provider}:${c.modelId}`.toLowerCase()
+			const health = ApprovalOrchestrator.getVerifierHealth(candidateKey)
+			if (health && health.cooldownUntil > now) {
+				return false
+			}
+			return true
+		})
+
+		if (availableCandidates.length === 0) {
+			// All candidates in cooldown
+			const firstCandidateKey = `${candidates[0].provider}:${candidates[0].modelId}`.toLowerCase()
+			const health = ApprovalOrchestrator.getVerifierHealth(firstCandidateKey)
+			return {
+				rawResponse: null,
+				usedCandidate: null,
+				lastError: new Error("All safety verifier candidates are currently in cooldown"),
+				lastCategory: health?.lastCategory || VerifierFailureCategory.MODEL_UNAVAILABLE,
+				attempts: 0,
+				inCooldown: true,
+			}
+		}
+
+		const TOTAL_BUDGET_MS = this.timeoutMs
+		const deadline = Date.now() + TOTAL_BUDGET_MS
 		let totalAttempts = 0
 		let lastError: Error | null = null
 		let lastCategory: VerifierFailureCategory = VerifierFailureCategory.OTHER_TRANSIENT
+		let lastQueueWaitMs = 0
+		let lastRequestMs = 0
 
-		for (const candidate of candidates) {
+		for (const candidate of availableCandidates) {
+			const candidateKey = `${candidate.provider}:${candidate.modelId}`.toLowerCase()
 			let systemPrompt = params.systemPrompt
 			if (candidate.tier === "worker_fallback") {
 				systemPrompt =
@@ -194,29 +294,61 @@ export class ApprovalOrchestrator {
 			const maxAttemptsForCandidate = 2
 
 			while (candidateAttempts < maxAttemptsForCandidate) {
+				const remainingBudget = deadline - Date.now()
+				if (remainingBudget <= 500) {
+					if (!lastError) {
+						lastError = new Error(`Approval AI evaluation budget exceeded (${TOTAL_BUDGET_MS}ms)`)
+						lastCategory = VerifierFailureCategory.TIMEOUT
+					}
+					break
+				}
+
 				candidateAttempts++
 				totalAttempts++
-				const currentTimeout = candidateAttempts === 1 ? this.timeoutMs : 30000
-				const abortController = new AbortController()
-				let timeoutId: NodeJS.Timeout | undefined
 
-				const timeoutPromise = new Promise<never>((_, reject) => {
-					timeoutId = setTimeout(() => {
-						const timeoutError = new Error(`Approval AI evaluation timed out after ${currentTimeout}ms`)
-						abortController.abort(timeoutError)
-						reject(timeoutError)
-					}, currentTimeout)
-				})
-
+				// Separate bounded queue wait timeout (max 5000ms or remaining budget)
+				const queueTimeoutMs = Math.min(5000, remainingBudget)
 				const coordinator = ProviderRequestCoordinator.getInstance()
-				const providerKey = coordinator.deriveProviderKey(candidate.provider, candidate.apiKey)
+				const providerKey = coordinator.deriveProviderKey(candidate.provider, candidate.apiKey, undefined, "verifier")
 				let ticket: RequestTicket | undefined
 
+				const queueAbort = new AbortController()
+				const queueTimeoutId = setTimeout(() => {
+					queueAbort.abort(new Error(`Approval AI queue wait timed out after ${queueTimeoutMs}ms`))
+				}, queueTimeoutMs)
+
+				const queueStart = Date.now()
+				let queueWaitMs = 0
+
 				try {
-					ticket = await coordinator.acquireTicket({
-						providerKey,
-						priority: RequestPriority.VERIFIER,
-						abortSignal: abortController.signal,
+					try {
+						ticket = await coordinator.acquireTicket({
+							providerKey,
+							priority: RequestPriority.VERIFIER,
+							abortSignal: queueAbort.signal,
+						})
+					} finally {
+						clearTimeout(queueTimeoutId)
+						queueWaitMs = Date.now() - queueStart
+						lastQueueWaitMs = queueWaitMs
+					}
+
+					const remainingAfterQueue = deadline - Date.now()
+					if (remainingAfterQueue <= 500) {
+						throw new Error(`Approval AI evaluation budget exceeded after queue wait (${TOTAL_BUDGET_MS}ms)`)
+					}
+
+					// Bounded model generation timeout: max 15000ms or remaining budget
+					const genTimeoutMs = Math.min(15000, remainingAfterQueue)
+					const genAbort = new AbortController()
+					let genTimeoutId: NodeJS.Timeout | undefined
+
+					const timeoutPromise = new Promise<never>((_, reject) => {
+						genTimeoutId = setTimeout(() => {
+							const timeoutError = new Error(`Approval AI evaluation timed out after ${genTimeoutMs}ms`)
+							genAbort.abort(timeoutError)
+							reject(timeoutError)
+						}, genTimeoutMs)
 					})
 
 					const isRetry = candidateAttempts > 1
@@ -232,11 +364,12 @@ export class ApprovalOrchestrator {
 						systemPrompt,
 						userPrompt: effectivePrompt,
 						state: params.state,
-						signal: abortController.signal,
+						signal: genAbort.signal,
 						maxTokens: isRetry ? (params.maxTokens ?? 350) * 2 : (params.maxTokens ?? 350),
 						responseFormat: params.responseFormat,
 					}
 
+					const requestStart = Date.now()
 					const providerCall = CommandSafetyJudge.globalCallProviderOverride
 						? CommandSafetyJudge.globalCallProviderOverride(callParams)
 						: typeof (this.judge as any).callProviderDetails === "function"
@@ -244,18 +377,23 @@ export class ApprovalOrchestrator {
 							: this.judge.callProvider(callParams)
 
 					const callRes = await Promise.race([providerCall, timeoutPromise])
+					if (genTimeoutId) clearTimeout(genTimeoutId)
+					const requestMs = Date.now() - requestStart
+					lastRequestMs = requestMs
+
 					const callDetails: ProviderCallDetails = typeof callRes === "string" ? { text: callRes } : callRes
 					const rawResponse = callDetails.text
 
 					if (params.validateResponse && !params.validateResponse(rawResponse)) {
-						if (timeoutId) clearTimeout(timeoutId)
 						lastError = new Error(`Approval response failed schema or JSON extraction`)
 						lastCategory = VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
+						ApprovalOrchestrator.recordVerifierFailure(candidateKey, lastCategory)
 						continue
 					}
 
 					coordinator.reportSuccess(providerKey)
-					if (timeoutId) clearTimeout(timeoutId)
+					ApprovalOrchestrator.recordVerifierSuccess(candidateKey)
+
 					return {
 						rawResponse,
 						usedCandidate: candidate,
@@ -263,17 +401,24 @@ export class ApprovalOrchestrator {
 						lastCategory: VerifierFailureCategory.OTHER_TRANSIENT,
 						attempts: totalAttempts,
 						callDetails,
+						queueWaitMs: lastQueueWaitMs,
+						requestMs: lastRequestMs,
+						totalMs: lastQueueWaitMs + lastRequestMs,
 					}
 				} catch (error: any) {
-					if (timeoutId) clearTimeout(timeoutId)
 					lastError = error instanceof Error ? error : new Error(String(error))
 					lastCategory = classifyVerifierError(lastError)
 					if (lastCategory === VerifierFailureCategory.RATE_LIMIT) {
 						coordinator.reportRateLimit(providerKey, 5)
 					}
+					ApprovalOrchestrator.recordVerifierFailure(candidateKey, lastCategory)
 
 					if (!isTransientVerifierError(lastCategory)) {
 						break
+					}
+
+					if (candidateAttempts < maxAttemptsForCandidate && deadline - Date.now() > 2000) {
+						await new Promise((r) => setTimeout(r, 500))
 					}
 				} finally {
 					ticket?.release()
@@ -287,6 +432,9 @@ export class ApprovalOrchestrator {
 			lastError,
 			lastCategory,
 			attempts: totalAttempts,
+			queueWaitMs: lastQueueWaitMs,
+			requestMs: lastRequestMs,
+			totalMs: lastQueueWaitMs + lastRequestMs,
 		}
 	}
 
@@ -1141,7 +1289,8 @@ export class ApprovalOrchestrator {
 				const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
 				const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
 				const extractionNote = extraction.category !== "VALID_JSON" ? ` jsonCategory=${extraction.category}` : ""
-				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote} finalDecision=${parsed.decision} reason="${parsed.reason}"`
+				const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
+				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote}${timingText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
 
 				const result: ApprovalDecisionResult = {
 					decision: parsed.decision,
@@ -1157,6 +1306,9 @@ export class ApprovalOrchestrator {
 					unresolvedItems: parsed.unresolvedItems ?? undefined,
 					missingCriteria: parsed.missingCriteria ?? undefined,
 					approvalAttemptCount: execResult.attempts,
+					queueWaitMs: execResult.queueWaitMs,
+					requestMs: execResult.requestMs,
+					totalMs: execResult.totalMs,
 					auditLog,
 				}
 
@@ -1173,7 +1325,8 @@ export class ApprovalOrchestrator {
 			execResult.lastCategory === VerifierFailureCategory.RATE_LIMIT ||
 			execResult.lastCategory === VerifierFailureCategory.TIMEOUT ||
 			execResult.lastCategory === VerifierFailureCategory.NETWORK ||
-			execResult.lastCategory === VerifierFailureCategory.MODEL_UNAVAILABLE
+			execResult.lastCategory === VerifierFailureCategory.MODEL_UNAVAILABLE ||
+			execResult.inCooldown === true
 
 		const cmd = request.target.command || ""
 		const isDangerousCmd =
@@ -1220,7 +1373,8 @@ export class ApprovalOrchestrator {
 
 		if (isTransientInfra && isDeterministicSafeAction && !request.target.isOutsideWorkspace) {
 			const reason = `Verification model temporarily unavailable (${execResult.lastCategory}). Deterministically verified safe action permitted autonomously.`
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory} finalDecision=ALLOW_AUTO reason="${reason}"`
+			const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory}${timingText} finalDecision=ALLOW_AUTO reason="${reason}"`
 			const result: ApprovalDecisionResult = {
 				decision: "ALLOW_AUTO",
 				risk: "low",
@@ -1230,16 +1384,23 @@ export class ApprovalOrchestrator {
 				verifierUnavailable: true,
 				verifierFailureCategory: execResult.lastCategory,
 				approvalAttemptCount: execResult.attempts,
+				queueWaitMs: execResult.queueWaitMs,
+				requestMs: execResult.requestMs,
+				totalMs: execResult.totalMs,
 				auditLog,
 			}
 			this.recordDecision(request, result, "none", false, state)
 			return result
 		}
 
-		const reason = isSchemaInvalid
-			? `Approval response schema validation failed (${errorMsg}). Fail closed.`
-			: `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
-		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=${!isSchemaInvalid} verifierCategory=${execResult.lastCategory} finalDecision=MANUAL_APPROVAL reason="${reason}"`
+		const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
+		const cooldownText = execResult.inCooldown ? " inCooldown=true" : ""
+		const reason = execResult.inCooldown
+			? "Safety verification is in cooldown after repeated failures. Review this action manually."
+			: isSchemaInvalid
+				? `Approval response schema validation failed (${errorMsg}). Fail closed.`
+				: `Verification model unavailable (${execResult.lastCategory}: ${errorMsg}). Fail closed to manual approval.`
+		const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=${!isSchemaInvalid}${cooldownText} verifierCategory=${execResult.lastCategory}${timingText} finalDecision=MANUAL_APPROVAL reason="${reason}"`
 
 		const highestRisk = request.executionBoundary?.hostImpact.highestRisk
 		const fallbackRisk: CommandSafetyRiskLevel = highestRisk && highestRisk !== "none" ? highestRisk : "medium"
@@ -1253,6 +1414,9 @@ export class ApprovalOrchestrator {
 			verifierUnavailable: !isSchemaInvalid,
 			verifierFailureCategory: execResult.lastCategory,
 			approvalAttemptCount: execResult.attempts,
+			queueWaitMs: execResult.queueWaitMs,
+			requestMs: execResult.requestMs,
+			totalMs: execResult.totalMs,
 			auditLog,
 		}
 
@@ -1539,6 +1703,7 @@ export class ApprovalOrchestrator {
 			replanGuidance: result.replanGuidance,
 			evaluatorModel: fastPath ? "deterministic-policy" : modelId || "unknown",
 			fastPath,
+			latencyMs: result.totalMs,
 			taskGoal: request.taskContext.activeGoal,
 			currentStep: request.taskContext.currentStep,
 			environment: request.executionBoundary?.targetEnvironment || request.executionBoundary?.target.type || "local",

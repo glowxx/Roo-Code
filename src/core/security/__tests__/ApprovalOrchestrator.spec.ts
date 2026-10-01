@@ -23,6 +23,7 @@ describe("ApprovalOrchestrator", () => {
 		}
 		orchestrator = new ApprovalOrchestrator()
 		DecisionLogStore.getInstance().clear()
+		ApprovalOrchestrator.resetVerifierHealth()
 	})
 
 	describe("Worker Model != Approval Authority (Separation Invariant)", () => {

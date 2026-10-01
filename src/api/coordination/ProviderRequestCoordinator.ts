@@ -52,16 +52,17 @@ export class ProviderRequestCoordinator {
 		ProviderRequestCoordinator.instance = undefined
 	}
 
-	public deriveProviderKey(provider?: string, apiKey?: string, profileName?: string): string {
+	public deriveProviderKey(provider?: string, apiKey?: string, profileName?: string, role?: string): string {
 		const normProvider = (provider || "unknown").toLowerCase().trim()
+		const rolePrefix = role ? `:${role.toLowerCase().trim()}` : ""
 		if (apiKey && apiKey.trim()) {
 			const hash = createHash("sha256").update(apiKey.trim()).digest("hex").slice(0, 12)
-			return `${normProvider}:${hash}`
+			return `${normProvider}${rolePrefix}:${hash}`
 		}
 		if (profileName && profileName.trim()) {
-			return `${normProvider}:${profileName.trim()}`
+			return `${normProvider}${rolePrefix}:${profileName.trim()}`
 		}
-		return `${normProvider}:default`
+		return `${normProvider}${rolePrefix}:default`
 	}
 
 	private getBaselineConcurrency(providerKey: string): number {

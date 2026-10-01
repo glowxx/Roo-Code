@@ -462,6 +462,9 @@ export interface ApprovalDecisionResult {
 	approvalAttemptCount?: number
 	verifierUnavailable?: boolean
 	verifierFailureCategory?: VerifierFailureCategory
+	queueWaitMs?: number
+	requestMs?: number
+	totalMs?: number
 	auditLog: string
 }
 
