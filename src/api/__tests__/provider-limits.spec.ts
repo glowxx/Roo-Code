@@ -42,6 +42,28 @@ describe("provider limits", () => {
 		expect(result.freeTokens).toBeUndefined()
 	})
 
+	it("parses free_tokens resetAt when resets_in_sec is reported", () => {
+		const result = parseXkiroUsage(
+			{
+				free_tokens: { used_today: 10, limit_per_day: 100, remaining: 90, resets_in_sec: 1800 },
+			},
+			10_000,
+		)
+		expect(result.freeTokens?.resetAt).toBe(10_000 + 1800 * 1000)
+	})
+
+	it("derives next midnight UTC for free_tokens resetAt when provider reports daily window without seconds", () => {
+		const fetchedAt = new Date("2026-03-31T14:30:00Z").getTime()
+		const result = parseXkiroUsage(
+			{
+				free_tokens: { used_today: 10, limit_per_day: 100, remaining: 90 },
+			},
+			fetchedAt,
+		)
+		const expectedMidnight = new Date("2026-04-01T00:00:00Z").getTime()
+		expect(result.freeTokens?.resetAt).toBe(expectedMidnight)
+	})
+
 	it("does not request unsupported providers or missing credentials", async () => {
 		const request = vi.fn().mockResolvedValue(usage)
 		const get = createProviderLimitsService(request)

@@ -38,10 +38,28 @@ export function parseXkiroUsage(raw: unknown, fetchedAt: number): ProviderLimits
 			})
 		: undefined
 	const rawFree = object(data.free_tokens)
+	let freeResetAt: number | undefined
+	if (rawFree) {
+		const resetSeconds = number(rawFree.resets_in_sec)
+		const resetAtRaw = number(rawFree.reset_at) ?? number(rawFree.resets_at)
+		if (resetSeconds !== undefined) {
+			freeResetAt = fetchedAt + resetSeconds * 1000
+		} else if (resetAtRaw !== undefined) {
+			freeResetAt = resetAtRaw < 1e11 ? resetAtRaw * 1000 : resetAtRaw
+		} else if (typeof rawFree.reset_at === "string" && !isNaN(Date.parse(rawFree.reset_at))) {
+			freeResetAt = Date.parse(rawFree.reset_at)
+		} else if (typeof rawFree.resets_at === "string" && !isNaN(Date.parse(rawFree.resets_at))) {
+			freeResetAt = Date.parse(rawFree.resets_at)
+		} else {
+			const d = new Date(fetchedAt)
+			freeResetAt = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0)
+		}
+	}
 	const freeTokens = rawFree && {
 		usedToday: number(rawFree.used_today),
 		limitPerDay: number(rawFree.limit_per_day),
 		remaining: number(rawFree.remaining),
+		resetAt: freeResetAt,
 	}
 	const rawWallet = object(data.wallet)
 	const wallet = rawWallet && { balanceUsd: amount(rawWallet.balance_usd), heldUsd: amount(rawWallet.held_usd) }

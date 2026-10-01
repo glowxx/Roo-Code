@@ -13,6 +13,6 @@ export interface ProviderLimits {
 		remainingUsd?: string
 		resetAt?: number
 	}>
-	freeTokens?: { usedToday?: number; limitPerDay?: number; remaining?: number }
+	freeTokens?: { usedToday?: number; limitPerDay?: number; remaining?: number; resetAt?: number }
 	wallet?: { balanceUsd?: string; heldUsd?: string }
 }

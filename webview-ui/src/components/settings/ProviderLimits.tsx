@@ -74,7 +74,7 @@ export function ProviderLimits() {
 	}, [request])
 
 	useEffect(() => {
-		if (!limits?.fetchedAt && !limits?.windows?.some((item) => item.resetAt)) return
+		if (!limits?.fetchedAt && !limits?.windows?.some((item) => item.resetAt) && !limits?.freeTokens?.resetAt) return
 		const timer = window.setInterval(() => setNow(Date.now()), 60_000)
 		return () => window.clearInterval(timer)
 	}, [limits])
@@ -159,6 +159,8 @@ export function ProviderLimits() {
 							<p className="m-0 text-2xl font-semibold tabular-nums">{tokens(free.remaining)}</p></> : null}
 							{tokens(free.usedToday) && tokens(free.limitPerDay) ? <p className="m-0 mt-1 text-xs tabular-nums text-vscode-descriptionForeground">{tokens(free.usedToday)} / {tokens(free.limitPerDay)} {label("usedToday")}</p> : null}</div>
 						<UsageBar percent={freePercent} label={label("freeTokens")} />
+						{validDate(free.resetAt) ? <p className="m-0 text-xs text-vscode-descriptionForeground" title={validDate(free.resetAt)!.toLocaleString()}>
+							{validDate(free.resetAt)!.getTime() <= now ? label("resetDue") : label("resetsIn", { time: relative(free.resetAt) || "" })}</p> : null}
 					</article> : null}
 					{hasWalletData && wallet ? <article className="min-w-0 rounded-lg border border-border p-4">
 						<h4 className="m-0 text-sm font-semibold">{label("wallet")}</h4>

@@ -99,4 +99,22 @@ describe("ProviderLimits", () => {
 		expect(screen.queryByText(/Infinity%|NaN%/)).not.toBeInTheDocument()
 		expect(screen.getAllByRole("progressbar")).toHaveLength(1)
 	})
+
+	it("renders reset countdown for free tokens matching spending card format", () => {
+		const currentTime = Date.now()
+		render(<ProviderLimits />)
+		receive({
+			provider: "xkiro",
+			status: "supported",
+			fetchedAt: currentTime,
+			freeTokens: {
+				usedToday: 100,
+				limitPerDay: 1000,
+				remaining: 900,
+				resetAt: currentTime + 4 * 3600000 + 12 * 60000,
+			},
+		})
+		expect(screen.getByText("Resets in 4h 12m")).toBeInTheDocument()
+	})
 })
+
