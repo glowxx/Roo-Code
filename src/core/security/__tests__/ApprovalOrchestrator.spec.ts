@@ -403,7 +403,7 @@ describe("ApprovalOrchestrator", () => {
 			expect(result.auditLog).toContain("tier=secondary")
 		})
 
-		it("falls back to worker model when policy allows, with isolated auditor prompt", async () => {
+		it("never uses the worker model as a verifier after primary failure", async () => {
 			const callProviderMock = vi.fn()
 				// Primary verifier fails with 402
 				.mockRejectedValueOnce(new Error("402 Payment Required: quota exceeded"))
@@ -432,7 +432,6 @@ describe("ApprovalOrchestrator", () => {
 					provider: "openai",
 					modelId: "gpt-4o-mini",
 					apiKey: "sk-primary-key",
-					allowWorkerFallback: true,
 				},
 			}
 
@@ -454,17 +453,10 @@ describe("ApprovalOrchestrator", () => {
 
 			const result = await orchestrator.evaluate(request, stateWithWorkerFallback)
 
-			expect(callProviderMock).toHaveBeenCalledTimes(2)
+			expect(callProviderMock).toHaveBeenCalledTimes(1)
 			// First call to primary
 			expect(callProviderMock.mock.calls[0][0].provider).toBe("openai")
-			// Second call to worker model
-			expect(callProviderMock.mock.calls[1][0].provider).toBe("openrouter")
-			expect(callProviderMock.mock.calls[1][0].modelId).toBe("anthropic/claude-3.7-sonnet")
-			// Verify isolated auditor prompt was injected
-			expect(callProviderMock.mock.calls[1][0].systemPrompt).toContain("independent external security auditor")
-
-			expect(result.decision).toBe("ALLOW_AUTO")
-			expect(result.auditLog).toContain("tier=worker_fallback")
+			expect(result.decision).toBe("MANUAL_APPROVAL")
 		})
 
 		it("prohibits worker fallback when allowWorkerFallback is false and escalates to manual approval", async () => {
@@ -486,7 +478,6 @@ describe("ApprovalOrchestrator", () => {
 					provider: "openai",
 					modelId: "gpt-4o-mini",
 					apiKey: "sk-primary-key",
-					allowWorkerFallback: false,
 				},
 			}
 

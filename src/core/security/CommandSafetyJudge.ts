@@ -125,6 +125,8 @@ const FAST_PATH_PATTERNS = [
 	/^(?:Get-ChildItem|gci)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	/^(?:Get-Content|gc)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	/^(?:Get-Item|gi|Get-Location|gl)(\s+[^\n;&|`$<>{}\0]+)?$/i,
+	// Process metadata inspection. Restrict parameters so remote queries and scriptblocks need verification.
+	/^Get-Process(?:\s+(?:(?!-)[a-zA-Z0-9_.*,-]+|-Name\s+[a-zA-Z0-9_.*,-]+|-Id\s+\d+(?:,\d+)*|-ErrorAction\s+(?:SilentlyContinue|Continue|Stop)))*$/i,
 	/^(?:Test-Path)(\s+[^\n;&|`$<>{}\0]+)?$/i,
 	/^(?:Select-String|sls)(?:\s+(?:-(?:Pattern|SimpleMatch|CaseSensitive|Quiet|AllMatches|Context|Encoding|Path|LiteralPath)\b|'[^'\r\n]*'|"[^"$\r\n]*"|[a-zA-Z0-9_,\.\-\*\/\\:]+))*\s*$/i,
 	// Safe wait / pause commands (e.g. timeout 90, timeout /t 10)
@@ -158,7 +160,7 @@ const PASSIVE_FILTER_PATTERNS = [
 	/^(?:Out-String)(?:\s+-(?:Width\s+\d+|Stream))*$/i,
 	/^(?:Out-Host(?:\s+-Paging)?|Out-Null)$/i,
 	/^(?:Format-Table|ft|Format-List|fl|Format-Wide|fw)(?:\s+-(?:AutoSize|Wrap|GroupBy\s+[a-zA-Z0-9_]+|Property\s+[a-zA-Z0-9_,\s]+|[a-zA-Z0-9_]+))*\s*$/i,
-	/^(?:Select-Object|select)(?:\s+-(?:First|Last|Skip|Index)\s+\d+|\s+-Property\s+[a-zA-Z0-9_,\s]+|\s+-Unique|\s+-ExpandProperty\s+[a-zA-Z0-9_]+)+$/i,
+	/^(?:Select-Object|select)(?:\s+[a-zA-Z][a-zA-Z0-9_]*(?:,[a-zA-Z][a-zA-Z0-9_]*)*|\s+-(?:First|Last|Skip|Index)\s+\d+|\s+-Property\s+[a-zA-Z0-9_,\s]+|\s+-Unique|\s+-ExpandProperty\s+[a-zA-Z0-9_]+)+$/i,
 	/^(?:Select-String|sls)(?:\s+(?:-(?:Pattern|SimpleMatch|CaseSensitive|Quiet|AllMatches|Context|Encoding|Path|LiteralPath)\b|'[^'\r\n]*'|"[^"$\r\n]*"|[a-zA-Z0-9_,\.\-\*\/\\:]+))*\s*$/i,
 	/^(?:Sort-Object|sort)(?:\s+-(?:Property\s+[a-zA-Z0-9_,\s]+|Descending|Ascending|Unique|CaseSensitive)|\s+[a-zA-Z0-9_]+)*\s*$/i,
 	/^(?:Measure-Object|measure)(?:\s+-(?:Line|Word|Character|IgnoreWhiteSpace))*$/i,

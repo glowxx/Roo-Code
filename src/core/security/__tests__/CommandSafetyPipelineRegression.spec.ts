@@ -3,7 +3,7 @@ import { CommandSafetyJudge } from "../CommandSafetyJudge"
 import { ApprovalOrchestrator } from "../ApprovalOrchestrator"
 import { getEffectiveApprovalPolicy } from "../effectiveApprovalPolicy"
 import { getCommandDecision } from "../../auto-approval/commands"
-import type { UnifiedApprovalRequest, ExtensionState } from "@roo-code/types"
+import { VerifierFailureCategory, type UnifiedApprovalRequest, type ExtensionState } from "@roo-code/types"
 
 describe("CommandSafetyPipelineRegression - Strict Audit Suite", () => {
 	let judge: CommandSafetyJudge
@@ -50,6 +50,75 @@ ForEach-Object { '{0}:{1}:{2}' -f $_.Path,$_.LineNumber,$_.Line.Trim() }
 		judge = new CommandSafetyJudge()
 		orchestrator = new ApprovalOrchestrator({ timeoutMs: 25000 })
 		ApprovalOrchestrator.resetVerifierHealth()
+	})
+
+	it("replays a read-only process inspection without consulting the verifier", async () => {
+		const command = 'powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Select-Object Id,StartTime,Path"'
+		const callProvider = vi.fn(() => { throw new Error("verifier must not run") })
+		;(orchestrator as any).judge = { callProvider }
+		const result = await orchestrator.evaluate({
+			id: "real-process-inspection", taskId: "incident-task", actionType: "execute_command", timestamp: Date.now(),
+			target: { command }, taskContext: { latestUserInstruction: "Inspect processes", activeGoal: "Diagnostics", workspacePath: "C:/work", isWithinWorkspace: true },
+		}, realUserSettingsFixture)
+		expect(result.decision).toBe("ALLOW_AUTO")
+		expect(callProvider).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		"Get-Process -ComputerName remote-host",
+		"Get-Process -Module",
+		"Get-Process node | Stop-Process -Force",
+	])("does not classify process query with unsupported capability as safe: %s", (command) => {
+		expect(judge.evaluateFastPath(command)).toBeNull()
+	})
+
+	it("does not turn an ambiguous verifier failure into automatic approval", async () => {
+		const callProvider = vi.fn().mockRejectedValue(new Error("Approval AI evaluation timed out"))
+		;(orchestrator as any).judge = { callProvider }
+		const result = await orchestrator.evaluate({
+			id: "ambiguous-timeout", taskId: "incident-task", actionType: "execute_command", timestamp: Date.now(),
+			target: { command: "node ./unknown-script.js" }, taskContext: { latestUserInstruction: "Inspect code", activeGoal: "Audit", workspacePath: "C:/work", isWithinWorkspace: true },
+		}, realUserSettingsFixture)
+		expect(result.decision).toBe("MANUAL_APPROVAL")
+	})
+
+	it("does not self-verify when the actual xKiro worker model matches the verifier", async () => {
+		const callProvider = vi.fn()
+		;(orchestrator as any).judge = { callProvider }
+		const result = await orchestrator.evaluate({
+			id: "task-model-separation", taskId: "incident-task", actionType: "execute_command", timestamp: Date.now(),
+			target: { command: "node ./unknown-script.js" },
+			taskContext: { latestUserInstruction: "Inspect code", activeGoal: "Audit", workspacePath: "C:/work", isWithinWorkspace: true },
+		}, {
+			...realUserSettingsFixture,
+			apiConfiguration: { apiProvider: "xkiro", xkiroModelId: "qwen/qwen3.8-omni-flash:free" } as any,
+		})
+		expect(result.decision).toBe("MANUAL_APPROVAL")
+		expect(result.reason).toContain("AI Collusion Hazard")
+		expect(callProvider).not.toHaveBeenCalled()
+	})
+
+	it("honors an explicit command deny before a deterministic safe classification", async () => {
+		const callProvider = vi.fn()
+		;(orchestrator as any).judge = { callProvider }
+		const result = await orchestrator.evaluate({
+			id: "explicit-deny", taskId: "incident-task", actionType: "execute_command", timestamp: Date.now(),
+			target: { command: "git diff" }, taskContext: { latestUserInstruction: "Review files", activeGoal: "Audit", workspacePath: "C:/work", isWithinWorkspace: true },
+		}, { ...realUserSettingsFixture, deniedCommands: ["git diff"] })
+		expect(result.decision).toBe("DENY_AND_REPLAN")
+		expect(callProvider).not.toHaveBeenCalled()
+	})
+
+	it("keeps a process mutation out of the safe path during verifier cooldown", async () => {
+		const command = 'powershell -NoProfile -Command "Get-Process node | Stop-Process -Force"'
+		expect(judge.evaluateFastPath(command)).toBeNull()
+		ApprovalOrchestrator.recordVerifierFailure("xkiro:qwen/qwen3.8-omni-flash:free", VerifierFailureCategory.TIMEOUT)
+		ApprovalOrchestrator.recordVerifierFailure("xkiro:qwen/qwen3.8-omni-flash:free", VerifierFailureCategory.TIMEOUT)
+		const result = await orchestrator.evaluate({
+			id: "process-mutation", taskId: "incident-task", actionType: "execute_command", timestamp: Date.now(),
+			target: { command }, taskContext: { latestUserInstruction: "Inspect processes", activeGoal: "Diagnostics", workspacePath: "C:/work", isWithinWorkspace: true },
+		}, realUserSettingsFixture)
+		expect(result.decision).not.toBe("ALLOW_AUTO")
 	})
 
 	describe("PHASE 19 & 22: Exact Screenshot Command Incident Replay", () => {

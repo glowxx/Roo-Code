@@ -24,7 +24,6 @@ export interface CommandSafetyConfig {
 	secondaryProvider?: string
 	secondaryModelId?: string
 	secondaryApiKey?: string
-	allowWorkerFallback?: boolean
 }
 
 export const commandSafetyConfigSchema = z.object({
@@ -36,7 +35,6 @@ export const commandSafetyConfigSchema = z.object({
 	secondaryProvider: z.string().optional(),
 	secondaryModelId: z.string().optional(),
 	secondaryApiKey: z.string().optional(),
-	allowWorkerFallback: z.boolean().optional(),
 })
 
 export const DEFAULT_COMMAND_SAFETY_PROMPT_TEMPLATE = `Analyze the following command for potential security risks before execution:

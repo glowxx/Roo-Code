@@ -12,11 +12,12 @@ import {
 	completionJudgeResponseSchema,
 	isSafetyModelConfigured,
 	resolveProviderApiKey,
+	getModelId,
 	VerifierFailureCategory,
 } from "@roo-code/types"
-import { CommandSafetyJudge, DEFAULT_TIMEOUT_MS, type ProviderCallDetails } from "./CommandSafetyJudge"
+import { CommandSafetyJudge, type ProviderCallDetails } from "./CommandSafetyJudge"
 import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
-import { containsDangerousSubstitution } from "../auto-approval/commands"
+import { containsDangerousSubstitution, getCommandDecision } from "../auto-approval/commands"
 import {
 	buildAutonomousApprovalPrompt,
 	buildCompletionJudgePrompt,
@@ -105,7 +106,7 @@ export function isTransientVerifierError(category: VerifierFailureCategory): boo
 }
 
 export interface VerifierCandidate {
-	tier: "primary" | "secondary" | "worker_fallback"
+	tier: "primary" | "secondary"
 	provider: string
 	modelId: string
 	apiKey: string
@@ -201,22 +202,11 @@ export class ApprovalOrchestrator {
 			})
 		}
 
-		// 3. Worker Fallback (only if explicit policy allows)
-		if (approvalConfig.allowWorkerFallback && state?.apiConfiguration) {
-			const workerProvider = (state.apiConfiguration.apiProvider || "").toLowerCase().trim()
-			const workerModelId = (state.apiConfiguration.apiModelId || "").trim()
-			const workerApiKey = resolveProviderApiKey(workerProvider, state.apiConfiguration) || state.apiConfiguration.apiKey || ""
-			if (workerProvider && workerModelId) {
-				candidates.push({
-					tier: "worker_fallback",
-					provider: workerProvider,
-					modelId: workerModelId,
-					apiKey: workerApiKey,
-				})
-			}
-		}
-
-		return candidates
+		const workerProvider = state?.apiConfiguration?.apiProvider?.toLowerCase().trim()
+		const workerModel = getModelId(state?.apiConfiguration)?.toLowerCase().trim()
+		return candidates.filter((candidate) =>
+			!(candidate.provider === workerProvider && candidate.modelId.toLowerCase() === workerModel),
+		)
 	}
 
 	public async executeWithFallback(params: {
@@ -283,12 +273,7 @@ export class ApprovalOrchestrator {
 
 		for (const candidate of availableCandidates) {
 			const candidateKey = `${candidate.provider}:${candidate.modelId}`.toLowerCase()
-			let systemPrompt = params.systemPrompt
-			if (candidate.tier === "worker_fallback") {
-				systemPrompt =
-					"You are acting strictly as an independent external security auditor. Evaluate the following proposed action without reference to any previous reasoning. Provide an objective, unbiased verification assessment.\n\n" +
-					systemPrompt
-			}
+			const systemPrompt = params.systemPrompt
 
 			let candidateAttempts = 0
 			const maxAttemptsForCandidate = 2
@@ -453,7 +438,7 @@ export class ApprovalOrchestrator {
 			return true
 		}
 
-		const workerModel = (workerConfig?.apiModelId || "").toLowerCase().trim()
+		const workerModel = (getModelId(workerConfig) || "").toLowerCase().trim()
 		const approvalModel = (approvalConfig?.modelId || "").toLowerCase().trim()
 		const workerProvider = (workerConfig?.apiProvider || "").toLowerCase().trim()
 		const approvalProvider = (approvalConfig?.provider || "").toLowerCase().trim()
@@ -476,10 +461,10 @@ export class ApprovalOrchestrator {
 	 * Evaluates an approval request within the autonomous runtime.
 	 *
 	 * Decision Hierarchy:
-	 * 1. Authority Separation Guard (Collusion Check) -> Fail-closed if worker == approval
-	 * 2. Deterministic Fast-Path (0ms, 0 tokens) -> ALLOW_AUTO or HARD_BLOCK
-	 * 3. Execution Boundary & Blast Radius Analysis -> HARD_BLOCK on uncontained host escapes
-	 * 4. Contextual AI Adjudication (Independent Model) -> ALLOW_AUTO / DENY_AND_REPLAN / HARD_BLOCK
+	 * 1. Explicit command deny and execution boundary checks
+	 * 2. Deterministic fast path (0ms, 0 tokens) -> terminal ALLOW_AUTO or deny
+	 * 3. Authority separation for actions that need AI
+	 * 4. Contextual AI adjudication by an independent model
 	 * 5. Fail-Closed Fallback -> MANUAL_APPROVAL (never fallback to worker model)
 	 */
 	public async evaluate(
@@ -489,25 +474,18 @@ export class ApprovalOrchestrator {
 		const approvalConfig = state?.commandSafetyConfig
 		const workerConfig = state?.apiConfiguration
 		const taskId = request.taskId || "unknown"
-
-		// 1. Anti-Collusion Check
-		const isSeparated = this.validateAuthoritySeparation(workerConfig, approvalConfig)
-		if (!isSeparated) {
-			const reason = `AI Collusion Hazard: Configured Approval Authority model ('${approvalConfig?.modelId}') is identical to Worker Model. Self-approval is forbidden. Manual approval required.`
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=MANUAL_APPROVAL reason="${reason}"`
+		if (request.actionType === "execute_command" && request.target.command &&
+			getCommandDecision(request.target.command, state?.allowedCommands || [], state?.deniedCommands || []) === "auto_deny") {
+			const reason = "Command matches an explicit user deny rule."
 			const result: ApprovalDecisionResult = {
-				decision: "MANUAL_APPROVAL",
-				risk: "critical",
-				reason,
-				taskAligned: false,
-				hardBoundaryViolation: true,
-				auditLog,
+				decision: "DENY_AND_REPLAN", risk: "high", reason, taskAligned: false,
+				auditLog: `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=DENY_AND_REPLAN reason="${reason}"`,
 			}
-			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+			this.recordDecision(request, result, undefined, true, state)
 			return result
 		}
 
-		// 2. Command-specific Execution Boundary Analysis (intercept boundary escapes first)
+		// 1. Command-specific Execution Boundary Analysis (intercept boundary escapes first)
 		if (request.actionType === "execute_command" && request.target.command) {
 			const boundaryResult = this.evaluateCommandBoundary(request)
 			if (boundaryResult) {
@@ -521,7 +499,7 @@ export class ApprovalOrchestrator {
 			}
 		}
 
-		// 3. Deterministic Fast-Path Evaluation
+		// 2. Deterministic Fast-Path Evaluation
 		const fastPathResult = this.evaluateDeterministicFastPath(request)
 		if (fastPathResult) {
 			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=true approvalModelCalled=false finalDecision=${fastPathResult.decision} reason="${fastPathResult.reason}"`
@@ -530,6 +508,18 @@ export class ApprovalOrchestrator {
 				auditLog,
 			}
 			this.recordDecision(request, result, approvalConfig?.modelId, true, state)
+			return result
+		}
+
+		// 3. Only actions needing AI require an independent verifier.
+		if (!this.validateAuthoritySeparation(workerConfig, approvalConfig)) {
+			const reason = `AI Collusion Hazard: Configured Approval Authority model ('${approvalConfig?.modelId}') is identical to Worker Model. Self-approval is forbidden. Manual approval required.`
+			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=auto fastPath=false approvalModelCalled=false finalDecision=MANUAL_APPROVAL reason="${reason}"`
+			const result: ApprovalDecisionResult = {
+				decision: "MANUAL_APPROVAL", risk: "critical", reason, taskAligned: false,
+				hardBoundaryViolation: true, auditLog,
+			}
+			this.recordDecision(request, result, approvalConfig?.modelId, false, state)
 			return result
 		}
 
@@ -1273,6 +1263,7 @@ export class ApprovalOrchestrator {
 			stage1Reason: request.executionBoundary?.hostImpact.reasons.join("; "),
 			previousDenial: request.previousDenial,
 		})
+		const promptApproxTokens = Math.ceil((systemPrompt.length + userPrompt.length) / 4)
 
 		const execResult = await this.executeWithFallback({
 			systemPrompt,
@@ -1289,7 +1280,7 @@ export class ApprovalOrchestrator {
 				const retryText = execResult.attempts > 1 ? ` retry=true attempt=${execResult.attempts}` : ""
 				const tierText = execResult.usedCandidate.tier !== "primary" ? ` tier=${execResult.usedCandidate.tier}` : ""
 				const extractionNote = extraction.category !== "VALID_JSON" ? ` jsonCategory=${extraction.category}` : ""
-				const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
+				const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0} approvalPromptApproxTokens=${promptApproxTokens}`
 				const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true approvalModel=${execResult.usedCandidate.modelId}${tierText}${retryText}${extractionNote}${timingText} finalDecision=${parsed.decision} reason="${parsed.reason}"`
 
 				const result: ApprovalDecisionResult = {
@@ -1321,79 +1312,7 @@ export class ApprovalOrchestrator {
 		const isSchemaInvalid = execResult.lastCategory === VerifierFailureCategory.APPROVAL_RESPONSE_INVALID
 		const errorMsg = execResult.lastError ? execResult.lastError.message : "Unknown verification failure"
 
-		const isTransientInfra =
-			execResult.lastCategory === VerifierFailureCategory.RATE_LIMIT ||
-			execResult.lastCategory === VerifierFailureCategory.TIMEOUT ||
-			execResult.lastCategory === VerifierFailureCategory.NETWORK ||
-			execResult.lastCategory === VerifierFailureCategory.MODEL_UNAVAILABLE ||
-			execResult.inCooldown === true
-
-		const cmd = request.target.command || ""
-		const isDangerousCmd =
-			containsDangerousSubstitution(cmd) ||
-			request.executionBoundary?.hostImpact.isHostEscape ||
-			/(\b|^)(rm\s+-(?:r|f|rf)|del\s+\/[sfq]|format|clean\s+-fd|git\s+reset\s+--hard|push\s+--force)(\b|$)/i.test(cmd)
-
-		// Strict deterministic fallback: commands MUST be proven safe by fast-path heuristics
-		const isFastPathSafeCmd = Boolean(
-			cmd &&
-			((typeof this.judge?.evaluateFastPath === "function" && this.judge.evaluateFastPath(cmd)?.isSafe === true) ||
-				CommandSafetyJudge.evaluateFastPath(cmd)?.isSafe === true) &&
-			!isDangerousCmd
-		)
-
-		const isSensitivePath = (filePath?: string): boolean => {
-			if (!filePath) return false
-			const norm = filePath.replace(/\\/g, "/").toLowerCase()
-			return (
-				norm.includes("/.git/") ||
-				norm.includes("/.env") ||
-				norm.endsWith(".pem") ||
-				norm.endsWith(".key") ||
-				norm.includes("/id_rsa") ||
-				norm.includes("/id_ed25519") ||
-				norm.includes("/credentials") ||
-				norm.includes("/shadow")
-			)
-		}
-
-		const isRoutineFileWrite =
-			(request.actionType === "write_to_file" || request.actionType === "replace_file_content") &&
-			Boolean(request.target.filePath) &&
-			!isSensitivePath(request.target.filePath) &&
-			!request.target.isOutsideWorkspace
-
-		const isDeterministicSafeAction =
-			request.actionType === "read_file" ||
-			request.actionType === "switch_mode" ||
-			request.actionType === "new_task" ||
-			request.actionType === "update_todo_list" ||
-			(request.actionType === "execute_command" && isFastPathSafeCmd) ||
-			isRoutineFileWrite
-
-		if (isTransientInfra && isDeterministicSafeAction && !request.target.isOutsideWorkspace) {
-			const reason = `Verification model temporarily unavailable (${execResult.lastCategory}). Deterministically verified safe action permitted autonomously.`
-			const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
-			const auditLog = `[ApprovalAudit] taskId=${taskId} actionId=${request.id} actionType=${request.actionType} mode=${state.approvalMode} fastPath=false approvalModelCalled=true attempt=${execResult.attempts} infrastructureFailure=true verifierUnavailable=true verifierCategory=${execResult.lastCategory}${timingText} finalDecision=ALLOW_AUTO reason="${reason}"`
-			const result: ApprovalDecisionResult = {
-				decision: "ALLOW_AUTO",
-				risk: "low",
-				reason,
-				taskAligned: true,
-				infrastructureFailure: true,
-				verifierUnavailable: true,
-				verifierFailureCategory: execResult.lastCategory,
-				approvalAttemptCount: execResult.attempts,
-				queueWaitMs: execResult.queueWaitMs,
-				requestMs: execResult.requestMs,
-				totalMs: execResult.totalMs,
-				auditLog,
-			}
-			this.recordDecision(request, result, "none", false, state)
-			return result
-		}
-
-		const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0}`
+		const timingText = ` queueWaitMs=${execResult.queueWaitMs ?? 0} requestMs=${execResult.requestMs ?? 0} totalMs=${execResult.totalMs ?? 0} approvalPromptApproxTokens=${promptApproxTokens}`
 		const cooldownText = execResult.inCooldown ? " inCooldown=true" : ""
 		const reason = execResult.inCooldown
 			? "Safety verification is in cooldown after repeated failures. Review this action manually."
