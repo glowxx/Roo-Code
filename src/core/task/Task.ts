@@ -628,9 +628,22 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
 			this.emit(RooCodeEventName.QueuedMessagesUpdated, this.taskId, this.messageQueueService.messages)
 			this.providerRef.deref()?.postStateToWebviewWithoutTaskHistory()
-			this.saveClineMessages().catch((err) =>
-				console.error(`[Task] Failed to persist promptQueue update for ${this.taskId}:`, err),
-			)
+			const currentQueue = structuredClone(this.messageQueueService.messages)
+			if (this.historyItem) {
+				this.historyItem.promptQueue = currentQueue
+			}
+			const provider = this.providerRef.deref()
+			if (provider) {
+				provider
+					.updateTaskHistory({
+						...(this.historyItem ?? { id: this.taskId }),
+						id: this.taskId,
+						promptQueue: currentQueue,
+					} as HistoryItem)
+					.catch((err) =>
+						console.error(`[Task] Failed to persist promptQueue update for ${this.taskId}:`, err),
+					)
+			}
 		}
 
 		this.messageQueueService.on("stateChanged", this.messageQueueStateChangedHandler)
@@ -1383,7 +1396,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			// - Final state is emitted when updates stop (trailing: true)
 			this.debouncedEmitTokenUsage(tokenUsage, this.toolUsage)
 
-			if (this.messageQueueService && !this.messageQueueService.isEmpty()) {
+			if (this.messageQueueService) {
 				historyItem.promptQueue = structuredClone(this.messageQueueService.messages)
 			}
 

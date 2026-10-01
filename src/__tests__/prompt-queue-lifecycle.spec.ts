@@ -117,5 +117,135 @@ describe("Prompt Queue Lifecycle & Crash Recovery", () => {
 			expect(retainedCompleted).toBeDefined()
 			expect(retainedCompleted?.status).toBe("completed")
 		})
+
+		it("removes queued message permanently and does not resurrect after restart", async () => {
+			await store.initialize()
+
+			const taskId = "task-delete-queue-1"
+			const initialItem: HistoryItem = {
+				id: taskId,
+				number: 1,
+				ts: Date.now(),
+				task: "Task with queued message",
+				tokensIn: 50,
+				tokensOut: 20,
+				totalCost: 0.005,
+				workspace: "/test/workspace",
+				status: "active",
+				promptQueue: [{ id: "msg-to-delete", timestamp: Date.now(), text: "Queued message to delete" }],
+			}
+
+			// 1. Initial save with queued message
+			await store.upsert(initialItem)
+			let itemInStore = store.get(taskId)
+			expect(itemInStore?.promptQueue).toHaveLength(1)
+
+			// 2. User deletes the queued message -> promptQueue becomes empty []
+			await store.upsert({
+				...initialItem,
+				promptQueue: [],
+			})
+
+			itemInStore = store.get(taskId)
+			expect(itemInStore?.promptQueue).toBeUndefined()
+
+			// Check disk file directly
+			const taskFile = path.join(tmpDir, "tasks", taskId, "history_item.json")
+			const diskContent = JSON.parse(await fs.readFile(taskFile, "utf8"))
+			expect(diskContent.promptQueue).toBeUndefined()
+
+			// 3. Simulate app restart: create a new TaskHistoryStore instance pointing to same storage
+			store.dispose()
+			const restartedStore = new TaskHistoryStore(tmpDir)
+			await restartedStore.initialize()
+
+			const afterRestart = restartedStore.get(taskId)
+			expect(afterRestart?.promptQueue).toBeUndefined()
+			restartedStore.dispose()
+		})
+
+		it("correctly removes only target item by stable ID when deleting from multi-item queue", async () => {
+			await store.initialize()
+
+			const taskId = "task-multi-queue"
+			const queueItems: QueuedMessage[] = [
+				{ id: "q-1", timestamp: 1000, text: "First" },
+				{ id: "q-2", timestamp: 2000, text: "Second" },
+				{ id: "q-3", timestamp: 3000, text: "Third" },
+			]
+
+			const initialItem: HistoryItem = {
+				id: taskId,
+				number: 2,
+				ts: Date.now(),
+				task: "Task with 3 queued messages",
+				tokensIn: 100,
+				tokensOut: 50,
+				totalCost: 0.01,
+				workspace: "/test/workspace",
+				status: "active",
+				promptQueue: queueItems,
+			}
+
+			await store.upsert(initialItem)
+
+			// Delete q-2 by filtering by stable ID
+			const remaining = queueItems.filter((q) => q.id !== "q-2")
+			await store.upsert({
+				...initialItem,
+				promptQueue: remaining,
+			})
+
+			const updated = store.get(taskId)
+			expect(updated?.promptQueue).toHaveLength(2)
+			expect(updated?.promptQueue?.map((q) => q.id)).toEqual(["q-1", "q-3"])
+
+			// Simulate restart
+			store.dispose()
+			const restartedStore = new TaskHistoryStore(tmpDir)
+			await restartedStore.initialize()
+
+			const afterRestart = restartedStore.get(taskId)
+			expect(afterRestart?.promptQueue).toHaveLength(2)
+			expect(afterRestart?.promptQueue?.map((q) => q.id)).toEqual(["q-1", "q-3"])
+			restartedStore.dispose()
+		})
+
+		it("metadata-only update does not wipe existing promptQueue", async () => {
+			await store.initialize()
+
+			const taskId = "task-metadata-queue"
+			const initialItem: HistoryItem = {
+				id: taskId,
+				number: 3,
+				ts: Date.now(),
+				task: "Original task name",
+				tokensIn: 100,
+				tokensOut: 50,
+				totalCost: 0.01,
+				workspace: "/test/workspace",
+				status: "active",
+				promptQueue: [{ id: "q-keep", timestamp: 1000, text: "Keep this" }],
+			}
+
+			await store.upsert(initialItem)
+
+			// Metadata-only update without promptQueue specified (undefined)
+			await store.upsert({
+				id: taskId,
+				number: 3,
+				ts: Date.now(),
+				task: "Updated task name",
+				tokensIn: 110,
+				tokensOut: 55,
+				totalCost: 0.012,
+			} as HistoryItem)
+
+			const item = store.get(taskId)
+			expect(item?.task).toBe("Updated task name")
+			expect(item?.promptQueue).toHaveLength(1)
+			expect(item?.promptQueue?.[0].id).toBe("q-keep")
+		})
 	})
 })
+

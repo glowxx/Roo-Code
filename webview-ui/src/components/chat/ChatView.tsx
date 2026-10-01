@@ -2100,11 +2100,16 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			<div className="w-full canvas-narrative">
 				<QueuedMessages
 					queue={messageQueue}
-					onRemove={(index) => {
-						if (messageQueue[index]) {
+					onRemove={(idOrIndex, index) => {
+						const msg =
+							typeof idOrIndex === "string"
+								? messageQueue.find((m) => m.id === idOrIndex)
+								: (messageQueue[idOrIndex] ?? (index !== undefined ? messageQueue[index] : undefined))
+						const messageId = msg ? msg.id : (typeof idOrIndex === "string" ? idOrIndex : undefined)
+						if (messageId) {
 							vscode.postMessage({
 								type: "removeQueuedMessage",
-								text: messageQueue[index].id,
+								text: messageId,
 								taskId: currentTaskItem?.id,
 							})
 						}

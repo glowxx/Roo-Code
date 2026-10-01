@@ -11,7 +11,7 @@ import { Mention } from "./Mention"
 
 interface QueuedMessagesProps {
 	queue: QueuedMessage[]
-	onRemove: (index: number) => void
+	onRemove: (idOrIndex: string | number, index?: number) => void
 	onUpdate: (index: number, newText: string) => void
 }
 
@@ -95,8 +95,8 @@ export const QueuedMessages = ({ queue, onRemove, onUpdate }: QueuedMessagesProp
 										size="icon"
 										className="shrink-0"
 										onClick={(e) => {
-											e.stopPropagation()
-											onRemove(index)
+ 											e.stopPropagation()
+											onRemove(message.id, index)
 										}}>
 										<span className="codicon codicon-trash" />
 									</Button>

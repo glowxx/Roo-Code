@@ -3111,7 +3111,19 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			const targetTask =
 				(message.taskId ? provider.runningTasks.get(message.taskId) : undefined) ??
 				provider.getCurrentTask()
-			targetTask?.messageQueueService.removeMessage(message.text ?? "")
+			const messageId = message.text ?? ""
+			if (targetTask) {
+				targetTask.messageQueueService.removeMessage(messageId)
+			} else if (message.taskId && messageId) {
+				const item = provider.taskHistoryStore.get(message.taskId)
+				if (item?.promptQueue) {
+					const updatedQueue = item.promptQueue.filter((m) => m.id !== messageId)
+					provider.updateTaskHistory({
+						...item,
+						promptQueue: updatedQueue,
+					})
+				}
+			}
 			break
 		}
 		case "editQueuedMessage": {

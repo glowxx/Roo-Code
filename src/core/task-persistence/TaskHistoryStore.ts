@@ -232,6 +232,14 @@ export class TaskHistoryStore {
 						...(resolvedSource !== undefined ? { titleSource: resolvedSource } : {}),
 					}
 
+			if (item.promptQueue !== undefined) {
+				if (item.promptQueue.length === 0) {
+					delete merged.promptQueue
+				} else {
+					merged.promptQueue = item.promptQueue
+				}
+			}
+
 			// Write per-task file (source of truth)
 			await this.writeTaskFile(merged)
 
@@ -378,11 +386,26 @@ export class TaskHistoryStore {
 						console.error(`[TaskHistoryStore] Failed to write recovered task file for ${taskId}:`, err)
 					})
 					changed = true
+				} else if (item.status === "completed" || item.status === "cancelled") {
+					if (item.needsAttention) {
+						const updatedItem: HistoryItem = {
+							...item,
+							needsAttention: false,
+						}
+						this.cache.set(taskId, updatedItem)
+						await this.writeTaskFile(updatedItem).catch((err) => {
+							console.error(`[TaskHistoryStore] Failed to write normalized task file for ${taskId}:`, err)
+						})
+						changed = true
+					}
 				}
 			}
 
 			if (changed) {
 				this.scheduleIndexWrite()
+				if (this.onWrite) {
+					await this.onWrite(this.getAll())
+				}
 			}
 		})
 	}
