@@ -1417,11 +1417,34 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 		}
 		case "cancelTask":
 			try {
-				const target = message.taskId ? provider.runningTasks.get(message.taskId) : undefined
-				if (target) await provider.cancelTask(message.taskId)
-				await provider.postMessageToWebview({ type: "taskStopAcknowledged", id: message.taskId, requestId: message.requestId, success: Boolean(target?.abort || target?.abandoned) })
+				const target = message.taskId
+					? (provider.runningTasks.get(message.taskId) ??
+						(provider.getCurrentTask()?.taskId === message.taskId ? provider.getCurrentTask() : undefined))
+					: provider.getCurrentTask()
+
+				if (target && !target.abort && !target.abandoned) {
+					await provider.cancelTask(target.taskId)
+				}
+
+				const isTargetKnown = Boolean(
+					target ||
+					(message.taskId && provider.getCurrentTask()?.taskId === message.taskId)
+				)
+
+				await provider.postMessageToWebview({
+					type: "taskStopAcknowledged",
+					id: message.taskId ?? target?.taskId,
+					requestId: message.requestId,
+					success: isTargetKnown ? true : false,
+				})
 			} catch (error) {
-				await provider.postMessageToWebview({ type: "taskStopAcknowledged", id: message.taskId, requestId: message.requestId, success: false, error: String(error) })
+				await provider.postMessageToWebview({
+					type: "taskStopAcknowledged",
+					id: message.taskId,
+					requestId: message.requestId,
+					success: false,
+					error: String(error),
+				})
 			}
 			break
 		case "cancelAutoApproval": {
@@ -1955,8 +1978,6 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			break
 		case "upsertApiConfiguration":
 			if (message.text && message.apiConfiguration) {
-				await provider.upsertProviderProfile(message.text, message.apiConfiguration)
-
 				const config = message.apiConfiguration
 				const selectedModelId = getModelId(config)
 				const selectedProvider = config.apiProvider
@@ -1964,9 +1985,13 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 
 				// Persist per-chat preferred model on active task without mutating its running execution snapshot
 				const currentTask = provider.getCurrentTask()
-				if (currentTask && selectedModelId && currentTask.historyItem) {
-					currentTask.historyItem.chatModelId = selectedModelId
-					currentTask.historyItem.chatProvider = selectedProvider
+				if (currentTask && currentTask.historyItem) {
+					if (selectedModelId) {
+						currentTask.historyItem.chatModelId = selectedModelId
+					}
+					if (selectedProvider) {
+						currentTask.historyItem.chatProvider = selectedProvider
+					}
 					currentTask.historyItem.chatReasoningEffort = selectedReasoningEffort
 					await currentTask.saveClineMessages()
 				}
@@ -1979,6 +2004,8 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 						reasoningEffort: selectedReasoningEffort,
 					})
 				}
+
+				await provider.upsertProviderProfile(message.text, message.apiConfiguration)
 
 				// Automatically discover and cache models for xKiro or OpenAI-compatible
 				const providerType = config.apiProvider || "xkiro"

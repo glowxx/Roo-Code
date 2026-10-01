@@ -1903,6 +1903,11 @@ describe("ClineProvider", () => {
 
 			// Setup Task instance with auto-mock from the top of the file
 			const mockCline = new Task(defaultTaskOptions) // Create a new mocked instance
+			;(mockCline as any).isTaskCompleted = true
+			;(mockCline as any).setTaskApiConfigName = vi.fn().mockResolvedValue(undefined)
+			;(mockCline as any).updateApiConfiguration = vi.fn().mockImplementation(() => {
+				buildApiHandler({} as any)
+			})
 			await provider.addClineToStack(mockCline)
 
 			const testApiConfig = {
@@ -1964,6 +1969,344 @@ describe("ClineProvider", () => {
 			expect(updateGlobalStateSpy).toHaveBeenCalledWith("listApiConfigMeta", [
 				{ name: "test-config", id: "test-id", apiProvider: "anthropic" },
 			])
+		})
+
+		test("updates active task chatModelId and reasoningEffort BEFORE postStateToWebview on FIRST click", async () => {
+			await provider.resolveWebviewView(mockWebviewView)
+			const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
+
+			const mockCline = new Task(defaultTaskOptions)
+			;(mockCline as any).isTaskCompleted = true
+			;(mockCline as any).setTaskApiConfigName = vi.fn().mockResolvedValue(undefined)
+			;(mockCline as any).updateApiConfiguration = vi.fn()
+			;(mockCline as any).historyItem = {
+				id: "test-task-id",
+				chatModelId: "claude-3-5-sonnet-20241022",
+				chatProvider: "anthropic",
+				chatReasoningEffort: "high",
+			}
+			;(mockCline as any).saveClineMessages = vi.fn().mockResolvedValue(undefined)
+			await provider.addClineToStack(mockCline)
+
+			mockPostMessage.mockClear()
+
+			;(provider as any).providerSettingsManager = {
+				setModeConfig: vi.fn(),
+				saveConfig: vi.fn().mockResolvedValue(undefined),
+				listConfig: vi.fn().mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "openai" }]),
+				activateProfile: vi.fn().mockResolvedValue({
+					name: "test-config",
+					id: "test-id",
+					apiProvider: "openai",
+					openAiModelId: "gpt-5",
+					reasoningEffort: "high",
+				}),
+			} as any
+
+			// User clicks Model B (e.g. gpt-5) once
+			await messageHandler({
+				type: "upsertApiConfiguration",
+				text: "test-config",
+				apiConfiguration: {
+					apiProvider: "openai",
+					openAiModelId: "gpt-5",
+					reasoningEffort: "high",
+				},
+			})
+
+			// 1. Task history item was updated
+			expect(mockCline.historyItem!.chatModelId).toBe("gpt-5")
+			expect(mockCline.historyItem!.chatProvider).toBe("openai")
+			expect(mockCline.historyItem!.chatReasoningEffort).toBe("high")
+			expect((mockCline as any).saveClineMessages).toHaveBeenCalled()
+
+			// 2. The postStateToWebview call sent during upsertProviderProfile must have contained gpt-5 and high effort on that FIRST click
+			expect(mockPostMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "state" }))
+			const postStateCalls = mockPostMessage.mock.calls.filter((c: any[]) => c[0]?.type === "state")
+			expect(postStateCalls.length).toBeGreaterThan(0)
+			const firstState = postStateCalls[0][0].state
+			expect(firstState.apiConfiguration.openAiModelId).toBe("gpt-5")
+			expect(firstState.apiConfiguration.reasoningEffort).toBe("high")
+			expect(firstState.apiConfiguration.enableReasoningEffort).toBe(true)
+		})
+
+		test("updates lastManuallySelectedModel for unassigned/new chat before postStateToWebview", async () => {
+			await provider.resolveWebviewView(mockWebviewView)
+			const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
+
+			// No active task
+			await provider.clearTask()
+
+			;(provider as any).providerSettingsManager = {
+				setModeConfig: vi.fn(),
+				saveConfig: vi.fn().mockResolvedValue(undefined),
+				listConfig: vi.fn().mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "openai" }]),
+				activateProfile: vi.fn().mockResolvedValue({
+					name: "test-config",
+					id: "test-id",
+					apiProvider: "openai",
+					openAiModelId: "gpt-5",
+					reasoningEffort: "high",
+				}),
+			} as any
+
+			await messageHandler({
+				type: "upsertApiConfiguration",
+				text: "test-config",
+				apiConfiguration: {
+					apiProvider: "openai",
+					openAiModelId: "gpt-5",
+					reasoningEffort: "high",
+				},
+			})
+
+			expect(mockContext.globalState.update).toHaveBeenCalledWith("lastManuallySelectedModel", {
+				modelId: "gpt-5",
+				provider: "openai",
+				reasoningEffort: "high",
+			})
+		})
+
+		describe("Per-chat reasoning effort persistence and capability validation", () => {
+			test("1. Exact Bug Fixture: Chat A with qwen/qwen3.8-max:free changes High -> Medium on ONE CLICK and persists", async () => {
+				await provider.resolveWebviewView(mockWebviewView)
+				const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
+
+				const mockCline = new Task(defaultTaskOptions)
+				;(mockCline as any).isTaskCompleted = true
+				;(mockCline as any).setTaskApiConfigName = vi.fn().mockResolvedValue(undefined)
+				;(mockCline as any).updateApiConfiguration = vi.fn()
+				;(mockCline as any).historyItem = {
+					id: "01a0f93b-82fc-772b-be13-28eb0c89af25",
+					chatModelId: "qwen/qwen3.8-max:free",
+					chatProvider: "xkiro",
+					chatReasoningEffort: "high",
+				}
+				;(mockCline as any).saveClineMessages = vi.fn().mockResolvedValue(undefined)
+				await provider.addClineToStack(mockCline)
+
+				;(provider as any).contextProxy.setValues({
+					openAiModelInfos: {
+						"qwen/qwen3.8-max:free": {
+							supportsReasoningEffort: true,
+							displayName: "Qwen3.8 Max (Free)",
+						},
+					},
+				})
+
+				mockPostMessage.mockClear()
+
+				;(provider as any).providerSettingsManager = {
+					setModeConfig: vi.fn(),
+					saveConfig: vi.fn().mockResolvedValue(undefined),
+					listConfig: vi.fn().mockResolvedValue([{ name: "default", id: "default-id", apiProvider: "xkiro" }]),
+					activateProfile: vi.fn().mockResolvedValue({
+						name: "default",
+						id: "default-id",
+						apiProvider: "xkiro",
+						xkiroModelId: "qwen/qwen3.8-max:free",
+						reasoningEffort: "medium",
+					}),
+				} as any
+
+				// User clicks "Medium" effort once
+				await messageHandler({
+					type: "upsertApiConfiguration",
+					text: "default",
+					apiConfiguration: {
+						apiProvider: "xkiro",
+						xkiroModelId: "qwen/qwen3.8-max:free",
+						reasoningEffort: "medium",
+						enableReasoningEffort: true,
+					},
+				})
+
+				// 1. Task historyItem is updated to medium
+				expect(mockCline.historyItem!.chatReasoningEffort).toBe("medium")
+				expect(mockCline.historyItem!.chatModelId).toBe("qwen/qwen3.8-max:free")
+				expect(mockCline.historyItem!.chatProvider).toBe("xkiro")
+				expect((mockCline as any).saveClineMessages).toHaveBeenCalled()
+
+				// 2. PostState contains medium effort and enableReasoningEffort: true on the FIRST click
+				const postStateCalls = mockPostMessage.mock.calls.filter((c: any[]) => c[0]?.type === "state")
+				expect(postStateCalls.length).toBeGreaterThan(0)
+				const lastState = postStateCalls[postStateCalls.length - 1][0].state
+				expect(lastState.apiConfiguration.xkiroModelId).toBe("qwen/qwen3.8-max:free")
+				expect(lastState.apiConfiguration.reasoningEffort).toBe("medium")
+				expect(lastState.apiConfiguration.enableReasoningEffort).toBe(true)
+			})
+
+			test("2. Stale/invalid persisted effort normalizes to canonical fallback and allows valid selection", async () => {
+				await provider.resolveWebviewView(mockWebviewView)
+				const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
+
+				const mockCline = new Task(defaultTaskOptions)
+				;(mockCline as any).isTaskCompleted = true
+				;(mockCline as any).setTaskApiConfigName = vi.fn().mockResolvedValue(undefined)
+				;(mockCline as any).updateApiConfiguration = vi.fn()
+				;(mockCline as any).historyItem = {
+					id: "task-with-invalid-effort",
+					chatModelId: "custom-constrained-model",
+					chatProvider: "openai",
+					chatReasoningEffort: "invalid-effort-level",
+				}
+				;(mockCline as any).saveClineMessages = vi.fn().mockResolvedValue(undefined)
+				await provider.addClineToStack(mockCline)
+
+				;(provider as any).contextProxy.setValues({
+					openAiModelInfos: {
+						"custom-constrained-model": {
+							supportsReasoningEffort: true,
+							reasoningEffortLevels: ["low", "high"],
+						},
+					},
+				})
+
+				// Rerender state: invalid effort normalized to first allowed level ("low")
+				const state = await (provider as any).getStateToPostToWebview()
+				expect(state.apiConfiguration.reasoningEffort).toBe("low")
+				expect(state.apiConfiguration.enableReasoningEffort).toBe(true)
+
+				// Now user selects a valid effort ("high")
+				await messageHandler({
+					type: "upsertApiConfiguration",
+					text: "default",
+					apiConfiguration: {
+						apiProvider: "openai",
+						openAiModelId: "custom-constrained-model",
+						reasoningEffort: "high",
+						enableReasoningEffort: true,
+					},
+				})
+
+				expect(mockCline.historyItem!.chatReasoningEffort).toBe("high")
+				const updatedState = await (provider as any).getStateToPostToWebview()
+				expect(updatedState.apiConfiguration.reasoningEffort).toBe("high")
+				expect(updatedState.apiConfiguration.enableReasoningEffort).toBe(true)
+			})
+
+			test("3. Changed effort survives rerender", async () => {
+				const mockCline = new Task(defaultTaskOptions)
+				;(mockCline as any).isTaskCompleted = true
+				;(mockCline as any).historyItem = {
+					id: "task-rerender",
+					chatModelId: "qwen/qwen3.8-max:free",
+					chatProvider: "xkiro",
+					chatReasoningEffort: "medium",
+				}
+				await provider.addClineToStack(mockCline)
+				;(provider as any).contextProxy.setValues({
+					openAiModelInfos: {
+						"qwen/qwen3.8-max:free": { supportsReasoningEffort: true },
+					},
+				})
+
+				const state1 = await (provider as any).getStateToPostToWebview()
+				expect(state1.apiConfiguration.reasoningEffort).toBe("medium")
+
+				const state2 = await (provider as any).getStateToPostToWebview()
+				expect(state2.apiConfiguration.reasoningEffort).toBe("medium")
+			})
+
+			test("4. Changed effort survives chat switch A -> B -> A and leaves Chat B unaffected", async () => {
+				const taskA = new Task(defaultTaskOptions)
+				;(taskA as any).isTaskCompleted = true
+				;(taskA as any).historyItem = {
+					id: "task-A",
+					chatModelId: "qwen/qwen3.8-max:free",
+					chatProvider: "xkiro",
+					chatReasoningEffort: "medium",
+				}
+
+				const taskB = new Task(defaultTaskOptions)
+				;(taskB as any).isTaskCompleted = true
+				;(taskB as any).historyItem = {
+					id: "task-B",
+					chatModelId: "openai/gpt-6.1-sol",
+					chatProvider: "xkiro",
+					chatReasoningEffort: "high",
+				}
+
+				;(provider as any).runningTasks.set("task-A", taskA)
+				;(provider as any).runningTasks.set("task-B", taskB)
+				;(provider as any).contextProxy.setValues({
+					openAiModelInfos: {
+						"qwen/qwen3.8-max:free": { supportsReasoningEffort: true },
+						"openai/gpt-6.1-sol": { supportsReasoningEffort: true },
+					},
+				})
+
+				// Switch to task A
+				;(provider as any).foregroundTaskId = "task-A"
+				const stateA = await (provider as any).getStateToPostToWebview()
+				expect(stateA.apiConfiguration.xkiroModelId).toBe("qwen/qwen3.8-max:free")
+				expect(stateA.apiConfiguration.reasoningEffort).toBe("medium")
+
+				// Switch to task B
+				;(provider as any).foregroundTaskId = "task-B"
+				const stateB = await (provider as any).getStateToPostToWebview()
+				expect(stateB.apiConfiguration.xkiroModelId).toBe("openai/gpt-6.1-sol")
+				expect(stateB.apiConfiguration.reasoningEffort).toBe("high")
+
+				// Switch back to task A
+				;(provider as any).foregroundTaskId = "task-A"
+				const stateA2 = await (provider as any).getStateToPostToWebview()
+				expect(stateA2.apiConfiguration.xkiroModelId).toBe("qwen/qwen3.8-max:free")
+				expect(stateA2.apiConfiguration.reasoningEffort).toBe("medium")
+
+				// Confirm task B remains high
+				expect(taskB.historyItem!.chatReasoningEffort).toBe("high")
+			})
+
+			test("5. Running task execution effort remains immutable while preferred chat effort updates", async () => {
+				await provider.resolveWebviewView(mockWebviewView)
+				const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
+
+				const runningTask = new Task(defaultTaskOptions)
+				;(runningTask as any).isTaskCompleted = false
+				;(runningTask as any).abort = false
+				runningTask.apiConfiguration = {
+					apiProvider: "xkiro",
+					xkiroModelId: "qwen/qwen3.8-max:free",
+					reasoningEffort: "high",
+					enableReasoningEffort: true,
+				}
+				;(runningTask as any).taskStartEffort = "high"
+				;(runningTask as any).historyItem = {
+					id: "running-task-id",
+					chatModelId: "qwen/qwen3.8-max:free",
+					chatProvider: "xkiro",
+					chatReasoningEffort: "high",
+				}
+				;(runningTask as any).saveClineMessages = vi.fn().mockResolvedValue(undefined)
+				await provider.addClineToStack(runningTask)
+
+				;(provider as any).contextProxy.setValues({
+					openAiModelInfos: {
+						"qwen/qwen3.8-max:free": { supportsReasoningEffort: true },
+					},
+				})
+
+				// User changes preferred reasoning effort to medium
+				await messageHandler({
+					type: "upsertApiConfiguration",
+					text: "default",
+					apiConfiguration: {
+						apiProvider: "xkiro",
+						xkiroModelId: "qwen/qwen3.8-max:free",
+						reasoningEffort: "medium",
+						enableReasoningEffort: true,
+					},
+				})
+
+				// Running execution snapshot is unchanged!
+				expect(runningTask.apiConfiguration.reasoningEffort).toBe("high")
+				expect((runningTask as any).taskStartEffort).toBe("high")
+
+				// Per-chat preference for next execution is updated!
+				expect(runningTask.historyItem!.chatReasoningEffort).toBe("medium")
+				expect((runningTask as any).saveClineMessages).toHaveBeenCalled()
+			})
 		})
 	})
 })

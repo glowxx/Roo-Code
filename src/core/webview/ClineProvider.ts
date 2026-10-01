@@ -38,6 +38,14 @@ import {
 	DEFAULT_SAFE_COMMANDS,
 	getModelId,
 	setModelId,
+	modelSupportsReasoning,
+	stripModelTag,
+	xkiroModels,
+	anthropicModels,
+	deepSeekModels,
+	geminiModels,
+	bedrockModels,
+	openAiNativeModels,
 	isRetiredProvider,
 } from "@roo-code/types"
 import { aggregateTaskCostsRecursive, type AggregatedCosts } from "./aggregateTaskCosts"
@@ -873,7 +881,7 @@ export class ClineProvider
 
 	public async createTaskWithHistoryItem(
 		historyItem: HistoryItem & { rootTask?: Task; parentTask?: Task },
-		options?: { startTask?: boolean },
+		options?: { startTask?: boolean; initialClineMessages?: ClineMessage[] },
 	) {
 		const isCliRuntime = process.env.ROO_CLI_RUNTIME === "1"
 		// CLI injects runtime provider settings from command flags/env at startup.
@@ -1006,6 +1014,7 @@ export class ClineProvider
 			workspacePath: historyItem.workspace,
 			onCreated: this.taskCreationCallback,
 			startTask: options?.startTask ?? true,
+			initialClineMessages: options?.initialClineMessages,
 			// Preserve the status from the history item to avoid overwriting it when the task saves messages
 			initialStatus:
 				historyItem.status === "completed"
@@ -1605,6 +1614,16 @@ export class ClineProvider
 		// being used purely as a non-persisting restoration (e.g., reopening a task from history).
 		if (persistTaskHistory) {
 			await this.persistStickyProviderProfileToCurrentTask(name)
+			const currentTask = this.getCurrentTask()
+			if (currentTask && currentTask.historyItem) {
+				const profileModelId = getModelId(providerSettings)
+				if (profileModelId) {
+					currentTask.historyItem.chatModelId = profileModelId
+					currentTask.historyItem.chatProvider = providerSettings.apiProvider
+					currentTask.historyItem.chatReasoningEffort = providerSettings.reasoningEffort
+					await currentTask.saveClineMessages()
+				}
+			}
 		}
 
 		await this.postStateToWebview()
@@ -1799,8 +1818,9 @@ export class ClineProvider
 			return
 		}
 
-		if (id !== this.getCurrentTask()?.taskId) {
-			const prevTask = this.getCurrentTask()
+		const currentTask = this.getCurrentTask()
+		if (id !== currentTask?.taskId || (currentTask && currentTask.clineMessages.length === 0)) {
+			const prevTask = currentTask
 			if (prevTask) {
 				prevTask.emit(RooCodeEventName.TaskUnfocused)
 			}
@@ -2175,13 +2195,65 @@ export class ClineProvider
 			(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
 			(await this.getGlobalState("openAiModelInfos")) ??
 			{}
+		const resolveModelInfo = (modelId?: string): ModelInfo | undefined => {
+			if (!modelId) return undefined
+			const stripped = stripModelTag(modelId)
+			return (
+				cachedOpenAiModelInfos[modelId] ||
+				openAiModelInfos?.[modelId] ||
+				cachedOpenAiModelInfos[stripped] ||
+				openAiModelInfos?.[stripped] ||
+				(xkiroModels as Record<string, ModelInfo>)?.[modelId] ||
+				(xkiroModels as Record<string, ModelInfo>)?.[stripped] ||
+				(anthropicModels as Record<string, ModelInfo>)?.[modelId] ||
+				(deepSeekModels as Record<string, ModelInfo>)?.[modelId] ||
+				(geminiModels as Record<string, ModelInfo>)?.[modelId] ||
+				(bedrockModels as Record<string, ModelInfo>)?.[modelId] ||
+				(openAiNativeModels as Record<string, ModelInfo>)?.[modelId]
+			)
+		}
+
+		const normalizeReasoningEffort = (
+			effort: string | undefined,
+			modelInfo?: ModelInfo | null,
+		): { effort: string | undefined; enabled: boolean } => {
+			if (effort === undefined) {
+				return { effort: undefined, enabled: false }
+			}
+			const lower = effort.toLowerCase()
+			if (lower === "disable" || lower === "off" || lower === "none") {
+				return { effort: "disable", enabled: false }
+			}
+			const rawAllowed =
+				modelInfo?.reasoningEffortLevels ||
+				(Array.isArray(modelInfo?.supportsReasoningEffort)
+					? modelInfo.supportsReasoningEffort
+					: undefined)
+			const allowedLevels =
+				rawAllowed && Array.isArray(rawAllowed) && rawAllowed.length > 0
+					? rawAllowed.map((l) => l.toLowerCase()).filter((l) => l !== "disable" && l !== "none")
+					: undefined
+
+			if (allowedLevels && allowedLevels.length > 0 && !allowedLevels.includes(lower)) {
+				const fallback = allowedLevels.includes("medium") ? "medium" : allowedLevels[0]
+				return { effort: fallback, enabled: true }
+			}
+
+			return { effort: lower, enabled: true }
+		}
+
 		let effectiveApiConfiguration = { ...apiConfiguration }
 		if (currentTask) {
 			const chatProvider = (currentTask.historyItem?.chatProvider ||
 				currentTask.apiConfiguration?.apiProvider) as ProviderName | undefined
-			const chatModelId = currentTask.historyItem?.chatModelId || getModelId(currentTask.apiConfiguration)
-			const chatReasoningEffort =
-				currentTask.historyItem?.chatReasoningEffort ?? (currentTask.apiConfiguration as any)?.reasoningEffort
+			const chatModelId =
+				currentTask.historyItem?.chatModelId ||
+				(currentTask.apiConfiguration ? getModelId(currentTask.apiConfiguration) : undefined)
+			const hasExplicitChatEffort =
+				Boolean(currentTask.historyItem && "chatReasoningEffort" in currentTask.historyItem)
+			const chatReasoningEffort = hasExplicitChatEffort
+				? currentTask.historyItem!.chatReasoningEffort
+				: (currentTask.apiConfiguration as any)?.reasoningEffort
 
 			if (chatProvider) {
 				effectiveApiConfiguration.apiProvider = chatProvider
@@ -2189,8 +2261,24 @@ export class ClineProvider
 			if (chatModelId && chatProvider) {
 				setModelId(effectiveApiConfiguration, chatProvider, chatModelId)
 			}
-			if (chatReasoningEffort !== undefined) {
-				effectiveApiConfiguration.reasoningEffort = chatReasoningEffort
+
+			const targetModelInfo = resolveModelInfo(chatModelId)
+			const supportsReasoning = chatModelId ? modelSupportsReasoning(chatModelId, targetModelInfo) : false
+			if (!supportsReasoning) {
+				delete effectiveApiConfiguration.reasoningEffort
+				effectiveApiConfiguration.enableReasoningEffort = false
+			} else {
+				const { effort, enabled } = normalizeReasoningEffort(chatReasoningEffort, targetModelInfo)
+				if (effort === undefined) {
+					delete effectiveApiConfiguration.reasoningEffort
+					effectiveApiConfiguration.enableReasoningEffort = false
+				} else if (effort === "disable") {
+					effectiveApiConfiguration.reasoningEffort = "disable" as any
+					effectiveApiConfiguration.enableReasoningEffort = false
+				} else {
+					effectiveApiConfiguration.reasoningEffort = effort as any
+					effectiveApiConfiguration.enableReasoningEffort = enabled
+				}
 			}
 		} else {
 			// Unassigned / new chat: inherit lastManuallySelectedModel if user explicitly picked one
@@ -2201,8 +2289,24 @@ export class ClineProvider
 				const provider = lastManual.provider as ProviderName
 				effectiveApiConfiguration.apiProvider = provider
 				setModelId(effectiveApiConfiguration, provider, lastManual.modelId)
-				if (lastManual.reasoningEffort !== undefined) {
-					effectiveApiConfiguration.reasoningEffort = lastManual.reasoningEffort
+
+				const manualModelInfo = resolveModelInfo(lastManual.modelId)
+				const supportsReasoning = modelSupportsReasoning(lastManual.modelId, manualModelInfo)
+				if (!supportsReasoning) {
+					delete effectiveApiConfiguration.reasoningEffort
+					effectiveApiConfiguration.enableReasoningEffort = false
+				} else {
+					const { effort, enabled } = normalizeReasoningEffort(lastManual.reasoningEffort, manualModelInfo)
+					if (effort === undefined) {
+						delete effectiveApiConfiguration.reasoningEffort
+						effectiveApiConfiguration.enableReasoningEffort = false
+					} else if (effort === "disable") {
+						effectiveApiConfiguration.reasoningEffort = "disable" as any
+						effectiveApiConfiguration.enableReasoningEffort = false
+					} else {
+						effectiveApiConfiguration.reasoningEffort = effort as any
+						effectiveApiConfiguration.enableReasoningEffort = enabled
+					}
 				}
 			}
 		}
@@ -2905,6 +3009,10 @@ export class ClineProvider
 		// Wait for this runtime's terminal, stream and persisted state to settle before acknowledging Stop.
 		await task.abortTask()
 
+		// Final in-memory transcript snapshot after abortTask finalized partials and api_req_started
+		const initialClineMessages = task.clineMessages?.length ? [...task.clineMessages] : undefined
+		const initialApiHistory = task.apiConversationHistory?.length ? [...task.apiConversationHistory] : undefined
+
 		let historyItem: HistoryItem | undefined = task.historyItem
 		if (!historyItem) {
 			try {
@@ -2912,6 +3020,12 @@ export class ClineProvider
 			} catch (error) {
 				this.log(`[cancelTask] task history unavailable for ${task.taskId}; skipping rehydrate: ${error}`)
 			}
+		}
+
+		if (historyItem && historyItem.status !== "completed") {
+			historyItem.status = "interrupted"
+			historyItem.needsAttention = true
+			await this.updateTaskHistory(historyItem)
 		}
 
 		// Now mark the original instance as abandoned to prevent any residual activity
@@ -2946,7 +3060,23 @@ export class ClineProvider
 			return
 		}
 
-		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask }, { startTask: false })
+		const rehydrated = await this.createTaskWithHistoryItem(
+			{ ...historyItem, status: "interrupted", rootTask, parentTask },
+			{ startTask: false, initialClineMessages },
+		)
+
+		if (rehydrated) {
+			if (initialClineMessages && initialClineMessages.length > 0) {
+				await rehydrated.overwriteClineMessages(initialClineMessages)
+			}
+			if (initialApiHistory && initialApiHistory.length > 0) {
+				try {
+					await rehydrated.overwriteApiConversationHistory(initialApiHistory)
+				} catch {}
+			}
+		}
+
+		await this.postStateToWebview()
 	}
 
 	// Clear the current active task view in the UI without aborting background tasks.

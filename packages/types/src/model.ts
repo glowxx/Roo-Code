@@ -405,7 +405,11 @@ export function modelSupportsReasoning(modelId: string, info?: ModelInfo | null)
 		lower.includes("astra") ||
 		lower.includes("sol") ||
 		lower.includes("reasoner") ||
-		lower.includes("thinking")
+		lower.includes("thinking") ||
+		lower.includes("claude-3-7") ||
+		lower.includes("claude-3.7") ||
+		lower.includes("r1") ||
+		lower.includes("qwq")
 	)
 }
 
