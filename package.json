@@ -19,6 +19,7 @@
 		"desktop:dev": "pnpm --filter @roo-code/desktop dev",
 		"desktop:web": "pnpm --filter @roo-code/desktop web",
 		"desktop:package:win": "pnpm --filter @roo-code/desktop package:win",
+		"desktop:package:win:builder": "pnpm --filter @roo-code/desktop package:win:builder",
 		"cli": "pnpm --filter @roo-code/cli dev",
 		"cli:build": "pnpm --filter @roo-code/cli build",
 		"clean": "turbo clean --log-order grouped --output-logs new-only && rimraf dist out bin .vite-port .turbo",

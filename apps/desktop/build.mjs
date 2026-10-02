@@ -3,7 +3,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { createRequire } from "module"
-import { execSync } from "child_process"
+import { execSync, spawn } from "child_process"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -126,27 +126,92 @@ async function runBuild() {
 		rootDir = path.resolve(__dirname, "../..")
 	}
 
-	console.log("⚙️ Compiling core engine (roo-cline)...")
-	execSync("pnpm --filter roo-cline build", { cwd: rootDir, stdio: "inherit" })
+	function createParallelTask(command, args, cwd, prefix) {
+		let child
+		const promise = new Promise((resolve, reject) => {
+			child = spawn(command, args, {
+				cwd,
+				shell: true,
+				stdio: ["ignore", "pipe", "pipe"],
+				env: process.env,
+			})
 
+			const handleOutput = (data, isError) => {
+				const lines = data.toString().split(/\r?\n/)
+				for (const line of lines) {
+					if (line.length > 0) {
+						const out = `[${prefix}] ${line}\n`
+						if (isError) {
+							process.stderr.write(out)
+						} else {
+							process.stdout.write(out)
+						}
+					}
+				}
+			}
+
+			child.stdout?.on("data", (data) => handleOutput(data, false))
+			child.stderr?.on("data", (data) => handleOutput(data, true))
+
+			child.on("error", (err) => {
+				reject(new Error(`[${prefix}] Failed to spawn: ${err.message}`))
+			})
+
+			child.on("close", (code) => {
+				if (code === 0) {
+					resolve()
+				} else {
+					reject(new Error(`[${prefix}] Build failed with exit code ${code}`))
+				}
+			})
+		})
+		return { child, promise, prefix }
+	}
+
+	console.log("⚡ Compiling core engine & webview UI in parallel...")
+	const taskCore = createParallelTask("pnpm", ["--filter", "roo-cline", "build"], rootDir, "CORE")
+	const taskWebview = createParallelTask("pnpm", ["--filter", "@roo-code/vscode-webview", "build"], rootDir, "WEBVIEW")
+
+	try {
+		await Promise.all([
+			taskCore.promise.catch((err) => {
+				try { taskWebview.child?.kill("SIGTERM") } catch {}
+				throw err
+			}),
+			taskWebview.promise.catch((err) => {
+				try { taskCore.child?.kill("SIGTERM") } catch {}
+				throw err
+			}),
+		])
+	} catch (err) {
+		console.error(`\n❌ Parallel compilation failed: ${err.message}`)
+		process.exit(1)
+	}
+
+	// 4. Clean and copy engine
 	const engineSrc = path.join(rootDir, "src", "dist")
+	const engineDest = path.join(outDir, "engine")
+	if (fs.existsSync(engineDest)) {
+		fs.rmSync(engineDest, { recursive: true, force: true })
+	}
 	if (fs.existsSync(engineSrc)) {
 		console.log("📦 Bundling engine files into dist/engine...")
-		copyDir(engineSrc, path.join(outDir, "engine"))
+		copyDir(engineSrc, engineDest)
 		fs.writeFileSync(
-			path.join(outDir, "engine", "package.json"),
+			path.join(engineDest, "package.json"),
 			JSON.stringify({ name: "@roo-code/engine", type: "commonjs" }, null, 2)
 		)
 	}
 
-	// 5. Compile and copy webview UI
-	console.log("🎨 Compiling webview UI (@roo-code/vscode-webview)...")
-	execSync("pnpm --filter @roo-code/vscode-webview build", { cwd: rootDir, stdio: "inherit" })
-
+	// 5. Clean and copy webview UI
 	const webviewSrc = path.join(rootDir, "src", "webview-ui", "build")
+	const webviewDest = path.join(outDir, "webview")
+	if (fs.existsSync(webviewDest)) {
+		fs.rmSync(webviewDest, { recursive: true, force: true })
+	}
 	if (fs.existsSync(webviewSrc)) {
 		console.log("📦 Bundling webview UI into dist/webview...")
-		copyDir(webviewSrc, path.join(outDir, "webview"))
+		copyDir(webviewSrc, webviewDest)
 	}
 
 	// 6. Deterministyczna lokalizacja i kopiowanie ripgrep binary into dist/node_modules/@vscode/ripgrep/bin/

@@ -32,7 +32,6 @@ if not exist "%~dp0apps\desktop\dist\main\index.js" (
     cd /d "%~dp0"
     call pnpm --filter @roo-code/build build
     call pnpm --filter @roo-code/types build
-    call pnpm --filter @roo-code/vscode-shim build
     call pnpm --filter @roo-code/desktop build
     if %ERRORLEVEL% neq 0 (
         echo [ERROR] Build failed! Check terminal output above.

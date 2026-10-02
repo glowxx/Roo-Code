@@ -19,7 +19,10 @@
 		"web": "node dist/cli.js --web",
 		"dev": "node dist/cli.js --web --dev",
 		"package:win": "node build.mjs && electron-builder --win --x64",
+		"package:win:builder": "electron-builder --win --x64",
+		"package:win:artifact": "electron-builder --win --x64",
 		"package:dir": "node build.mjs && electron-builder --win --dir",
+		"package:dir:builder": "electron-builder --win --dir",
 		"build:installer": "node build.mjs && electron-builder --win --x64",
 		"clean": "rimraf dist release .turbo"
 	},
