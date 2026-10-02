@@ -127,8 +127,12 @@ export async function taskMetadata({
 
 	// Determine completion from explicit status or completion message at task end
 	const hasCompletionMessage =
-		lastRelevantMessage?.ask === "completion_result" ||
-		lastRelevantMessage?.say === "completion_result"
+		(lastRelevantMessage?.ask === "completion_result" ||
+			lastRelevantMessage?.say === "completion_result") &&
+		lastRelevantMessage?.approvalState !== "USER_DECISION_REQUIRED" &&
+		lastRelevantMessage?.approvalState !== "DENIED" &&
+		lastRelevantMessage?.approvalState !== "EVALUATING" &&
+		(lastRelevantMessage?.type !== "ask" || lastRelevantMessage?.isAnswered === true)
 
 	const isCompleted =
 		initialStatus === "completed" ||
@@ -160,7 +164,9 @@ export async function taskMetadata({
 						m.type === "say" &&
 						m.say !== "command_safety_warning" &&
 						m.say !== "api_req_rate_limit_wait" &&
-						m.say !== "api_req_retry_delayed",
+						m.say !== "api_req_retry_delayed" &&
+						m.say !== "api_req_started" &&
+						m.say !== "api_req_finished",
 				)
 
 				// An ask requires user attention if it is the latest unresolved turn that has not been answered.
@@ -168,8 +174,9 @@ export async function taskMetadata({
 					const isIdleAsk = lastAsk.ask === "resume_completed_task"
 					const isAutoApproved = lastAsk.approvalState === "AUTO_APPROVED"
 					const isEvaluating = lastAsk.approvalState === "EVALUATING"
+					const isDenied = lastAsk.approvalState === "DENIED"
 
-					if (!isIdleAsk && !isAutoApproved && !isEvaluating) {
+					if (!isIdleAsk && !isAutoApproved && !isEvaluating && !isDenied) {
 						needsAttention = true
 					}
 				}

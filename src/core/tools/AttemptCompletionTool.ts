@@ -182,6 +182,14 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 					completionSayMsg.approvalState = "AUTO_APPROVED"
 					task.updateClineMessage?.(completionSayMsg)
 				}
+				const completionAskMsg = task.clineMessages
+					? findLast(task.clineMessages, (m) => m.type === "ask" && m.ask === "completion_result")
+					: undefined
+				if (completionAskMsg) {
+					completionAskMsg.approvalState = "AUTO_APPROVED"
+					completionAskMsg.isAnswered = true
+					task.updateClineMessage?.(completionAskMsg)
+				}
 				task.markTaskCompleted?.()
 				this.emitTaskCompleted(task)
 				pushToolResult(formatResponse.toolResult("Task completed successfully."))
@@ -198,6 +206,7 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 							await provider.updateTaskHistory({
 								...historyItem,
 								status: "completed",
+								needsAttention: false,
 							})
 						}
 					}
@@ -210,6 +219,14 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 			if (completionSayMsg) {
 				completionSayMsg.approvalState = "DENIED"
 				task.updateClineMessage?.(completionSayMsg)
+			}
+			const completionAskMsg = task.clineMessages
+				? findLast(task.clineMessages, (m) => m.type === "ask" && m.ask === "completion_result")
+				: undefined
+			if (completionAskMsg) {
+				completionAskMsg.approvalState = "DENIED"
+				completionAskMsg.isAnswered = true
+				task.updateClineMessage?.(completionAskMsg)
 			}
 
 			// User provided feedback or autonomous CONTINUE_WORK feedback

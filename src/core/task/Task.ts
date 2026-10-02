@@ -2694,37 +2694,27 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			void this.checkpointSave(false, true)
 		}
 
-		// Mark the last follow-up question as answered
-		if (askResponse === "messageResponse" || askResponse === "yesButtonClicked") {
-			// Find the last unanswered follow-up message using findLastIndex
-			const lastFollowUpIndex = findLastIndex(
-				this.clineMessages,
-				(msg) => msg.type === "ask" && msg.ask === "followup" && !msg.isAnswered,
-			)
-
-			if (lastFollowUpIndex !== -1) {
-				// Mark this follow-up as answered
-				this.clineMessages[lastFollowUpIndex].isAnswered = true
-				// Save the updated messages
-				this.saveClineMessages().catch((error) => {
-					console.error("Failed to save answered follow-up state:", error)
-				})
+		// Mark the pending ask as answered and update approvalState
+		const lastPendingAskIndex = findLastIndex(
+			this.clineMessages,
+			(msg) => msg.type === "ask" && !msg.isAnswered,
+		)
+		if (lastPendingAskIndex !== -1) {
+			const pendingAsk = this.clineMessages[lastPendingAskIndex]
+			pendingAsk.isAnswered = true
+			if (askResponse === "yesButtonClicked") {
+				if (pendingAsk.approvalState === "USER_DECISION_REQUIRED") {
+					pendingAsk.approvalState = "AUTO_APPROVED"
+				}
+			} else if (askResponse === "noButtonClicked") {
+				if (pendingAsk.approvalState === "USER_DECISION_REQUIRED") {
+					pendingAsk.approvalState = "DENIED"
+				}
 			}
-		}
-
-		// Mark the last tool-approval ask as answered when user approves (or auto-approval)
-		if (askResponse === "yesButtonClicked") {
-			const lastToolAskIndex = findLastIndex(
-				this.clineMessages,
-				(msg) => msg.type === "ask" && msg.ask === "tool" && !msg.isAnswered,
-			)
-			if (lastToolAskIndex !== -1) {
-				this.clineMessages[lastToolAskIndex].isAnswered = true
-				void this.updateClineMessage(this.clineMessages[lastToolAskIndex])
-				this.saveClineMessages().catch((error) => {
-					console.error("Failed to save answered tool-ask state:", error)
-				})
-			}
+			void this.updateClineMessage(pendingAsk)
+			this.saveClineMessages().catch((error) => {
+				console.error("Failed to save answered ask state:", error)
+			})
 		}
 	}
 
@@ -3705,63 +3695,216 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				.reverse()
 				.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task")) // Could be multiple resume tasks.
 
-			// Determine whether the task is completed or resting in an idle state.
-			// A task is completed/idle if:
-			// 1. Its status is "completed".
-			// 2. The last message is a completion_result (ask or say).
-			// 3. Any message in history is a completion_result.
-			// 4. The model finished presenting output (e.g. say: "text") without unhandled errors or cancellations.
-			const hasCompletionMessage =
-				lastClineMessage?.ask === "completion_result" ||
-				lastClineMessage?.say === "completion_result" ||
-				this.clineMessages.some((m) => m.ask === "completion_result" || m.say === "completion_result")
+			// Check if there is an unresolved actionable ask waiting for user approval/decision.
+			// If so, we must preserve it, not emit a new resume ask, and not mark the task completed.
+			const lastAsk = [...this.clineMessages].reverse().find((m) => m.type === "ask")
+			const trailingAfterAsk = lastAsk ? this.clineMessages.slice(this.clineMessages.lastIndexOf(lastAsk) + 1) : []
+			const hasTrailingSafetyWarning = trailingAfterAsk.some((m) => m.say === "command_safety_warning")
+			const trailingAllNonSubstantive = trailingAfterAsk.every(
+				(m) =>
+					m.type === "say" &&
+					(m.say === "command_safety_warning" ||
+						m.say === "api_req_rate_limit_wait" ||
+						m.say === "api_req_retry_delayed" ||
+						m.say === "api_req_started" ||
+						m.say === "api_req_finished"),
+			)
 
-			const isFinishedTextResponse =
-				lastClineMessage?.say === "text" &&
-				!lastClineMessage.partial &&
-				!this.clineMessages.some((m) => m.say === "error" && m === lastClineMessage)
+			const isCompletionRequiringApproval =
+				lastAsk?.ask === "completion_result" &&
+				(lastAsk.approvalState === "USER_DECISION_REQUIRED" || hasTrailingSafetyWarning)
 
-			const isTaskCompletedOrIdle =
-				this.initialStatus === "completed" ||
-				this.historyItem?.status === "completed" ||
-				hasCompletionMessage ||
-				isFinishedTextResponse
+			const isOtherActionableAsk =
+				lastAsk &&
+				lastAsk.ask !== "completion_result" &&
+				lastAsk.ask !== "resume_completed_task" &&
+				lastAsk.ask !== "resume_task" &&
+				lastAsk.approvalState !== "AUTO_APPROVED" &&
+				lastAsk.approvalState !== "DENIED" &&
+				lastAsk.approvalState !== "EVALUATING"
 
-			if (this.historyItem?.status === "delegated" && this.historyItem?.awaitingChildId) {
-				this.isInitialized = true
-				await this.providerRef.deref()?.postStateToWebview()
-				return
-			}
-
-			let askType: ClineAsk
-			if (isTaskCompletedOrIdle) {
-				this.isTaskCompleted = true
-				if (this.historyItem) {
-					this.historyItem.status = "completed"
-					this.historyItem.needsAttention = false
-				}
-				askType = "resume_completed_task"
-			} else {
-				askType = "resume_task"
-			}
-
-			this.isInitialized = true
-
-			const { response, text, images } = await this.ask(askType) // Calls `postStateToWebview`.
+			const isPendingActionableAsk = Boolean(
+				lastAsk &&
+					!lastAsk.isAnswered &&
+					trailingAllNonSubstantive &&
+					(isCompletionRequiringApproval || isOtherActionableAsk),
+			)
 
 			let responseText: string | undefined
 			let responseImages: string[] | undefined
 
-			if (response === "messageResponse") {
-				this.isTaskCompleted = false
-				this.currentStatus = "active"
+			if (isPendingActionableAsk && lastAsk) {
+				this.isInitialized = true
+				this.interactiveAsk = lastAsk
+				this.lastMessageTs = lastAsk.ts
 				if (this.historyItem) {
-					this.historyItem.status = "active"
-					this.historyItem.needsAttention = false
+					this.historyItem.needsAttention = true
+					if (this.historyItem.status !== "active") {
+						this.historyItem.status = "interrupted"
+					}
+					await this.providerRef.deref()?.updateTaskHistory(this.historyItem)
 				}
-				await this.say("user_feedback", text, images)
-				responseText = text
-				responseImages = images
+				this.emit(RooCodeEventName.TaskInteractive, this.taskId)
+				await this.providerRef.deref()?.postStateToWebview()
+
+				// Wait for the user to respond to this existing pending ask
+				await pWaitFor(
+					() => {
+						if (this.abort) {
+							return true
+						}
+						return this.askResponse !== undefined
+					},
+					{ interval: 100 },
+				)
+
+				if (this.abort) {
+					return
+				}
+
+				const response = this.askResponse!
+				const text = this.askResponseText
+				const images = this.askResponseImages
+				this.askResponse = undefined
+				this.askResponseText = undefined
+				this.askResponseImages = undefined
+				this.interactiveAsk = undefined
+				this.emit(RooCodeEventName.TaskActive, this.taskId)
+				this.emit(RooCodeEventName.TaskAskResponded)
+
+				if (lastAsk.ask === "completion_result") {
+					if (response === "yesButtonClicked") {
+						this.isTaskCompleted = true
+						if (this.historyItem) {
+							this.historyItem.status = "completed"
+							this.historyItem.needsAttention = false
+							await this.providerRef.deref()?.updateTaskHistory(this.historyItem)
+						}
+						lastAsk.approvalState = "AUTO_APPROVED"
+						lastAsk.isAnswered = true
+						this.updateClineMessage(lastAsk)
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "AUTO_APPROVED"
+							this.updateClineMessage(completionSayMsg)
+						}
+						await this.saveClineMessages()
+						await this.say("completion_result", "Task completed successfully.")
+						await this.providerRef.deref()?.postStateToWebview()
+						return
+					} else {
+						this.isTaskCompleted = false
+						this.currentStatus = "active"
+						if (this.historyItem) {
+							this.historyItem.status = "active"
+							this.historyItem.needsAttention = false
+							await this.providerRef.deref()?.updateTaskHistory(this.historyItem)
+						}
+						lastAsk.approvalState = "DENIED"
+						lastAsk.isAnswered = true
+						this.updateClineMessage(lastAsk)
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "DENIED"
+							this.updateClineMessage(completionSayMsg)
+						}
+						await this.saveClineMessages()
+						await this.say("user_feedback", text || "Completion denied by user. Continue working.", images)
+						responseText = text || "Completion denied by user. Continue working."
+						responseImages = images
+					}
+				} else if (response === "messageResponse") {
+					this.isTaskCompleted = false
+					this.currentStatus = "active"
+					if (this.historyItem) {
+						this.historyItem.status = "active"
+						this.historyItem.needsAttention = false
+						await this.providerRef.deref()?.updateTaskHistory(this.historyItem)
+					}
+					await this.say("user_feedback", text, images)
+					responseText = text
+					responseImages = images
+				} else {
+					this.isTaskCompleted = false
+					this.currentStatus = "active"
+					if (this.historyItem) {
+						this.historyItem.status = "active"
+						this.historyItem.needsAttention = false
+						await this.providerRef.deref()?.updateTaskHistory(this.historyItem)
+					}
+					lastAsk.isAnswered = true
+					if (response === "yesButtonClicked") {
+						lastAsk.approvalState = "AUTO_APPROVED"
+					} else if (response === "noButtonClicked") {
+						lastAsk.approvalState = "DENIED"
+					}
+					this.updateClineMessage(lastAsk)
+					await this.saveClineMessages()
+				}
+			} else {
+				// Determine whether the task is completed or resting in an idle state.
+				// A task is completed/idle if:
+				// 1. Its status is "completed".
+				// 2. The last message is a confirmed completion_result (ask or say).
+				// 3. Any message in history is a completion_result without pending user decision.
+				// 4. The model finished presenting output (e.g. say: "text") without unhandled errors or cancellations.
+				const hasCompletionMessage =
+					(lastClineMessage?.ask === "completion_result" ||
+						lastClineMessage?.say === "completion_result" ||
+						this.clineMessages.some((m) => m.ask === "completion_result" || m.say === "completion_result")) &&
+					lastClineMessage?.approvalState !== "USER_DECISION_REQUIRED" &&
+					lastClineMessage?.approvalState !== "DENIED" &&
+					lastClineMessage?.approvalState !== "EVALUATING" &&
+					!hasTrailingSafetyWarning
+
+				const isFinishedTextResponse =
+					lastClineMessage?.say === "text" &&
+					!lastClineMessage.partial &&
+					!this.clineMessages.some((m) => m.say === "error" && m === lastClineMessage)
+
+				const isTaskCompletedOrIdle =
+					this.initialStatus === "completed" ||
+					this.historyItem?.status === "completed" ||
+					hasCompletionMessage ||
+					isFinishedTextResponse
+
+				if (this.historyItem?.status === "delegated" && this.historyItem?.awaitingChildId) {
+					this.isInitialized = true
+					await this.providerRef.deref()?.postStateToWebview()
+					return
+				}
+
+				let askType: ClineAsk
+				if (isTaskCompletedOrIdle) {
+					this.isTaskCompleted = true
+					if (this.historyItem) {
+						this.historyItem.status = "completed"
+						this.historyItem.needsAttention = false
+					}
+					askType = "resume_completed_task"
+				} else {
+					askType = "resume_task"
+				}
+
+				this.isInitialized = true
+
+				const { response, text, images } = await this.ask(askType) // Calls `postStateToWebview`.
+
+				if (response === "messageResponse") {
+					this.isTaskCompleted = false
+					this.currentStatus = "active"
+					if (this.historyItem) {
+						this.historyItem.status = "active"
+						this.historyItem.needsAttention = false
+					}
+					await this.say("user_feedback", text, images)
+					responseText = text
+					responseImages = images
+				} else if (isTaskCompletedOrIdle) {
+					// Task is completed/idle and user did not submit a continuation message.
+					// Do not make any API requests.
+					return
+				}
 			}
 
 			// Make sure that the api conversation history can be resumed by the API,

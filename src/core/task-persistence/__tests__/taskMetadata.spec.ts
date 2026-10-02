@@ -246,4 +246,48 @@ describe("taskMetadata lifecycle & attention derivation", () => {
 
 		expect(result.historyItem.needsAttention).toBe(true)
 	})
+
+	it("preserves needsAttention: true and interrupted status when completion_result requires user decision with safety warning", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Preliminary verification report" },
+			{ ts: 2000, type: "say", say: "completion_result", text: "Attempting completion", approvalState: "USER_DECISION_REQUIRED" },
+			{ ts: 3000, type: "ask", ask: "completion_result", text: "", approvalState: "USER_DECISION_REQUIRED" },
+			{
+				ts: 4000,
+				type: "say",
+				say: "command_safety_warning",
+				text: JSON.stringify({
+					isSafe: false,
+					riskLevel: "medium",
+					reason: "Cannot complete task with 1 item(s) marked 'blocked' on the todo list without user approval.",
+				}),
+			},
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "interrupted",
+		})
+
+		expect(result.historyItem.status).toBe("interrupted")
+		expect(result.historyItem.needsAttention).toBe(true)
+	})
+
+	it("clears needsAttention and marks completed when completion_result is answered and approved", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Report" },
+			{ ts: 2000, type: "say", say: "completion_result", text: "Done", approvalState: "AUTO_APPROVED" },
+			{ ts: 3000, type: "ask", ask: "completion_result", text: "", approvalState: "AUTO_APPROVED", isAnswered: true },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "active",
+		})
+
+		expect(result.historyItem.status).toBe("completed")
+		expect(result.historyItem.needsAttention).toBe(false)
+	})
 })
