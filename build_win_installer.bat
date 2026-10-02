@@ -1,120 +1,133 @@
 @echo off
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
-title Roo Code Desktop - Windows Installer Builder
-
-echo ====================================================
-echo    📦 Roo Code Desktop - Windows Installer Builder 📦
-echo ====================================================
-echo.
-
+title Roo Code Desktop - Windows Installer Build
 cd /d "%~dp0"
 
-:: 1. Check prerequisites
-echo [1/6] Checking prerequisites...
+:: ---------------------------------------------------------
+:: 0. Non-interactive / CI detection
+:: ---------------------------------------------------------
+set "IS_NON_INTERACTIVE=0"
+if /i "%CI%"=="true" set "IS_NON_INTERACTIVE=1"
+if "%CI%"=="1" set "IS_NON_INTERACTIVE=1"
+if "%NON_INTERACTIVE%"=="1" set "IS_NON_INTERACTIVE=1"
+if /i "%~1"=="--ci" set "IS_NON_INTERACTIVE=1"
+if /i "%~1"=="--non-interactive" set "IS_NON_INTERACTIVE=1"
+
+:: Native check for Node.js before invoking any helper
 where node >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Node.js is not found in PATH!
-    pause
+    echo Please install Node.js 20+ from https://nodejs.org/
+    if "%IS_NON_INTERACTIVE%"=="0" pause
     exit /b 1
 )
 
+:: Header
+node scripts/build-timer.mjs header
+
+:: ---------------------------------------------------------
+:: [1/5] Prerequisites
+:: ---------------------------------------------------------
+set "CURRENT_STAGE=1"
+set "FAILED_CMD=Check prerequisites"
+node scripts/build-timer.mjs start 1 "Prerequisites"
+
+set "FAILED_CMD=where pnpm"
 where pnpm >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] pnpm is not found in PATH!
-    pause
-    exit /b 1
+    echo Please install pnpm: npm install -g pnpm
+    goto :fail_stage
 )
 
-where python >nul 2>&1
+:: Check icon freshness (regenerate only if missing or png is newer)
+set "FAILED_CMD=Check / regenerate icon"
+node scripts/build-timer.mjs check-icon
 if %ERRORLEVEL% neq 0 (
-    echo [WARNING] Python not found in PATH. Icon generation will use existing assets.
-) else (
-    python -c "from PIL import Image; img = Image.open('apps/desktop/assets/icon.png').resize((256, 256), Image.Resampling.LANCZOS); img.save('apps/desktop/assets/icon.ico', format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])" >nul 2>&1
+    where python >nul 2>&1
+    if %ERRORLEVEL% equ 0 (
+        python -c "from PIL import Image; img = Image.open('apps/desktop/assets/icon.png').resize((256, 256), Image.Resampling.LANCZOS); img.save('apps/desktop/assets/icon.ico', format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])" >nul 2>&1
+        if %ERRORLEVEL% equ 0 (
+            echo [ICON] Icon regenerated successfully.
+        ) else (
+            echo [WARNING] Python Pillow error. Using existing icon.ico.
+        )
+    ) else (
+        echo [WARNING] Python not found in PATH. Using existing icon.ico.
+    )
 )
 
-:: 2. Build prerequisite packages
-echo.
-echo [2/6] Building internal packages (@roo-code/build, @roo-code/types, @roo-code/vscode-shim)...
+node scripts/build-timer.mjs pass 1 "Prerequisites"
+
+:: ---------------------------------------------------------
+:: [2/5] Internal packages
+:: ---------------------------------------------------------
+set "CURRENT_STAGE=2"
+node scripts/build-timer.mjs start 2 "Internal packages"
+
+set "FAILED_CMD=pnpm --filter @roo-code/build build"
 call pnpm --filter @roo-code/build build
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to build @roo-code/build
-    pause
-    exit /b %ERRORLEVEL%
-)
+if %ERRORLEVEL% neq 0 goto :fail_stage
 
+set "FAILED_CMD=pnpm --filter @roo-code/types build"
 call pnpm --filter @roo-code/types build
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to build @roo-code/types
-    pause
-    exit /b %ERRORLEVEL%
-)
+if %ERRORLEVEL% neq 0 goto :fail_stage
 
-call pnpm --filter @roo-code/vscode-shim build
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to build @roo-code/vscode-shim
-    pause
-    exit /b %ERRORLEVEL%
-)
+node scripts/build-timer.mjs pass 2 "Internal packages"
 
-:: 3. Build Core Engine bundle
-echo.
-echo [3/6] Building core agent engine bundle (roo-cline bundle)...
-call pnpm --filter roo-cline bundle
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to bundle core engine
-    pause
-    exit /b %ERRORLEVEL%
-)
+:: ---------------------------------------------------------
+:: [3/5] Desktop application
+:: ---------------------------------------------------------
+set "CURRENT_STAGE=3"
+node scripts/build-timer.mjs start 3 "Desktop application"
 
-:: 4. Build React Webview UI
-echo.
-echo [4/6] Building React Webview UI (@roo-code/vscode-webview)...
-call pnpm --filter @roo-code/vscode-webview build
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to build webview-ui
-    pause
-    exit /b %ERRORLEVEL%
-)
-
-:: 5. Build Desktop application & bundle assets
-echo.
-echo [5/6] Bundling Desktop application assets (@roo-code/desktop)...
+set "FAILED_CMD=pnpm --filter @roo-code/desktop build"
 call pnpm --filter @roo-code/desktop build
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Failed to build @roo-code/desktop
-    pause
-    exit /b %ERRORLEVEL%
-)
+if %ERRORLEVEL% neq 0 goto :fail_stage
 
-:: 6. Package with electron-builder into NSIS installer
-echo.
-echo [6/6] Generating Windows NSIS Installer (.exe)...
-call pnpm --filter @roo-code/desktop package:win
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] electron-builder packaging failed!
-    pause
-    exit /b %ERRORLEVEL%
-)
+node scripts/build-timer.mjs pass 3 "Desktop application"
 
-:: Copy installer to root release directory for convenience
+:: ---------------------------------------------------------
+:: [4/5] Windows packaging
+:: ---------------------------------------------------------
+set "CURRENT_STAGE=4"
+node scripts/build-timer.mjs start 4 "Windows packaging"
+
+set "FAILED_CMD=pnpm --filter @roo-code/desktop package:win:builder"
+call pnpm --filter @roo-code/desktop package:win:builder
+if %ERRORLEVEL% neq 0 goto :fail_stage
+
+node scripts/build-timer.mjs pass 4 "Windows packaging"
+
+:: ---------------------------------------------------------
+:: [5/5] Artifacts
+:: ---------------------------------------------------------
+set "CURRENT_STAGE=5"
+set "FAILED_CMD=Copy release artifacts"
+node scripts/build-timer.mjs start 5 "Artifacts"
+
 if not exist "release" mkdir release
 copy /y "apps\desktop\release\Roo Code Setup *.exe" "release\" >nul 2>&1
 copy /y "apps\desktop\release\*.blockmap" "release\" >nul 2>&1
 
-echo.
-echo ====================================================
-echo  🎉 SUCCESS! Windows Installer successfully created! 🎉
-echo ====================================================
-echo.
-echo Installer location:
-echo   %~dp0release\
-echo   %~dp0apps\desktop\release\
-echo.
-dir "%~dp0apps\desktop\release\Roo Code Setup *.exe"
-echo.
-echo You can run this installer on any Windows 10/11 x64 machine.
-echo Future updates can simply be installed on top without losing settings.
-echo ====================================================
-echo.
-if "%CI%"=="" if "%NON_INTERACTIVE%"=="" pause
+node scripts/build-timer.mjs pass 5 "Artifacts"
+
+:: ---------------------------------------------------------
+:: Final Summary
+:: ---------------------------------------------------------
+node scripts/build-timer.mjs summary
+
+if "%IS_NON_INTERACTIVE%"=="0" pause
+exit /b 0
+
+:: ---------------------------------------------------------
+:: Error Handler
+:: ---------------------------------------------------------
+:fail_stage
+set "ERR_CODE=%ERRORLEVEL%"
+if "%ERR_CODE%"=="" set "ERR_CODE=1"
+if "%ERR_CODE%"=="0" set "ERR_CODE=1"
+node scripts/build-timer.mjs fail !CURRENT_STAGE! "!FAILED_CMD!" !ERR_CODE!
+if "%IS_NON_INTERACTIVE%"=="0" pause
+exit /b !ERR_CODE!
