@@ -20,6 +20,9 @@ export interface ResolveTaskExecutionConfigInput {
 		chatModelId?: string
 		chatProvider?: ProviderName | string
 		chatReasoningEffort?: string
+		executionModelId?: string
+		executionProvider?: ProviderName | string
+		executionReasoningEffort?: string
 		apiConfigName?: string
 	}
 	lastManualModel?: {
@@ -106,7 +109,9 @@ export function resolveTaskExecutionConfig(input: ResolveTaskExecutionConfigInpu
 
 	// 2. Resolve provider
 	let targetProvider: ProviderName
-	if (chatMetadata?.chatProvider) {
+	if (!isNewChat && chatMetadata?.executionProvider) {
+		targetProvider = chatMetadata.executionProvider as ProviderName
+	} else if (chatMetadata?.chatProvider) {
 		targetProvider = chatMetadata.chatProvider as ProviderName
 	} else if (isNewChat && lastManualModel?.provider) {
 		targetProvider = lastManualModel.provider as ProviderName
@@ -117,7 +122,9 @@ export function resolveTaskExecutionConfig(input: ResolveTaskExecutionConfigInpu
 
 	// 3. Resolve model ID
 	let targetModelId: string | undefined
-	if (chatMetadata?.chatModelId) {
+	if (!isNewChat && chatMetadata?.executionModelId) {
+		targetModelId = chatMetadata.executionModelId
+	} else if (chatMetadata?.chatModelId) {
 		targetModelId = chatMetadata.chatModelId
 	} else if (isNewChat && lastManualModel?.modelId) {
 		targetModelId = lastManualModel.modelId
@@ -135,7 +142,9 @@ export function resolveTaskExecutionConfig(input: ResolveTaskExecutionConfigInpu
 	const supportsReasoning = targetModelId ? modelSupportsReasoning(targetModelId, targetModelInfo) : false
 
 	let effortToConsider: string | undefined
-	if (chatMetadata && "chatReasoningEffort" in chatMetadata) {
+	if (!isNewChat && chatMetadata && "executionReasoningEffort" in chatMetadata && chatMetadata.executionReasoningEffort !== undefined) {
+		effortToConsider = chatMetadata.executionReasoningEffort
+	} else if (chatMetadata && "chatReasoningEffort" in chatMetadata) {
 		effortToConsider = chatMetadata.chatReasoningEffort
 	} else if (isNewChat && lastManualModel?.reasoningEffort !== undefined) {
 		effortToConsider = lastManualModel.reasoningEffort

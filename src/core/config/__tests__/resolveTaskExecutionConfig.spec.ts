@@ -129,6 +129,38 @@ describe("resolveTaskExecutionConfig", () => {
 		expect(resolved.enableReasoningEffort).toBe(false)
 	})
 
+	it("prioritizes executionModelId over chatModelId when resuming an existing task", () => {
+		const resolved = resolveTaskExecutionConfig({
+			baseProviderSettings: baseSettings,
+			chatMetadata: {
+				chatModelId: "qwen/qwen3.8-max:free",
+				chatProvider: "xkiro",
+				executionModelId: "openai/gpt-6.1-sol",
+				executionProvider: "xkiro",
+				executionReasoningEffort: "high",
+			},
+			isNewChat: false,
+		})
+
+		expect(resolved.openAiModelId).toBe("openai/gpt-6.1-sol")
+		expect(resolved.apiProvider).toBe("xkiro")
+		expect((resolved as any).reasoningEffort).toBe("high")
+	})
+
+	it("uses chatModelId for new task even if old executionModelId was present in chat metadata", () => {
+		const resolved = resolveTaskExecutionConfig({
+			baseProviderSettings: baseSettings,
+			chatMetadata: {
+				chatModelId: "qwen/qwen3.8-max:free",
+				chatProvider: "xkiro",
+			},
+			isNewChat: true,
+		})
+
+		expect(resolved.openAiModelId).toBe("qwen/qwen3.8-max:free")
+		expect(resolved.apiProvider).toBe("xkiro")
+	})
+
 	it("normalizes reasoning effort correctly", () => {
 		expect(normalizeReasoningEffort("disable")).toEqual({ effort: "disable", enabled: false })
 		expect(normalizeReasoningEffort("off")).toEqual({ effort: "disable", enabled: false })

@@ -2942,10 +2942,19 @@ export class ClineProvider
 					chatReasoningEffort: parentTask.taskStartEffort ?? (parentTask.apiConfiguration as any)?.reasoningEffort,
 			  }
 			: options.taskId
-			? (this.taskHistoryStore.get(options.taskId) ??
-			  ((await this.getGlobalState("taskHistory")) as HistoryItem[] | undefined)?.find(
-					(item) => item.id === options.taskId,
-			  ))
+			? (() => {
+					const history = this.taskHistoryStore.get(options.taskId) ??
+					  ((this.contextProxy.getValue("taskHistory") as HistoryItem[] | undefined)?.find(
+							(item) => item.id === options.taskId,
+					  ))
+					if (!history) return undefined
+					return {
+						chatModelId: history.chatModelId,
+						chatProvider: history.chatProvider,
+						chatReasoningEffort: history.chatReasoningEffort,
+						apiConfigName: history.apiConfigName,
+					}
+			  })()
 			: undefined
 
 		const lastManualModel = (await this.getGlobalState("lastManuallySelectedModel")) as

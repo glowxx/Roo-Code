@@ -596,14 +596,15 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		})
 
 		this.apiConfiguration = structuredClone(apiConfiguration)
-		if (historyItem?.chatModelId) {
-			const provider = (historyItem.chatProvider || this.apiConfiguration.apiProvider) as ProviderName | undefined
+		const executionModel = historyItem?.executionModelId || historyItem?.chatModelId
+		if (executionModel) {
+			const provider = (historyItem?.executionProvider || historyItem?.chatProvider || this.apiConfiguration.apiProvider) as ProviderName | undefined
 			if (provider) {
 				this.apiConfiguration.apiProvider = provider
-				setModelId(this.apiConfiguration, provider, historyItem.chatModelId)
+				setModelId(this.apiConfiguration, provider, executionModel)
 			}
-			if (historyItem.chatReasoningEffort !== undefined) {
-				const effort = historyItem.chatReasoningEffort
+			const effort = historyItem?.executionReasoningEffort !== undefined ? historyItem.executionReasoningEffort : historyItem?.chatReasoningEffort
+			if (effort !== undefined) {
 				if (effort === "disable") {
 					this.apiConfiguration.reasoningEffort = "disable" as any
 					this.apiConfiguration.enableReasoningEffort = false
@@ -631,6 +632,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.initialStatus = initialStatus
 		this.historyItem = historyItem
 		if (this.historyItem) {
+			this.historyItem.executionModelId = this.historyItem.executionModelId || this.taskStartModel
+			this.historyItem.executionProvider = this.historyItem.executionProvider || this.taskStartProvider
+			if (this.historyItem.executionReasoningEffort === undefined) {
+				this.historyItem.executionReasoningEffort = this.taskStartEffort
+			}
 			this.historyItem.chatModelId = this.historyItem.chatModelId || this.taskStartModel
 			this.historyItem.chatProvider = this.historyItem.chatProvider || this.taskStartProvider
 			if (this.historyItem.chatReasoningEffort === undefined) {
@@ -1411,6 +1417,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				chatModelId: this.historyItem?.chatModelId || getModelId(this.apiConfiguration),
 				chatProvider: this.historyItem?.chatProvider || this.apiConfiguration?.apiProvider,
 				chatReasoningEffort: this.historyItem?.chatReasoningEffort ?? (this.apiConfiguration as any)?.reasoningEffort,
+				executionModelId: this.taskStartModel || this.historyItem?.executionModelId || getModelId(this.apiConfiguration),
+				executionProvider: this.taskStartProvider || this.historyItem?.executionProvider || this.apiConfiguration?.apiProvider,
+				executionReasoningEffort: this.taskStartEffort !== undefined ? this.taskStartEffort : this.historyItem?.executionReasoningEffort,
 			})
 
 			this.historyItem = historyItem

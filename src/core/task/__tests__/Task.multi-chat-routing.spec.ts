@@ -388,4 +388,65 @@ describe("Multi-Chat Model Routing & Task Isolation", () => {
 		// Task must retain its own deep-cloned copy
 		expect(getModelId(task.apiConfiguration)).toBe("openai/gpt-6.1-sol")
 	})
+
+	it("TM-09: Interrupted task with preferred model change resumes with original execution snapshot model, next task uses new preferred model", async () => {
+		// 1. Task A starts with GPT-6.1 Sol
+		const taskA = new Task({
+			provider: mockProvider as unknown as ClineProvider,
+			apiConfiguration: xkiroGpt61Config,
+			task: "Task A with Sol",
+			startTask: false,
+		})
+
+		expect(taskA.taskStartModel).toBe("openai/gpt-6.1-sol")
+		await taskA.saveClineMessages()
+		expect(taskA.historyItem?.executionModelId).toBe("openai/gpt-6.1-sol")
+		expect(taskA.historyItem?.chatModelId).toBe("openai/gpt-6.1-sol")
+
+		// 2. User changes preferred model in UI to Qwen during Task A
+		// Simulating webviewMessageHandler upsertApiConfiguration
+		if (taskA.historyItem) {
+			taskA.historyItem.chatModelId = "qwen/qwen3.8-max:free"
+			taskA.historyItem.chatProvider = "xkiro"
+		}
+		await taskA.saveClineMessages()
+
+		// Verify taskA's saved historyItem has executionModelId intact and chatModelId updated
+		expect(taskA.historyItem?.executionModelId).toBe("openai/gpt-6.1-sol")
+		expect(taskA.historyItem?.chatModelId).toBe("qwen/qwen3.8-max:free")
+
+		// 3. Task A is interrupted, Roo restarts -> historyItem is restored from disk
+		const savedHistoryItem = structuredClone(taskA.historyItem!)
+
+		// 4. Continue Task A: resolveTaskExecutionConfig for resumed task
+		const resumedConfig = resolveTaskExecutionConfig({
+			baseProviderSettings: xkiroQwenConfig, // Global state might now even be Qwen
+			chatMetadata: savedHistoryItem,
+			isNewChat: false,
+		})
+
+		const resumedTask = new Task({
+			provider: mockProvider as unknown as ClineProvider,
+			apiConfiguration: resumedConfig,
+			historyItem: savedHistoryItem,
+			task: "Task A resumed",
+			startTask: false,
+		})
+
+		// Resumed Task A MUST continue with GPT-6.1 Sol!
+		expect(getModelId(resumedTask.apiConfiguration)).toBe("openai/gpt-6.1-sol")
+		expect(resumedTask.taskStartModel).toBe("openai/gpt-6.1-sol")
+
+		// 5. Next new task in this chat uses preferred model: Qwen!
+		const nextTaskConfig = resolveTaskExecutionConfig({
+			baseProviderSettings: xkiroGpt61Config,
+			chatMetadata: {
+				chatModelId: savedHistoryItem.chatModelId,
+				chatProvider: savedHistoryItem.chatProvider,
+			},
+			isNewChat: true,
+		})
+
+		expect(getModelId(nextTaskConfig)).toBe("qwen/qwen3.8-max:free")
+	})
 })

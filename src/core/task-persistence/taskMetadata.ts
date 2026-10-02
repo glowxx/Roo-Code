@@ -35,6 +35,12 @@ export type TaskMetadataOptions = {
 	chatProvider?: string
 	/** Per-chat preferred reasoning effort */
 	chatReasoningEffort?: string
+	/** Task execution snapshot model ID */
+	executionModelId?: string
+	/** Task execution snapshot provider */
+	executionProvider?: string
+	/** Task execution snapshot reasoning effort */
+	executionReasoningEffort?: string
 }
 
 export async function taskMetadata({
@@ -53,6 +59,9 @@ export async function taskMetadata({
 	chatModelId,
 	chatProvider,
 	chatReasoningEffort,
+	executionModelId,
+	executionProvider,
+	executionReasoningEffort,
 }: TaskMetadataOptions) {
 	const taskDir = await getTaskDirectoryPath(globalStoragePath, id)
 
@@ -182,6 +191,9 @@ export async function taskMetadata({
 		...(chatModelId ? { chatModelId } : {}),
 		...(chatProvider ? { chatProvider } : {}),
 		...(chatReasoningEffort ? { chatReasoningEffort } : {}),
+		...(executionModelId ? { executionModelId } : {}),
+		...(executionProvider ? { executionProvider } : {}),
+		...(executionReasoningEffort !== undefined ? { executionReasoningEffort } : {}),
 		...(typeof apiConfigName === "string" && apiConfigName.length > 0 ? { apiConfigName } : {}),
 		...(resolvedStatus && { status: resolvedStatus }),
 		...(typeof title === "string" && title.length > 0 ? { title } : {}),

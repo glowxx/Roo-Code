@@ -470,7 +470,7 @@ describe("ClineProvider - Sticky Provider Profile", () => {
 			// Verify provider profile was restored via activateProviderProfile (restore-only: don't persist mode config)
 			expect(activateProviderProfileSpy).toHaveBeenCalledWith(
 				{ name: "saved-profile" },
-				{ persistModeConfig: false, persistTaskHistory: false },
+				{ persistModeConfig: false, persistTaskHistory: false, targetTaskId: "test-task-id" },
 			)
 		})
 
