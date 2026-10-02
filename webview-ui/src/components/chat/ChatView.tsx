@@ -552,16 +552,23 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							}
 							break
 						}
-						case "completion_result":
-							// Extension waiting for feedback, but we can just present a new task button.
-							// Only play celebration sound if task completion is confirmed (not evaluating or denied)
+						case "completion_result": {
+							const isEvaluating = approvalMode === "auto" && messageToHandle.approvalState === "EVALUATING"
+							const hasTrailingSafetyWarning = messages
+								.slice(messages.lastIndexOf(messageToHandle) + 1)
+								.some((m) => m.say === "command_safety_warning")
+							const isUserDecision =
+								messageToHandle.approvalState === "USER_DECISION_REQUIRED" ||
+								(!messageToHandle.isAnswered && hasTrailingSafetyWarning && !isEvaluating)
+
+							// Only play celebration sound if task completion is confirmed (not evaluating, denied, or requiring user decision)
 							// and there are no queued messages.
 							if (
 								!isPartial &&
 								messageQueue.length === 0 &&
-								messageToHandle.approvalState !== "EVALUATING" &&
-								messageToHandle.approvalState !== "DENIED" &&
-								messageToHandle.approvalState !== "USER_DECISION_REQUIRED"
+								!isEvaluating &&
+								!isUserDecision &&
+								messageToHandle.approvalState !== "DENIED"
 							) {
 								if (!messageToHandle.ts || lastCelebratedMsgTsRef.current !== messageToHandle.ts) {
 									if (messageToHandle.ts) {
@@ -570,12 +577,23 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 									playSound("celebration")
 								}
 							}
-							setSendingDisabled(isPartial)
+							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("completion_result")
-							setEnableButtons(false)
-							setPrimaryButtonText(undefined)
-							setSecondaryButtonText(undefined)
+							if (isUserDecision) {
+								setEnableButtons(!isPartial)
+								if (currentTaskItem?.parentTaskId) {
+									setPrimaryButtonText(t("chat:completeSubtaskAndReturn"))
+								} else {
+									setPrimaryButtonText(t("chat:approve.title"))
+								}
+								setSecondaryButtonText(t("chat:reject.title"))
+							} else {
+								setEnableButtons(false)
+								setPrimaryButtonText(undefined)
+								setSecondaryButtonText(undefined)
+							}
 							break
+						}
 						case "resume_task":
 							setSendingDisabled(false)
 							setClineAsk("resume_task")
@@ -1069,6 +1087,27 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					}
 					break
 				case "completion_result":
+					if (
+						primaryButtonText === t("chat:approve.title") ||
+						primaryButtonText === t("chat:completeSubtaskAndReturn")
+					) {
+						if (trimmedInput || (images && images.length > 0)) {
+							vscode.postMessage({
+								type: "askResponse",
+								askResponse: "yesButtonClicked",
+								text: trimmedInput,
+								images: images,
+								taskId: currentTaskItem?.id,
+							})
+							setInputValue("")
+							setSelectedImages([])
+						} else {
+							vscode.postMessage({ type: "askResponse", askResponse: "yesButtonClicked", taskId: currentTaskItem?.id })
+						}
+					} else {
+						startNewTask()
+					}
+					break
 				case "resume_completed_task":
 					// Waiting for feedback, but we can just present a new task button
 					startNewTask()
@@ -1084,7 +1123,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 			setPrimaryButtonText(undefined)
 			setSecondaryButtonText(undefined)
 		},
-		[clineAsk, startNewTask, currentTaskItem?.parentTaskId, currentTaskItem?.id],
+		[clineAsk, startNewTask, currentTaskItem?.parentTaskId, currentTaskItem?.id, primaryButtonText, t],
 	)
 
 	const handleSecondaryButtonClick = useCallback(
@@ -1103,6 +1142,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				case "api_req_failed":
 				case "mistake_limit_reached":
 					startNewTask()
+					break
+				case "completion_result":
+					if (trimmedInput || (images && images.length > 0)) {
+						vscode.postMessage({
+							type: "askResponse",
+							askResponse: "noButtonClicked",
+							text: trimmedInput,
+							images: images,
+							taskId: currentTaskItem?.id,
+						})
+						setInputValue("")
+						setSelectedImages([])
+					} else {
+						vscode.postMessage({ type: "askResponse", askResponse: "noButtonClicked", taskId: currentTaskItem?.id })
+					}
 					break
 				case "command":
 					if (

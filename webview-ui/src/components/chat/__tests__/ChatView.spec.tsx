@@ -1256,5 +1256,196 @@ describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
 			}),
 		)
 	})
+
+	it("renders Approve and Reject buttons when completion_result ask requires user decision with safety warning", async () => {
+		const { getByText } = renderChatView()
+
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "say",
+					say: "text",
+					ts: Date.now() - 3000,
+					text: "Preliminary verification report",
+				},
+				{
+					type: "say",
+					say: "completion_result",
+					ts: Date.now() - 2000,
+					text: "Attempting completion",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now() - 1000,
+					text: "",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: Date.now(),
+					text: JSON.stringify({
+						isSafe: false,
+						riskLevel: "medium",
+						reason: "Cannot complete task with 1 item(s) marked 'blocked' on the todo list without user approval.",
+					}),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:approve.title")).toBeInTheDocument()
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+	})
+
+	it("clicking Approve sends yesButtonClicked for completion_result requiring user decision", async () => {
+		const { getByText } = renderChatView()
+
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now() - 1000,
+					text: "",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: Date.now(),
+					text: JSON.stringify({
+						isSafe: false,
+						riskLevel: "medium",
+						reason: "Cannot complete task with 1 item(s) marked 'blocked' on the todo list without user approval.",
+					}),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:approve.title")).toBeInTheDocument()
+		})
+
+		fireEvent.click(getByText("chat:approve.title"))
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "askResponse",
+				askResponse: "yesButtonClicked",
+			}),
+		)
+	})
+
+	it("clicking Reject sends noButtonClicked for completion_result requiring user decision", async () => {
+		const { getByText } = renderChatView()
+
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "ask",
+					ask: "completion_result",
+					ts: Date.now() - 1000,
+					text: "",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: Date.now(),
+					text: JSON.stringify({
+						isSafe: false,
+						riskLevel: "medium",
+						reason: "Cannot complete task with 1 item(s) marked 'blocked' on the todo list without user approval.",
+					}),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+
+		fireEvent.click(getByText("chat:reject.title"))
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "askResponse",
+				askResponse: "noButtonClicked",
+			}),
+		)
+	})
+
+	it("preserves completion approval buttons across chat switch A -> B -> A", async () => {
+		const { getByText, queryByText } = renderChatView()
+
+		const taskAMessages: any[] = [
+			{
+				type: "say",
+				say: "text",
+				ts: 1000,
+				text: "Task A report",
+			},
+			{
+				type: "ask",
+				ask: "completion_result",
+				ts: 2000,
+				text: "",
+				approvalState: "USER_DECISION_REQUIRED",
+			},
+			{
+				type: "say",
+				say: "command_safety_warning",
+				ts: 3000,
+				text: JSON.stringify({
+					isSafe: false,
+					riskLevel: "medium",
+					reason: "Cannot complete task with 1 item(s) marked 'blocked' on the todo list without user approval.",
+				}),
+			},
+		]
+
+		// Load Task A
+		mockPostMessage({
+			currentTaskId: "task-A",
+			clineMessages: taskAMessages,
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:approve.title")).toBeInTheDocument()
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+
+		// Switch to Task B (running task with api_req_started, no buttons)
+		mockPostMessage({
+			currentTaskId: "task-B",
+			clineMessages: [
+				{
+					type: "say",
+					say: "api_req_started",
+					ts: 4000,
+					text: JSON.stringify({ cost: 0 }),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(queryByText("chat:approve.title")).not.toBeInTheDocument()
+			expect(queryByText("chat:reject.title")).not.toBeInTheDocument()
+		})
+
+		// Switch back to Task A
+		mockPostMessage({
+			currentTaskId: "task-A",
+			clineMessages: taskAMessages,
+		})
+
+		// Buttons must still be present and stable
+		await waitFor(() => {
+			expect(getByText("chat:approve.title")).toBeInTheDocument()
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+	})
 })
 
