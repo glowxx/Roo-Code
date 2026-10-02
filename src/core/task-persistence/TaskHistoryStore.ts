@@ -374,30 +374,68 @@ export class TaskHistoryStore {
 	async recoverInterruptedTasks(): Promise<void> {
 		return this.withLock(async () => {
 			let changed = false
-			for (const [taskId, item] of this.cache.entries()) {
-				if (item.status === "active") {
-					const updatedItem: HistoryItem = {
-						...item,
+			for (const [taskId, rawItem] of this.cache.entries()) {
+				let currentItem = rawItem
+				let itemChanged = false
+
+				if (currentItem.status === "active") {
+					currentItem = {
+						...currentItem,
 						status: "interrupted",
 						needsAttention: true,
 					}
-					this.cache.set(taskId, updatedItem)
-					await this.writeTaskFile(updatedItem).catch((err) => {
+					itemChanged = true
+				} else if (currentItem.status === "delegated") {
+					const childId = currentItem.awaitingChildId
+					const childItem = childId ? this.cache.get(childId) : undefined
+
+					// If child does not exist, or was already completed/cancelled before resume,
+					// the parent was orphaned in delegation and cannot be resumed by a child completion.
+					// Recover parent as interrupted with needsAttention: true so user can decide.
+					if (!childId || !childItem || childItem.status === "completed" || childItem.status === "cancelled") {
+						currentItem = {
+							...currentItem,
+							status: "interrupted",
+							awaitingChildId: undefined,
+							needsAttention: true,
+						}
+						itemChanged = true
+					} else {
+						// Child exists and is in progress (will be / is interrupted).
+						// Parent remains delegated, awaitingChildId preserved, but needsAttention must be false (no '!').
+						if (currentItem.needsAttention !== false) {
+							currentItem = {
+								...currentItem,
+								needsAttention: false,
+							}
+							itemChanged = true
+						}
+					}
+				} else if (currentItem.status === "completed" || currentItem.status === "cancelled") {
+					if (currentItem.needsAttention) {
+						currentItem = {
+							...currentItem,
+							needsAttention: false,
+						}
+						itemChanged = true
+					}
+				}
+
+				// Check for orphaned child pointing to missing parent
+				if (currentItem.parentTaskId && !this.cache.has(currentItem.parentTaskId)) {
+					currentItem = {
+						...currentItem,
+						parentTaskId: undefined,
+					}
+					itemChanged = true
+				}
+
+				if (itemChanged) {
+					this.cache.set(taskId, currentItem)
+					await this.writeTaskFile(currentItem).catch((err) => {
 						console.error(`[TaskHistoryStore] Failed to write recovered task file for ${taskId}:`, err)
 					})
 					changed = true
-				} else if (item.status === "completed" || item.status === "cancelled") {
-					if (item.needsAttention) {
-						const updatedItem: HistoryItem = {
-							...item,
-							needsAttention: false,
-						}
-						this.cache.set(taskId, updatedItem)
-						await this.writeTaskFile(updatedItem).catch((err) => {
-							console.error(`[TaskHistoryStore] Failed to write normalized task file for ${taskId}:`, err)
-						})
-						changed = true
-					}
 				}
 			}
 

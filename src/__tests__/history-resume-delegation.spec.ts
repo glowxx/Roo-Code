@@ -784,4 +784,174 @@ describe("History resume delegation - parent metadata transitions", () => {
 			}),
 		)
 	})
+
+	it("showTaskWithId on delegated parent opens task side-effect free with startTask: false", async () => {
+		const parentHistory = {
+			id: "parent-delegated-view",
+			status: "delegated",
+			awaitingChildId: "child-pending-1",
+			ts: Date.now(),
+			task: "Parent task awaiting child",
+			tokensIn: 0,
+			tokensOut: 0,
+			totalCost: 0,
+			mode: "code",
+			workspace: "/tmp",
+			needsAttention: false,
+		}
+
+		const createTaskWithHistoryItem = vi.fn().mockResolvedValue({
+			taskId: "parent-delegated-view",
+			clineMessages: [{ type: "say", say: "task", text: "Parent task" }],
+		})
+		const postStateToWebview = vi.fn().mockResolvedValue(undefined)
+		const postMessageToWebview = vi.fn().mockResolvedValue(undefined)
+		const updateTaskHistory = vi.fn()
+
+		const provider = {
+			taskSwitchEpoch: 0,
+			runningTasks: new Map(),
+			clineStack: [],
+			getCurrentTask: vi.fn(() => null),
+			getTaskWithId: vi.fn().mockResolvedValue({ historyItem: parentHistory }),
+			taskHistoryStore: {
+				get: vi.fn((id: string) => (id === "child-pending-1" ? { id, status: "active" } : undefined)),
+			},
+			createTaskWithHistoryItem,
+			updateTaskHistory,
+			postStateToWebview,
+			postMessageToWebview,
+		} as unknown as ClineProvider
+
+		await (ClineProvider.prototype as any).showTaskWithId.call(provider, "parent-delegated-view")
+
+		// Assert: createTaskWithHistoryItem was called with startTask: false
+		expect(createTaskWithHistoryItem).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "parent-delegated-view", status: "delegated" }),
+			{ startTask: false },
+		)
+		// Assert: side-effect free (no updateTaskHistory calls)
+		expect(updateTaskHistory).not.toHaveBeenCalled()
+	})
+
+	it("reopenParentFromDelegation enforces exactly-once resumption and rejects duplicate reopen", async () => {
+		const parentHistory = {
+			id: "parent-idempotent",
+			status: "delegated",
+			delegatedToId: "child-idempotent",
+			awaitingChildId: "child-idempotent",
+			childIds: ["child-idempotent"],
+			ts: Date.now(),
+			task: "Parent",
+			tokensIn: 0,
+			tokensOut: 0,
+			totalCost: 0,
+			mode: "code",
+			workspace: "/tmp",
+		}
+
+		const parentInstance = {
+			taskId: "parent-idempotent",
+			resumeAfterDelegation: vi.fn().mockResolvedValue(undefined),
+			overwriteClineMessages: vi.fn().mockResolvedValue(undefined),
+			overwriteApiConversationHistory: vi.fn().mockResolvedValue(undefined),
+		}
+
+		const updateTaskHistory = vi.fn().mockResolvedValue([])
+		const createTaskWithHistoryItem = vi.fn().mockResolvedValue(parentInstance)
+		const providerEmit = vi.fn()
+
+		const provider = {
+			contextProxy: { globalStorageUri: { fsPath: "/tmp" } },
+			getTaskWithId: vi.fn().mockImplementation(async (id: string) => {
+				if (id === "parent-idempotent") {
+					return { historyItem: parentHistory }
+				}
+				return { historyItem: { id, status: "active" } }
+			}),
+			emit: providerEmit,
+			getCurrentTask: vi.fn(() => ({ taskId: "child-idempotent" })),
+			removeClineFromStack: vi.fn().mockResolvedValue(undefined),
+			createTaskWithHistoryItem,
+			updateTaskHistory,
+		} as unknown as ClineProvider
+
+		// First call
+		await (ClineProvider.prototype as any).reopenParentFromDelegation.call(provider, {
+			parentTaskId: "parent-idempotent",
+			childTaskId: "child-idempotent",
+			completionResultSummary: "Done once",
+		})
+
+		expect(parentInstance.resumeAfterDelegation).toHaveBeenCalledTimes(1)
+
+		// Parent status in metadata was updated to active
+		parentHistory.status = "active"
+		parentHistory.awaitingChildId = undefined as any
+
+		// Second duplicate call
+		await (ClineProvider.prototype as any).reopenParentFromDelegation.call(provider, {
+			parentTaskId: "parent-idempotent",
+			childTaskId: "child-idempotent",
+			completionResultSummary: "Done again",
+		})
+
+		// Assert: parentInstance.resumeAfterDelegation was still called ONLY once!
+		expect(parentInstance.resumeAfterDelegation).toHaveBeenCalledTimes(1)
+	})
+
+	it("reopenParentFromDelegation safely removes running child even if user navigated to parent", async () => {
+		const parentHistory = {
+			id: "parent-background-child",
+			status: "delegated",
+			awaitingChildId: "child-in-bg",
+			childIds: ["child-in-bg"],
+			ts: Date.now(),
+			task: "Parent",
+			tokensIn: 0,
+			tokensOut: 0,
+			totalCost: 0,
+			mode: "code",
+			workspace: "/tmp",
+		}
+
+		const runningChildTask = {
+			taskId: "child-in-bg",
+			abortTask: vi.fn().mockResolvedValue(undefined),
+		}
+		const runningTasks = new Map<string, any>([["child-in-bg", runningChildTask]])
+		const clineStack = [runningChildTask]
+
+		const provider = {
+			contextProxy: { globalStorageUri: { fsPath: "/tmp" } },
+			getTaskWithId: vi.fn().mockImplementation(async (id: string) => {
+				if (id === "parent-background-child") return { historyItem: parentHistory }
+				return { historyItem: { id, status: "active" } }
+			}),
+			emit: vi.fn(),
+			// User is currently viewing the parent in foreground!
+			getCurrentTask: vi.fn(() => ({ taskId: "parent-background-child" })),
+			runningTasks,
+			clineStack,
+			removeClineFromStack: vi.fn(),
+			createTaskWithHistoryItem: vi.fn().mockResolvedValue({
+				taskId: "parent-background-child",
+				resumeAfterDelegation: vi.fn().mockResolvedValue(undefined),
+				overwriteClineMessages: vi.fn().mockResolvedValue(undefined),
+				overwriteApiConversationHistory: vi.fn().mockResolvedValue(undefined),
+			}),
+			updateTaskHistory: vi.fn().mockResolvedValue([]),
+		} as unknown as ClineProvider
+
+		await (ClineProvider.prototype as any).reopenParentFromDelegation.call(provider, {
+			parentTaskId: "parent-background-child",
+			childTaskId: "child-in-bg",
+			completionResultSummary: "Completed in background",
+		})
+
+		// Assert: background child was aborted and removed from runningTasks and clineStack
+		expect(runningChildTask.abortTask).toHaveBeenCalledWith(true)
+		expect(runningTasks.has("child-in-bg")).toBe(false)
+		expect(clineStack.length).toBe(0)
+	})
 })

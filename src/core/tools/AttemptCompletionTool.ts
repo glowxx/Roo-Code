@@ -111,31 +111,55 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 							// Fall through to normal completion ask flow below (outside this if block)
 							// This shows the user the completion result and waits for acceptance
 							// without injecting another tool_result to the parent
-						} else if (status === "active") {
-							// Normal subtask completion - do delegation
-							const delegation = await this.delegateToParent(
-								task,
-								result,
-								provider,
-								askFinishSubTaskApproval,
-								pushToolResult,
-							)
-							if (delegation === "delegated") {
-								if (completionSayMsg) {
-									completionSayMsg.approvalState = "AUTO_APPROVED"
-									task.updateClineMessage?.(completionSayMsg)
-								}
-								task.markTaskCompleted?.()
-								this.emitTaskCompleted(task)
+						} else if (status === "active" || status === "interrupted") {
+							// Defensively check parent existence before attempting delegation
+							let parentExists = false
+							try {
+								const { historyItem: parentHistory } = await provider.getTaskWithId(task.parentTaskId!)
+								parentExists = Boolean(parentHistory)
+							} catch {
+								parentExists = false
 							}
-							if (delegation !== "continue") return
+
+							if (!parentExists) {
+								console.warn(
+									`[AttemptCompletionTool] Parent task ${task.parentTaskId} not found. Falling through to standalone completion.`,
+								)
+								// Fall through to normal completion ask flow
+							} else {
+								// Prevent duplicate in-flight completion calls
+								if ((task as any)._isDelegatingCompletion) {
+									return
+								}
+								;(task as any)._isDelegatingCompletion = true
+								try {
+									const delegation = await this.delegateToParent(
+										task,
+										result,
+										provider,
+										askFinishSubTaskApproval,
+										pushToolResult,
+									)
+									if (delegation === "delegated") {
+										if (completionSayMsg) {
+											completionSayMsg.approvalState = "AUTO_APPROVED"
+											task.updateClineMessage?.(completionSayMsg)
+										}
+										task.markTaskCompleted?.()
+										this.emitTaskCompleted(task)
+									}
+									if (delegation !== "continue") return
+								} finally {
+									;(task as any)._isDelegatingCompletion = false
+								}
+							}
 						} else {
 							// Unexpected status (undefined or "delegated") - log error and skip delegation
 							// undefined indicates a bug in status persistence during child creation
 							// "delegated" would mean this child has its own grandchild pending (shouldn't reach attempt_completion)
 							console.error(
 								`[AttemptCompletionTool] Unexpected child task status "${status}" for task ${task.taskId}. ` +
-									`Expected "active" or "completed". Skipping delegation to prevent data corruption.`,
+									`Expected "active", "interrupted" or "completed". Skipping delegation to prevent data corruption.`,
 							)
 							// Fall through to normal completion ask flow
 						}

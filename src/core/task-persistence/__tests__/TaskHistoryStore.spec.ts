@@ -487,6 +487,101 @@ describe("TaskHistoryStore", () => {
 			expect(onWriteMock).toHaveBeenCalled()
 			storeWithOnWrite.dispose()
 		})
+
+		it("keeps valid delegated parent as delegated with awaitingChildId and forces needsAttention: false on restart", async () => {
+			const parentItem = makeHistoryItem({
+				id: "parent-del-1",
+				status: "delegated",
+				awaitingChildId: "child-act-1",
+				needsAttention: true, // stale attention flag before restart
+			})
+			const childItem = makeHistoryItem({
+				id: "child-act-1",
+				parentTaskId: "parent-del-1",
+				status: "active",
+				needsAttention: false,
+			})
+
+			await store.initialize()
+			await store.upsert(parentItem)
+			await store.upsert(childItem)
+
+			await store.recoverInterruptedTasks()
+
+			const recoveredParent = store.get("parent-del-1")
+			const recoveredChild = store.get("child-act-1")
+
+			// Parent remains delegated with awaitingChildId preserved and needsAttention forced to false
+			expect(recoveredParent?.status).toBe("delegated")
+			expect(recoveredParent?.awaitingChildId).toBe("child-act-1")
+			expect(recoveredParent?.needsAttention).toBe(false)
+
+			// Child becomes interrupted with needsAttention: true
+			expect(recoveredChild?.status).toBe("interrupted")
+			expect(recoveredChild?.needsAttention).toBe(true)
+		})
+
+		it("recovers orphaned delegated parent whose child does not exist to interrupted with needsAttention: true", async () => {
+			const parentItem = makeHistoryItem({
+				id: "parent-orphaned-1",
+				status: "delegated",
+				awaitingChildId: "missing-child",
+				needsAttention: false,
+			})
+
+			await store.initialize()
+			await store.upsert(parentItem)
+
+			await store.recoverInterruptedTasks()
+
+			const recovered = store.get("parent-orphaned-1")
+			expect(recovered?.status).toBe("interrupted")
+			expect(recovered?.awaitingChildId).toBeUndefined()
+			expect(recovered?.needsAttention).toBe(true)
+		})
+
+		it("recovers delegated parent whose child is already completed to interrupted with needsAttention: true", async () => {
+			const parentItem = makeHistoryItem({
+				id: "parent-comp-child",
+				status: "delegated",
+				awaitingChildId: "child-already-done",
+				needsAttention: false,
+			})
+			const childItem = makeHistoryItem({
+				id: "child-already-done",
+				parentTaskId: "parent-comp-child",
+				status: "completed",
+				needsAttention: false,
+			})
+
+			await store.initialize()
+			await store.upsert(parentItem)
+			await store.upsert(childItem)
+
+			await store.recoverInterruptedTasks()
+
+			const recovered = store.get("parent-comp-child")
+			expect(recovered?.status).toBe("interrupted")
+			expect(recovered?.awaitingChildId).toBeUndefined()
+			expect(recovered?.needsAttention).toBe(true)
+		})
+
+		it("decouples child whose parent does not exist by clearing parentTaskId", async () => {
+			const childItem = makeHistoryItem({
+				id: "child-missing-parent",
+				parentTaskId: "non-existent-parent",
+				status: "active",
+			})
+
+			await store.initialize()
+			await store.upsert(childItem)
+
+			await store.recoverInterruptedTasks()
+
+			const recovered = store.get("child-missing-parent")
+			expect(recovered?.parentTaskId).toBeUndefined()
+			expect(recovered?.status).toBe("interrupted")
+		})
 	})
 })
 

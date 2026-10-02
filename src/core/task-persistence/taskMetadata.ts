@@ -24,7 +24,7 @@ export type TaskMetadataOptions = {
 	/** Provider profile name for the task (sticky profile feature) */
 	apiConfigName?: string
 	/** Initial status for the task (e.g., "active" for child tasks) */
-	initialStatus?: "active" | "delegated" | "completed" | "interrupted"
+	initialStatus?: HistoryItem["status"]
 	/** Optional pre-generated or user-assigned title */
 	title?: string
 	/** Source of the title */
@@ -41,6 +41,12 @@ export type TaskMetadataOptions = {
 	executionProvider?: string
 	/** Task execution snapshot reasoning effort */
 	executionReasoningEffort?: string
+	/** Child task ID currently being awaited by this task */
+	awaitingChildId?: string
+	/** Child task ID this task was delegated to */
+	delegatedToId?: string
+	/** Child task IDs spawned by this task */
+	childIds?: string[]
 }
 
 export async function taskMetadata({
@@ -54,6 +60,9 @@ export async function taskMetadata({
 	mode,
 	apiConfigName,
 	initialStatus,
+	awaitingChildId,
+	delegatedToId,
+	childIds,
 	title,
 	titleSource,
 	chatModelId,
@@ -137,6 +146,14 @@ export async function taskMetadata({
 	if (!isCompleted) {
 		if (resolvedStatus === "interrupted") {
 			needsAttention = true
+		} else if (resolvedStatus === "delegated" && awaitingChildId) {
+			// A delegated parent task awaiting child execution does not need user attention
+			// unless there is an explicit independent ask that requires a user decision.
+			if (hasMessages && messages.some((m) => m.type === "ask" && m.approvalState === "USER_DECISION_REQUIRED")) {
+				needsAttention = true
+			} else {
+				needsAttention = false
+			}
 		} else if (hasMessages) {
 			const lastAskIdx = findLastIndex(messages, (m) => m.type === "ask")
 			if (lastAskIdx !== -1) {
@@ -196,6 +213,9 @@ export async function taskMetadata({
 		...(executionReasoningEffort !== undefined ? { executionReasoningEffort } : {}),
 		...(typeof apiConfigName === "string" && apiConfigName.length > 0 ? { apiConfigName } : {}),
 		...(resolvedStatus && { status: resolvedStatus }),
+		...(awaitingChildId ? { awaitingChildId } : {}),
+		...(delegatedToId ? { delegatedToId } : {}),
+		...(childIds ? { childIds } : {}),
 		...(typeof title === "string" && title.length > 0 ? { title } : {}),
 		...(titleSource ? { titleSource } : {}),
 	}

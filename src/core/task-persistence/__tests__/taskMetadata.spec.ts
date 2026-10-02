@@ -136,4 +136,42 @@ describe("taskMetadata lifecycle & attention derivation", () => {
 		expect(result.historyItem.status).toBe("interrupted")
 		expect(result.historyItem.needsAttention).toBe(true)
 	})
+
+	it("marks delegated tasks awaiting child with needsAttention: false and status: delegated even with tool ask", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Starting parent task" },
+			{ ts: 2000, type: "ask", ask: "tool", text: "newTask" },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "delegated",
+			awaitingChildId: "child-task-1",
+			delegatedToId: "child-task-1",
+		})
+
+		expect(result.historyItem.status).toBe("delegated")
+		expect(result.historyItem.needsAttention).toBe(false)
+		expect(result.historyItem.awaitingChildId).toBe("child-task-1")
+		expect(result.historyItem.delegatedToId).toBe("child-task-1")
+	})
+
+	it("flags delegated task with needsAttention: true if an explicit USER_DECISION_REQUIRED ask is present", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Parent task" },
+			{ ts: 1500, type: "ask", ask: "command", text: "rm -rf /", approvalState: "USER_DECISION_REQUIRED" },
+			{ ts: 2000, type: "ask", ask: "tool", text: "newTask" },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "delegated",
+			awaitingChildId: "child-task-1",
+		})
+
+		expect(result.historyItem.status).toBe("delegated")
+		expect(result.historyItem.needsAttention).toBe(true)
+	})
 })

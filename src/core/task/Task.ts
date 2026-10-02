@@ -522,7 +522,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Cloud Sync Tracking
 	// Initial status for the task's history item (set at creation time to avoid race conditions)
-	private readonly initialStatus?: "active" | "delegated" | "completed" | "interrupted"
+	private readonly initialStatus?: HistoryItem["status"]
+	private currentStatus?: HistoryItem["status"]
 	public historyItem?: HistoryItem
 
 	// MessageManager for high-level message operations (lazy initialized)
@@ -651,6 +652,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		if (this.initialStatus === "completed" || this.historyItem?.status === "completed") {
 			this.isTaskCompleted = true
 		}
+		this.currentStatus = this.initialStatus ?? this.historyItem?.status
 
 		this.assistantMessageParser = undefined
 
@@ -1401,7 +1403,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const currentStatus =
 				this.isTaskCompleted || this.historyItem?.status === "completed"
 					? "completed"
-					: this.initialStatus
+					: this.historyItem?.status === "delegated"
+					? "delegated"
+					: this.currentStatus ?? this.initialStatus
+
+			const awaitingChildId = this.historyItem?.awaitingChildId
+			const delegatedToId = this.historyItem?.delegatedToId
+			const childIds = this.historyItem?.childIds
 
 			const { historyItem, tokenUsage } = await taskMetadata({
 				taskId: this.taskId,
@@ -1414,6 +1422,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				mode: this._taskMode || defaultModeSlug, // Use the task's own mode, not the current provider mode.
 				apiConfigName: this._taskApiConfigName, // Use the task's own provider profile, not the current provider profile.
 				initialStatus: currentStatus,
+				awaitingChildId,
+				delegatedToId,
+				childIds,
 				chatModelId: this.historyItem?.chatModelId || getModelId(this.apiConfiguration),
 				chatProvider: this.historyItem?.chatProvider || this.apiConfiguration?.apiProvider,
 				chatReasoningEffort: this.historyItem?.chatReasoningEffort ?? (this.apiConfiguration as any)?.reasoningEffort,
@@ -3715,6 +3726,12 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				hasCompletionMessage ||
 				isFinishedTextResponse
 
+			if (this.historyItem?.status === "delegated" && this.historyItem?.awaitingChildId) {
+				this.isInitialized = true
+				await this.providerRef.deref()?.postStateToWebview()
+				return
+			}
+
 			let askType: ClineAsk
 			if (isTaskCompletedOrIdle) {
 				this.isTaskCompleted = true
@@ -3736,6 +3753,11 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 			if (response === "messageResponse") {
 				this.isTaskCompleted = false
+				this.currentStatus = "active"
+				if (this.historyItem) {
+					this.historyItem.status = "active"
+					this.historyItem.needsAttention = false
+				}
 				await this.say("user_feedback", text, images)
 				responseText = text
 				responseImages = images
@@ -4208,6 +4230,12 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 		// Mark as initialized and active
 		this.isInitialized = true
+		this.currentStatus = "active"
+		if (this.historyItem) {
+			this.historyItem.status = "active"
+			this.historyItem.needsAttention = false
+			this.historyItem.awaitingChildId = undefined
+		}
 		this.emit(RooCodeEventName.TaskActive, this.taskId)
 
 		// Load conversation history if not already loaded
