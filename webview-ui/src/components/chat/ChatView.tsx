@@ -328,6 +328,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	const lastMessage = useMemo(() => messages.at(-1), [messages])
 	const secondLastMessage = useMemo(() => messages.at(-2), [messages])
 
+	const activeAskMessage = useMemo(() => {
+		const lastAsk = [...messages].reverse().find((m) => m.type === "ask" && !m.isAnswered)
+		if (!lastAsk) return undefined
+		const lastAskIdx = messages.lastIndexOf(lastAsk)
+		const trailingMessages = messages.slice(lastAskIdx + 1)
+		const isStillPending = trailingMessages.every(
+			(m) =>
+				m.type === "say" &&
+				(m.say === "command_safety_warning" ||
+					m.say === "api_req_rate_limit_wait" ||
+					m.say === "api_req_retry_delayed"),
+		)
+		return isStillPending ? lastAsk : undefined
+	}, [messages])
+
 	const volume = typeof soundVolume === "number" ? soundVolume : 0.5
 	const [playNotification] = useSound(`${audioBaseUri}/notification.wav`, { volume, soundEnabled, interrupt: true })
 	const [playCelebration] = useSound(`${audioBaseUri}/celebration.wav`, { volume, soundEnabled, interrupt: true })
@@ -379,12 +394,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		// if user finished a task, then start a new task with a new conversation history since in this moment that the extension is waiting for user response, the user could close the extension and the conversation history would be lost.
 		// basically as long as a task is active, the conversation history will be persisted
 		if (lastMessage) {
-			const isPartial = lastMessage.partial === true
-			switch (lastMessage.type) {
+			const messageToHandle = lastMessage.type === "say" && activeAskMessage ? activeAskMessage : lastMessage
+			const isPartial = messageToHandle.partial === true
+			switch (messageToHandle.type) {
 				case "ask":
 					// Reset user response flag when a new ask arrives to allow auto-approval
 					userRespondedRef.current = false
-					switch (lastMessage.ask) {
+					switch (messageToHandle.ask) {
 						case "api_req_failed":
 							playSound("progress_loop")
 							setSendingDisabled(true)
@@ -413,9 +429,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							setSecondaryButtonText(undefined)
 							break
 						case "tool": {
-							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							const isEvaluating = approvalMode === "auto" && messageToHandle.approvalState === "EVALUATING"
 							const isAutoSuppress =
-								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
+								approvalMode === "auto" && messageToHandle.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("tool")
 							if (isEvaluating || isAutoSuppress) {
@@ -424,7 +440,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 								setSecondaryButtonText(undefined)
 							} else {
 								setEnableButtons(!isPartial)
-								const tool = JSON.parse(lastMessage.text || "{}") as ClineSayTool
+								const tool = JSON.parse(messageToHandle.text || "{}") as ClineSayTool
 								switch (tool.tool) {
 									case "editedExistingFile":
 									case "appliedDiff":
@@ -474,11 +490,11 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						}
 						case "command": {
 							const isExecuting =
-								!!lastMessage?.text?.includes(COMMAND_OUTPUT_STRING) ||
-								lastMessage?.approvalState === "AUTO_APPROVED"
-							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+								!!messageToHandle?.text?.includes(COMMAND_OUTPUT_STRING) ||
+								messageToHandle?.approvalState === "AUTO_APPROVED"
+							const isEvaluating = approvalMode === "auto" && messageToHandle.approvalState === "EVALUATING"
 							const isAutoSuppress =
-								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
+								approvalMode === "auto" && messageToHandle.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("command")
 							if (isAutoSuppress) {
@@ -520,9 +536,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							}
 							break
 						case "use_mcp_server": {
-							const isEvaluating = approvalMode === "auto" && lastMessage.approvalState === "EVALUATING"
+							const isEvaluating = approvalMode === "auto" && messageToHandle.approvalState === "EVALUATING"
 							const isAutoSuppress =
-								approvalMode === "auto" && lastMessage.approvalState !== "USER_DECISION_REQUIRED"
+								approvalMode === "auto" && messageToHandle.approvalState !== "USER_DECISION_REQUIRED"
 							setSendingDisabled(isPartial || isEvaluating)
 							setClineAsk("use_mcp_server")
 							if (isEvaluating || isAutoSuppress) {
@@ -543,13 +559,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 							if (
 								!isPartial &&
 								messageQueue.length === 0 &&
-								lastMessage.approvalState !== "EVALUATING" &&
-								lastMessage.approvalState !== "DENIED" &&
-								lastMessage.approvalState !== "USER_DECISION_REQUIRED"
+								messageToHandle.approvalState !== "EVALUATING" &&
+								messageToHandle.approvalState !== "DENIED" &&
+								messageToHandle.approvalState !== "USER_DECISION_REQUIRED"
 							) {
-								if (!lastMessage.ts || lastCelebratedMsgTsRef.current !== lastMessage.ts) {
-									if (lastMessage.ts) {
-										lastCelebratedMsgTsRef.current = lastMessage.ts
+								if (!messageToHandle.ts || lastCelebratedMsgTsRef.current !== messageToHandle.ts) {
+									if (messageToHandle.ts) {
+										lastCelebratedMsgTsRef.current = messageToHandle.ts
 									}
 									playSound("celebration")
 								}
@@ -624,7 +640,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					break
 			}
 		}
-	}, [lastMessage, secondLastMessage, approvalMode])
+	}, [lastMessage, secondLastMessage, activeAskMessage, approvalMode])
 
 	useEffect(() => {
 		if (messages.length === 0) {
@@ -674,7 +690,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		// and should be resolved with optimizations as it's likely a rendering
 		// bug. But as a final guard for now, the cancel button will show if the
 		// last message is not an ask.
-		const isLastAsk = !!modifiedMessages.at(-1)?.ask
+		const isLastAsk = !!(modifiedMessages.at(-1)?.ask || activeAskMessage?.ask)
 
 		const isToolCurrentlyAsking =
 			isLastAsk && clineAsk !== undefined && enableButtons && primaryButtonText !== undefined
@@ -718,7 +734,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 
 		return false
-	}, [modifiedMessages, clineAsk, enableButtons, primaryButtonText])
+	}, [modifiedMessages, activeAskMessage, clineAsk, enableButtons, primaryButtonText])
 
 	useEffect(() => {
 		if (isStopping && !stopRequestIdRef.current) {
@@ -1235,23 +1251,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 					break
 				case "condenseTaskContextStarted":
 					// Handle both manual and automatic condensation start
-					// We don't check the task ID because:
-					// 1. There can only be one active task at a time
-					// 2. Task switching resets isCondensing to false (see useEffect with task?.ts dependency)
-					// 3. For new tasks, currentTaskItem may not be populated yet due to async state updates
+					// In multi-task concurrency, only show spinner if message matches the active chat
 					if (message.text) {
-						setIsCondensing(true)
-						// Note: sendingDisabled is only set for manual condensation via handleCondenseContext
-						// Automatic condensation doesn't disable sending since the task is already running
+						if (!currentTaskItem?.id || message.text === currentTaskItem.id) {
+							setIsCondensing(true)
+						}
 					}
 					break
 				case "condenseTaskContextResponse":
-					// Same reasoning as above - we trust this is for the current task
 					if (message.text) {
-						if (isCondensing && sendingDisabled) {
-							setSendingDisabled(false)
+						if (!currentTaskItem?.id || message.text === currentTaskItem.id) {
+							if (isCondensing && sendingDisabled) {
+								setSendingDisabled(false)
+							}
+							setIsCondensing(false)
 						}
-						setIsCondensing(false)
 					}
 					break
 				case "checkpointInitWarning":

@@ -20,6 +20,7 @@ import {
 	type TaskLike,
 	type TaskMetadata,
 	type TaskEvents,
+	type ProviderName,
 	type ProviderSettings,
 	type TokenUsage,
 	type ToolUsage,
@@ -42,6 +43,7 @@ import {
 	TodoItem,
 	getApiProtocol,
 	getModelId,
+	setModelId,
 	isRetiredProvider,
 	isIdleAsk,
 	isInteractiveAsk,
@@ -594,6 +596,23 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		})
 
 		this.apiConfiguration = structuredClone(apiConfiguration)
+		if (historyItem?.chatModelId) {
+			const provider = (historyItem.chatProvider || this.apiConfiguration.apiProvider) as ProviderName | undefined
+			if (provider) {
+				this.apiConfiguration.apiProvider = provider
+				setModelId(this.apiConfiguration, provider, historyItem.chatModelId)
+			}
+			if (historyItem.chatReasoningEffort !== undefined) {
+				const effort = historyItem.chatReasoningEffort
+				if (effort === "disable") {
+					this.apiConfiguration.reasoningEffort = "disable" as any
+					this.apiConfiguration.enableReasoningEffort = false
+				} else {
+					this.apiConfiguration.reasoningEffort = effort as any
+					this.apiConfiguration.enableReasoningEffort = true
+				}
+			}
+		}
 		this.taskStartModel = getModelId(this.apiConfiguration)
 		this.taskStartProvider = this.apiConfiguration.apiProvider
 		this.taskStartEffort = (this.apiConfiguration as any).reasoningEffort
@@ -611,6 +630,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.taskNumber = taskNumber
 		this.initialStatus = initialStatus
 		this.historyItem = historyItem
+		if (this.historyItem) {
+			this.historyItem.chatModelId = this.historyItem.chatModelId || this.taskStartModel
+			this.historyItem.chatProvider = this.historyItem.chatProvider || this.taskStartProvider
+			if (this.historyItem.chatReasoningEffort === undefined) {
+				this.historyItem.chatReasoningEffort = this.taskStartEffort
+			}
+		}
 
 		if (initialClineMessages && initialClineMessages.length > 0) {
 			this.clineMessages = [...initialClineMessages]
@@ -2724,7 +2750,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		const nextProvider = newApiConfiguration?.apiProvider
 
 		// Update the configuration and rebuild the API handler
-		this.apiConfiguration = newApiConfiguration
+		this.apiConfiguration = structuredClone(newApiConfiguration)
 		this.api = buildApiHandler(this.apiConfiguration)
 
 		// Reset ACAC metrics if model or provider changed to prevent immediate spurious compaction
@@ -2804,7 +2830,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		// Get condensing configuration
 		const state = await this.providerRef.deref()?.getState()
 		const customCondensingPrompt = state?.customSupportPrompts?.CONDENSE
-		const { mode } = state ?? {}
+		const mode = this.taskMode || state?.mode || defaultModeSlug
 
 		const { contextTokens: prevContextTokens } = this.getTokenUsage()
 
@@ -5928,7 +5954,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		const state = await this.providerRef.deref()?.getState()
 
 		const {
-			mode,
+			mode: globalMode,
 			customModes,
 			customModePrompts,
 			customInstructions,
@@ -5937,6 +5963,8 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			apiConfiguration,
 			enableSubfolderRules,
 		} = state ?? {}
+
+		const mode = this.taskMode || globalMode || defaultModeSlug
 
 		return await (async () => {
 			const provider = this.providerRef.deref()
@@ -5953,7 +5981,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 				false,
 				mcpHub,
 				this.diffStrategy,
-				mode ?? defaultModeSlug,
+				mode,
 				customModePrompts,
 				customModes,
 				customInstructions,
@@ -5978,8 +6006,9 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 	}
 
 	private getCurrentProfileId(state: any): string {
+		const targetProfileName = this.taskApiConfigName || state?.currentApiConfigName || "default"
 		return (
-			state?.listApiConfigMeta?.find((profile: any) => profile.name === state?.currentApiConfigName)?.id ??
+			state?.listApiConfigMeta?.find((profile: any) => profile.name === targetProfileName)?.id ??
 			"default"
 		)
 	}
@@ -6124,7 +6153,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		const providerKey = coordinator.deriveProviderKey(
 			this.apiConfiguration?.apiProvider,
 			this.apiConfiguration?.apiKey,
-			state?.currentApiConfigName,
+			this.taskApiConfigName || state?.currentApiConfigName,
 		)
 		const lastRequestTime = coordinator.getLastRequestTime(providerKey) ?? Task.lastGlobalApiRequestTime
 
@@ -6164,11 +6193,13 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		const {
 			autoApprovalEnabled,
 			requestDelaySeconds,
-			mode,
+			mode: globalMode,
 			autoCondenseContext = true,
 			autoCondenseContextPercent = 100,
 			profileThresholds = {},
 		} = state ?? {}
+
+		const mode = this.taskMode || globalMode || defaultModeSlug
 
 		// Get condensing configuration for automatic triggers.
 		const customCondensingPrompt = state?.customSupportPrompts?.CONDENSE
@@ -6517,6 +6548,9 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 		}
 
 		try {
+			console.log(
+				`[RequestAudit] taskId=${this.taskId} provider=${this.apiConfiguration?.apiProvider} model=${getModelId(this.apiConfiguration)} effort=${(this.apiConfiguration as any)?.reasoningEffort} executionSnapshotModel=${this.taskStartModel}`,
+			)
 			// The provider accepts reasoning items alongside standard messages; cast to the expected parameter type.
 			const stream = this.api.createMessage(
 				systemPrompt,
@@ -6723,7 +6757,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			const providerKey = coordinator.deriveProviderKey(
 				this.apiConfiguration?.apiProvider,
 				this.apiConfiguration?.apiKey,
-				state?.currentApiConfigName,
+				this.taskApiConfigName || state?.currentApiConfigName,
 			)
 			const lastRequestTime = coordinator.getLastRequestTime(providerKey) ?? Task.lastGlobalApiRequestTime
 			if (lastRequestTime && rateLimit > 0) {

@@ -48,6 +48,7 @@ import {
 	openAiNativeModels,
 	isRetiredProvider,
 } from "@roo-code/types"
+import { resolveTaskExecutionConfig, defaultResolveModelInfo } from "../config/resolveTaskExecutionConfig"
 import { aggregateTaskCostsRecursive, type AggregatedCosts } from "./aggregateTaskCosts"
 
 import { Package } from "../../shared/package"
@@ -998,7 +999,14 @@ export class ClineProvider
 			)
 		}
 
-		const { apiConfiguration, enableCheckpoints, checkpointTimeout, experiments } = await this.getState()
+		const { apiConfiguration: baseApiConfig, enableCheckpoints, checkpointTimeout, experiments } = await this.getState()
+
+		const apiConfiguration = resolveTaskExecutionConfig({
+			baseProviderSettings: baseApiConfig,
+			chatMetadata: historyItem,
+			isNewChat: false,
+			modelInfoResolver: this.resolveModelInfo.bind(this),
+		})
 
 		const task = new Task({
 			provider: this,
@@ -1455,8 +1463,15 @@ export class ClineProvider
 			task.updateApiConfiguration(providerSettings, Boolean(options.allowActiveTaskUpdate))
 		} else {
 			// No rebuild needed, just sync apiConfiguration
-			;(task as any).apiConfiguration = providerSettings
+			;(task as any).apiConfiguration = structuredClone(providerSettings)
 		}
+	}
+
+	public resolveModelInfo(modelId?: string): ModelInfo | undefined {
+		if (!modelId) return undefined
+		const cachedOpenAiModelInfos =
+			(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ?? {}
+		return defaultResolveModelInfo(modelId, cachedOpenAiModelInfos)
 	}
 
 
@@ -2917,8 +2932,35 @@ export class ClineProvider
 			}
 		}
 
-		const { apiConfiguration, organizationAllowList, enableCheckpoints, checkpointTimeout, experiments } =
+		const { apiConfiguration: baseApiConfig, organizationAllowList, enableCheckpoints, checkpointTimeout, experiments } =
 			await this.getState()
+
+		const chatMetadata = parentTask
+			? {
+					chatModelId: parentTask.taskStartModel || getModelId(parentTask.apiConfiguration),
+					chatProvider: parentTask.taskStartProvider || parentTask.apiConfiguration.apiProvider,
+					chatReasoningEffort: parentTask.taskStartEffort ?? (parentTask.apiConfiguration as any)?.reasoningEffort,
+			  }
+			: options.taskId
+			? (this.taskHistoryStore.get(options.taskId) ??
+			  ((await this.getGlobalState("taskHistory")) as HistoryItem[] | undefined)?.find(
+					(item) => item.id === options.taskId,
+			  ))
+			: undefined
+
+		const lastManualModel = (await this.getGlobalState("lastManuallySelectedModel")) as
+			| { modelId?: string; provider?: ProviderName; reasoningEffort?: string }
+			| undefined
+
+		const isNewChat = !parentTask && !chatMetadata
+
+		const executionApiConfig = resolveTaskExecutionConfig({
+			baseProviderSettings: baseApiConfig,
+			chatMetadata,
+			lastManualModel,
+			isNewChat,
+			modelInfoResolver: this.resolveModelInfo.bind(this),
+		})
 
 		// Multi-task concurrency: top-level tasks run concurrently without killing previous tasks
 		if (!parentTask) {
@@ -2928,16 +2970,16 @@ export class ClineProvider
 			}
 		}
 
-		if (!ProfileValidator.isProfileAllowed(apiConfiguration, organizationAllowList)) {
+		if (!ProfileValidator.isProfileAllowed(executionApiConfig, organizationAllowList)) {
 			throw new OrganizationAllowListViolationError(t("common:errors.violated_organization_allowlist"))
 		}
 
 		const task = new Task({
 			provider: this,
-			apiConfiguration,
+			apiConfiguration: executionApiConfig,
 			enableCheckpoints,
 			checkpointTimeout,
-			consecutiveMistakeLimit: apiConfiguration.consecutiveMistakeLimit,
+			consecutiveMistakeLimit: executionApiConfig.consecutiveMistakeLimit,
 			task: text,
 			images,
 			experiments,
