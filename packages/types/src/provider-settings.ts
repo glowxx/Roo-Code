@@ -493,7 +493,10 @@ export const modelIdKeys = [
 
 export type ModelIdKey = (typeof modelIdKeys)[number]
 
-export const getModelId = (settings: ProviderSettings): string | undefined => {
+export const getModelId = (settings?: ProviderSettings | null): string | undefined => {
+	if (!settings) {
+		return undefined
+	}
 	if (settings.apiProvider && isTypicalProvider(settings.apiProvider)) {
 		const key = modelIdKeysByProvider[settings.apiProvider]
 		if (key && settings[key]) {

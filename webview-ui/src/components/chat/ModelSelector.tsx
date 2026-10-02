@@ -11,6 +11,7 @@ import {
 	cleanModelDisplayName,
 	formatModelDisplayName,
 	stripModelTag,
+	setModelId,
 } from "@roo-code/types"
 
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -748,27 +749,8 @@ export const ModelSelector = ({
 			const provider = (apiConfiguration?.apiProvider || "xkiro") as ProviderName
 			const updatedConfig: ProviderSettings = {
 				...apiConfiguration,
-				apiModelId: modelId,
 			}
-
-			if (provider === "xkiro") {
-				updatedConfig.xkiroModelId = modelId
-				updatedConfig.openAiModelId = modelId
-			} else if (provider === "openrouter") {
-				updatedConfig.openRouterModelId = modelId
-			} else if (provider === "openai" || provider === "openai-native") {
-				updatedConfig.openAiModelId = modelId
-			} else if (provider === "ollama") {
-				updatedConfig.ollamaModelId = modelId
-			} else if (provider === "lmstudio") {
-				updatedConfig.lmStudioModelId = modelId
-			} else if (provider === "litellm") {
-				updatedConfig.litellmModelId = modelId
-			} else if (provider === "requesty") {
-				updatedConfig.requestyModelId = modelId
-			} else if (provider === "unbound") {
-				updatedConfig.unboundModelId = modelId
-			}
+			setModelId(updatedConfig, provider, modelId)
 
 			// Check if target model supports reasoning
 			const targetModelItem = availableModels.find((m) => m.id === modelId)
@@ -790,7 +772,7 @@ export const ModelSelector = ({
 				delete updatedConfig.reasoningEffort
 				updatedConfig.enableReasoningEffort = false
 			} else {
-				// Target model supports reasoning - handle clamping
+				// Target model supports reasoning - handle clamping or preserving effort
 				const rawAllowed =
 					targetModelInfo?.reasoningEffortLevels ||
 					(Array.isArray(targetModelInfo?.supportsReasoningEffort)
@@ -823,6 +805,20 @@ export const ModelSelector = ({
 							updatedConfig.enableReasoningEffort = true
 						}
 					}
+				} else if (currentEffort === "disable") {
+					updatedConfig.reasoningEffort = "disable" as any
+					updatedConfig.enableReasoningEffort = false
+				} else {
+					// Coming from non-reasoning model: initialize to default reasoning effort
+					const defaultLevel =
+						targetModelInfo?.reasoningEffort ||
+						(allowedLevels && allowedLevels.length > 0
+							? allowedLevels.some((l) => l.toLowerCase() === "medium")
+								? "medium"
+								: allowedLevels[0].toLowerCase()
+							: "medium")
+					updatedConfig.reasoningEffort = defaultLevel as any
+					updatedConfig.enableReasoningEffort = true
 				}
 			}
 			delete updatedConfig.modelMaxTokens

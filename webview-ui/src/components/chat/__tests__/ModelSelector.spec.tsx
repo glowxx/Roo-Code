@@ -519,4 +519,175 @@ describe("ModelSelector", () => {
 		expect(trigger).toHaveTextContent("Claude 3.7 Sonnet")
 		expect(screen.queryByTestId("next-task-model-badge")).toBeNull()
 	})
+
+	describe("One-click atomic model and reasoning effort selection", () => {
+		test("1. Model A High -> Model B High-compatible: ONE CLICK preserves High and selects Model B", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "openai",
+				apiModelId: "openai/o3-mini",
+				openAiModelId: "openai/o3-mini",
+				reasoningEffort: "high",
+				enableReasoningEffort: true,
+			}
+			mockExtensionState.openAiModels = ["openai/o3-mini", "openai/gpt-5"]
+			mockExtensionState.openAiModelInfos = {
+				"openai/o3-mini": { supportsReasoningEffort: true },
+				"openai/gpt-5": { supportsReasoningEffort: true },
+			}
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			// Click GPT-5 once
+			fireEvent.click(screen.getByText("GPT-5"))
+
+			expect(mockSetApiConfiguration).toHaveBeenCalledTimes(1)
+			expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+				expect.objectContaining({
+					apiModelId: "openai/gpt-5",
+					openAiModelId: "openai/gpt-5",
+					reasoningEffort: "high",
+					enableReasoningEffort: true,
+				}),
+			)
+			expect(vscode.postMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "upsertApiConfiguration",
+					apiConfiguration: expect.objectContaining({
+						apiModelId: "openai/gpt-5",
+						reasoningEffort: "high",
+						enableReasoningEffort: true,
+					}),
+				}),
+			)
+		})
+
+		test("2. Model A High -> Model C unsupported-High: ONE CLICK clamps effort and selects Model C", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "openai",
+				apiModelId: "openai/o3-mini",
+				openAiModelId: "openai/o3-mini",
+				reasoningEffort: "high",
+				enableReasoningEffort: true,
+			}
+			mockExtensionState.openAiModels = ["openai/o3-mini", "custom/low-only-model"]
+			mockExtensionState.openAiModelInfos = {
+				"openai/o3-mini": { supportsReasoningEffort: true },
+				"custom/low-only-model": { supportsReasoningEffort: ["low"] },
+			}
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			fireEvent.click(screen.getByText("Low Only Model"))
+
+			expect(mockSetApiConfiguration).toHaveBeenCalledTimes(1)
+			expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+				expect.objectContaining({
+					apiModelId: "custom/low-only-model",
+					reasoningEffort: "low",
+					enableReasoningEffort: true,
+				}),
+			)
+		})
+
+		test("3. Non-reasoning model -> reasoning model: ONE CLICK initializes default reasoning effort", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "openai",
+				apiModelId: "openai/gpt-4o",
+				openAiModelId: "openai/gpt-4o",
+			}
+			mockExtensionState.openAiModels = ["openai/gpt-4o", "custom/reasoning-target-model"]
+			mockExtensionState.openAiModelInfos = {
+				"openai/gpt-4o": { supportsReasoningEffort: false },
+				"custom/reasoning-target-model": { supportsReasoningEffort: true },
+			}
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			fireEvent.click(screen.getByText("Reasoning Target Model"))
+
+			expect(mockSetApiConfiguration).toHaveBeenCalledTimes(1)
+			expect(mockSetApiConfiguration).toHaveBeenCalledWith(
+				expect.objectContaining({
+					apiModelId: "custom/reasoning-target-model",
+					reasoningEffort: "medium",
+					enableReasoningEffort: true,
+				}),
+			)
+		})
+
+		test("4. 10 consecutive model switches: each succeeds on a single click without dropped selection", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "model-0",
+				xkiroModelId: "model-0",
+			}
+			const modelList = Array.from({ length: 10 }, (_, i) => `custom/batch-model-${i}`)
+			mockExtensionState.openAiModels = modelList
+
+			const { unmount } = render(<ModelSelector />)
+
+			for (let i = 0; i < 10; i++) {
+				fireEvent.click(screen.getByTestId("model-selector-trigger"))
+				const item = screen.getByText(`Batch Model ${i}`)
+				fireEvent.click(item)
+
+				expect(mockSetApiConfiguration).toHaveBeenLastCalledWith(
+					expect.objectContaining({
+						apiModelId: `custom/batch-model-${i}`,
+					}),
+				)
+			}
+
+			expect(mockSetApiConfiguration).toHaveBeenCalledTimes(10)
+			unmount()
+		})
+
+		test("5. Exact regression test: Model A High -> Model B click once never requires second click and preserves High", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "openai",
+				apiModelId: "openai/o3-mini",
+				openAiModelId: "openai/o3-mini",
+				reasoningEffort: "high",
+				enableReasoningEffort: true,
+			}
+			mockExtensionState.openAiModels = ["openai/o3-mini", "anthropic/claude-3.7-sonnet"]
+			mockExtensionState.openAiModelInfos = {
+				"openai/o3-mini": { supportsReasoningEffort: true },
+				"anthropic/claude-3.7-sonnet": { supportsReasoningEffort: true },
+			}
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			// FIRST CLICK on Claude 3.7 Sonnet
+			const claudeItem = screen.getByText("Claude 3.7 Sonnet")
+			fireEvent.click(claudeItem)
+
+			// Must IMMEDIATELY switch to Claude 3.7 Sonnet with High effort in a single dispatch
+			expect(mockSetApiConfiguration).toHaveBeenCalledTimes(1)
+			expect(mockSetApiConfiguration).toHaveBeenCalledWith({
+				apiProvider: "openai",
+				apiModelId: "anthropic/claude-3.7-sonnet",
+				openAiModelId: "anthropic/claude-3.7-sonnet",
+				reasoningEffort: "high",
+				enableReasoningEffort: true,
+			})
+			// Must post message to backend with the target model and High effort
+			expect(vscode.postMessage).toHaveBeenCalledTimes(1)
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "upsertApiConfiguration",
+				text: "default",
+				apiConfiguration: {
+					apiProvider: "openai",
+					apiModelId: "anthropic/claude-3.7-sonnet",
+					openAiModelId: "anthropic/claude-3.7-sonnet",
+					reasoningEffort: "high",
+					enableReasoningEffort: true,
+				},
+			})
+		})
+	})
 })
