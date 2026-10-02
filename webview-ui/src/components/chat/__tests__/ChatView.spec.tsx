@@ -17,6 +17,8 @@ interface ClineMessage {
 	ts: number
 	text?: string
 	partial?: boolean
+	approvalState?: string
+	isAnswered?: boolean
 }
 
 interface ExtensionState {
@@ -1137,6 +1139,91 @@ describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
 			// Oversized "New Chat" button must never appear in chat container
 			expect(queryByText("New Chat")).toBeNull()
 		})
+	})
+
+	it("renders Run Command and Reject buttons when command ask is followed by non-interactive warning after chat switch", async () => {
+		const { getByText } = renderChatView()
+
+		mockPostMessage({
+			currentTaskId: "task-test-switch",
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Install dependencies",
+				},
+				{
+					type: "ask",
+					ask: "command",
+					ts: Date.now() - 1000,
+					text: "npm install",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: Date.now(),
+					text: JSON.stringify({ isSafe: false, riskLevel: "high", reason: "Safety verification temporarily unavailable" }),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:runCommand.title")).toBeInTheDocument()
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+
+		// Clicking Run Command must send yesButtonClicked askResponse
+		fireEvent.click(getByText("chat:runCommand.title"))
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "askResponse",
+				askResponse: "yesButtonClicked",
+			}),
+		)
+	})
+
+	it("renders Run Command and Reject buttons and allows Reject when command ask is followed by non-interactive warning", async () => {
+		const { getByText } = renderChatView()
+
+		mockPostMessage({
+			currentTaskId: "task-test-switch-2",
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Install dependencies",
+				},
+				{
+					type: "ask",
+					ask: "command",
+					ts: Date.now() - 1000,
+					text: "npm install",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: Date.now(),
+					text: JSON.stringify({ isSafe: false, riskLevel: "high", reason: "Safety verification temporarily unavailable" }),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+		})
+
+		// Clicking Reject must send noButtonClicked askResponse
+		fireEvent.click(getByText("chat:reject.title"))
+		expect(vscode.postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "askResponse",
+				askResponse: "noButtonClicked",
+			}),
+		)
 	})
 })
 

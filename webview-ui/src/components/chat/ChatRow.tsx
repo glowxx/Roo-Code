@@ -357,7 +357,12 @@ export const ChatRowContent = ({
 			case "command": {
 				const isEvaluating = message.approvalState === "EVALUATING"
 				const isApproved = message.approvalState === "AUTO_APPROVED"
-				const isAwaitingApproval = isLast && message.type === "ask" && !isCommandExecuting && !isEvaluating
+				const isAwaitingApproval =
+					message.type === "ask" &&
+					!message.isAnswered &&
+					!isCommandExecuting &&
+					!isEvaluating &&
+					(isLast || message.approvalState === "USER_DECISION_REQUIRED")
 				return [
 					isCommandExecuting || isEvaluating ? (
 						<ProgressIndicator />
