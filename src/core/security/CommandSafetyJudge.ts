@@ -22,6 +22,7 @@ import { ExecutionBoundaryAnalyzer } from "./ExecutionBoundaryAnalyzer"
 import { createHash } from "crypto"
 import { parseCommand } from "../../shared/parse-command"
 import { containsDangerousSubstitution } from "../auto-approval/commands"
+import { safeRateLimitHeaders, safeRetryAfterHeader } from "./rateLimitTelemetry"
 
 export function createFailClosedResult(detail: string): SafetyEvaluationResult {
 	return {
@@ -201,6 +202,9 @@ export interface CallProviderParams {
 	signal: AbortSignal
 	maxTokens?: number
 	responseFormat?: "json_object" | "text"
+	onTransportStart?: (at: number) => void
+	onTransportResponse?: (status: number, at: number, retryAfter?: string | null, rateLimitHeaders?: Record<string, string>) => void
+	managedRetry?: boolean
 }
 
 export interface CommandSafetyJudgeOptions {
@@ -1169,6 +1173,9 @@ export class CommandSafetyJudge {
 		signal: AbortSignal
 		maxTokens?: number
 		responseFormat?: "json_object" | "text"
+		onTransportStart?: (at: number) => void
+		onTransportResponse?: (status: number, at: number, retryAfter?: string | null, rateLimitHeaders?: Record<string, string>) => void
+		managedRetry?: boolean
 	}): Promise<ProviderCallDetails> {
 		let baseURL: string | undefined
 		const defaultHeaders: Record<string, string> = {}
@@ -1200,6 +1207,21 @@ export class CommandSafetyJudge {
 			apiKey: params.apiKey || "noop",
 			baseURL,
 			defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
+			// Orchestrated approvals own their bounded retry/deadline policy.
+			...(params.managedRetry ? { maxRetries: 0 } : {}),
+			fetch: async (input, init) => {
+				params.onTransportStart?.(Date.now())
+				const response = await fetch(input, init)
+				const rawRateLimitHeaders: Record<string, string> = {}
+				response.headers.forEach((value, name) => {
+					if (name.startsWith("x-ratelimit-")) rawRateLimitHeaders[name] = value.trim()
+				})
+				params.onTransportResponse?.(
+					response.status, Date.now(), safeRetryAfterHeader(response.headers.get("retry-after")),
+					safeRateLimitHeaders(rawRateLimitHeaders),
+				)
+				return response
+			},
 		})
 
 		const isReasoningModel =
@@ -1226,7 +1248,6 @@ export class CommandSafetyJudge {
 		if (params.provider === "openrouter") {
 			;(requestParams as any).extra_body = { reasoning: { max_tokens: 0 } }
 		} else if (params.provider === "xkiro" && !isReasoningModel) {
-			;(requestParams as any).reasoning_effort = "low"
 			;(requestParams as any).extra_body = { reasoning: { max_tokens: 0 } }
 		}
 

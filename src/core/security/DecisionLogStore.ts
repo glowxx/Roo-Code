@@ -3,6 +3,7 @@ import * as path from "path"
 import type { DecisionLogEntry } from "@roo-code/types"
 import { getTaskDirectoryPath } from "../../utils/storage"
 import { sanitizeForSafetyPrompt } from "./safetyPromptTemplate"
+import { safeRateLimitHeaders, safeRetryAfterHeader } from "./rateLimitTelemetry"
 
 export class DecisionLogStore {
 	private static instance?: DecisionLogStore
@@ -23,9 +24,15 @@ export class DecisionLogStore {
 		const sanitizedGuidance = entry.replanGuidance
 			? sanitizeForSafetyPrompt(entry.replanGuidance, knownSecrets)
 			: entry.replanGuidance
+		const safeAttempts = entry.attemptTimeline?.map((attempt) => ({
+			...attempt,
+			retryAfter: safeRetryAfterHeader(attempt.retryAfter),
+			rateLimitHeaders: safeRateLimitHeaders(attempt.rateLimitHeaders),
+		}))
 
 		const safeEntry: DecisionLogEntry = {
 			...entry,
+			attemptTimeline: safeAttempts,
 			target: sanitizedTarget,
 			reason: sanitizedReason,
 			replanGuidance: sanitizedGuidance,

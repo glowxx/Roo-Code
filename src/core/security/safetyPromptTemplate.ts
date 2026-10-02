@@ -385,9 +385,9 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 		  }
 		: undefined
 
-	const effectiveGoal = compactText(options.taskContext.activeGoal || options.taskContext.userTask, 2000) || "Not specified"
-	const latestUser = compactText(options.taskContext.latestUserInstruction, 1000)
-	const latestSubstantive = compactText(options.taskContext.latestSubstantiveInstruction, 1000)
+	const effectiveGoal = compactText(options.taskContext.activeGoal || options.taskContext.userTask, 600) || "Not specified"
+	const latestUser = compactText(options.taskContext.latestUserInstruction, 400)
+	const latestSubstantive = compactText(options.taskContext.latestSubstantiveInstruction, 400)
 
 	const isUserSameAsGoal = Boolean(latestUser && latestUser.toLowerCase() === effectiveGoal.toLowerCase())
 	const isSubstantiveSame = Boolean(
@@ -408,6 +408,7 @@ export function buildAutonomousApprovalPrompt(options: BuildAutonomousApprovalPr
 			type: options.actionType,
 			rawCommand: options.target?.command,
 			workingDirectory: options.target?.cwd,
+			filePath: (options.target?.filePath || options.target?.path) as string | undefined,
 			workerReason: annotatedWorkerReason,
 		},
 		execution: execution || {

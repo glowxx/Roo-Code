@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { ApprovalOrchestrator } from "../ApprovalOrchestrator"
+import { ProviderRequestCoordinator } from "../../../api/coordination/ProviderRequestCoordinator"
 import { CommandSafetyJudge } from "../CommandSafetyJudge"
 import { DecisionLogStore } from "../DecisionLogStore"
 import { buildAutonomousApprovalPrompt } from "../safetyPromptTemplate"
@@ -126,8 +127,10 @@ describe("AI Command Safety Guardrail - Reliability & Forensic Regression Suite"
 	})
 
 	describe("3. Circuit Breaker & Cooldown Behavior", () => {
+		const candidateKey = ProviderRequestCoordinator.getInstance().deriveProviderKey(
+			"openai", "sk-mock-key", undefined, "verifier",
+		) + ":gpt-4o-mini"
 		it("trips circuit breaker after 2 consecutive failures and enters 30s cooldown", async () => {
-			const candidateKey = "openai:gpt-4o-mini"
 			expect(ApprovalOrchestrator.getVerifierHealth(candidateKey)).toBeUndefined()
 
 			// Failure 1: transient timeout
@@ -143,7 +146,6 @@ describe("AI Command Safety Guardrail - Reliability & Forensic Regression Suite"
 
 		it("immediately permits deterministic safe actions during verifier cooldown (ALLOW_AUTO)", async () => {
 			// Trip circuit breaker
-			const candidateKey = "openai:gpt-4o-mini"
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 
@@ -168,7 +170,6 @@ describe("AI Command Safety Guardrail - Reliability & Forensic Regression Suite"
 
 		it("immediately fails closed ambiguous actions during cooldown without waiting 30s (0ms delay)", async () => {
 			// Trip circuit breaker
-			const candidateKey = "openai:gpt-4o-mini"
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 
@@ -200,7 +201,6 @@ describe("AI Command Safety Guardrail - Reliability & Forensic Regression Suite"
 
 		it("never allows dangerous actions during cooldown (NEVER fail-open)", async () => {
 			// Trip circuit breaker
-			const candidateKey = "openai:gpt-4o-mini"
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 
@@ -225,7 +225,6 @@ describe("AI Command Safety Guardrail - Reliability & Forensic Regression Suite"
 		})
 
 		it("automatically resets health on successful verification", async () => {
-			const candidateKey = "openai:gpt-4o-mini"
 			ApprovalOrchestrator.recordVerifierFailure(candidateKey, VerifierFailureCategory.TIMEOUT)
 			expect(ApprovalOrchestrator.getVerifierHealth(candidateKey)?.consecutiveFailures).toBe(1)
 

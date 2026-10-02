@@ -463,6 +463,29 @@ export interface UnifiedApprovalRequest {
 	}
 }
 
+export interface VerifierAttemptTiming {
+	logicalVerificationId: string
+	attemptId: string
+	provider: string
+	model: string
+	createdAt: number
+	queueEnterAt: number
+	requestStartAt: number | null
+	transportStartAt: number | null
+	responseHeadersAt: number | null
+	requestEndAt: number | null
+	localWaitEndAt: number | null
+	attemptEndAt: number
+	queueWaitMs: number
+	requestMs: number
+	backoffMs: number
+	totalMs: number
+	httpStatus: number | null
+	retryAfter: string | null
+	rateLimitHeaders: Record<string, string>
+	category: string
+}
+
 export interface ApprovalDecisionResult {
 	decision: OrchestratorDecision
 	risk: CommandSafetyRiskLevel
@@ -483,6 +506,9 @@ export interface ApprovalDecisionResult {
 	queueWaitMs?: number
 	requestMs?: number
 	totalMs?: number
+	attemptTimeline?: VerifierAttemptTiming[]
+	approvalPromptBytes?: number
+	approvalPromptApproxTokens?: number
 	auditLog: string
 }
 
@@ -495,7 +521,7 @@ export const approvalDecisionResultSchema = z.object({
 		}
 		return "high" as CommandSafetyRiskLevel
 	}),
-	reason: z.string(),
+	reason: z.string().trim().min(1),
 	taskAligned: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
 	boundary: z.string().nullable().optional(),
 	hostImpact: z.union([z.boolean(), z.null()]).optional().transform((val) => val === true),
@@ -598,6 +624,9 @@ export interface DecisionLogEntry {
 	evaluatorModel?: string
 	fastPath: boolean
 	latencyMs?: number
+	attemptTimeline?: VerifierAttemptTiming[]
+	approvalPromptBytes?: number
+	approvalPromptApproxTokens?: number
 	taskGoal?: string
 	currentStep?: string
 	environment?: string
