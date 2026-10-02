@@ -7,6 +7,7 @@ import type { HistoryItem } from "@roo-code/types"
 import { GlobalFileNames } from "../../shared/globalFileNames"
 import { safeWriteJson } from "../../utils/safeWriteJson"
 import { getStorageBasePath } from "../../utils/storage"
+import { applyDelegationHandoff } from "./delegationHandoff"
 
 /**
  * Index file format for fast startup reads.
@@ -389,10 +390,8 @@ export class TaskHistoryStore {
 					const childId = currentItem.awaitingChildId
 					const childItem = childId ? this.cache.get(childId) : undefined
 
-					// If child does not exist, or was already completed/cancelled before resume,
-					// the parent was orphaned in delegation and cannot be resumed by a child completion.
-					// Recover parent as interrupted with needsAttention: true so user can decide.
-					if (!childId || !childItem || childItem.status === "completed" || childItem.status === "cancelled") {
+					if (!childId || !childItem || childItem.status === "cancelled") {
+						// If child does not exist or was cancelled, parent was orphaned in delegation
 						currentItem = {
 							...currentItem,
 							status: "interrupted",
@@ -400,6 +399,45 @@ export class TaskHistoryStore {
 							needsAttention: true,
 						}
 						itemChanged = true
+					} else if (childItem.status === "completed") {
+						// Crash recovery: child completed, but parent handoff was interrupted before finalization.
+						// Reconcile handoff on disk safely without triggering an automatic AI loop.
+						let recoveredSummary = childItem.completionResultSummary
+						try {
+							const handoff = await applyDelegationHandoff({
+								parentTaskId: taskId,
+								childTaskId: childId,
+								globalStoragePath: this.globalStoragePath,
+								completionResultSummary: recoveredSummary,
+							})
+							recoveredSummary = handoff.completionResultSummary
+						} catch (err) {
+							console.error(
+								`[recoverInterruptedTasks] Failed to reconcile delegation handoff for parent ${taskId} from child ${childId}:`,
+								err,
+							)
+						}
+
+						const childIds = Array.from(new Set([...(currentItem.childIds ?? []), childId]))
+						currentItem = {
+							...currentItem,
+							status: "interrupted",
+							completedByChildId: childId,
+							completionResultSummary: recoveredSummary,
+							awaitingChildId: undefined,
+							childIds,
+							needsAttention: true,
+						}
+						itemChanged = true
+
+						if (!childItem.completionResultSummary && recoveredSummary) {
+							const updatedChild = {
+								...childItem,
+								completionResultSummary: recoveredSummary,
+							}
+							this.cache.set(childId, updatedChild)
+							await this.writeTaskFile(updatedChild).catch(() => {})
+						}
 					} else {
 						// Child exists and is in progress (will be / is interrupted).
 						// Parent remains delegated, awaitingChildId preserved, but needsAttention must be false (no '!').

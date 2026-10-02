@@ -29,15 +29,20 @@ vi.mock("vscode", () => {
 vi.mock("../core/task-persistence/taskMessages", () => ({
 	readTaskMessages: vi.fn().mockResolvedValue([]),
 }))
-vi.mock("../core/task-persistence", () => ({
-	readApiMessages: vi.fn().mockResolvedValue([]),
-	saveApiMessages: vi.fn().mockResolvedValue(undefined),
-	saveTaskMessages: vi.fn().mockResolvedValue(undefined),
-}))
+vi.mock("../core/task-persistence", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../core/task-persistence")>()
+	return {
+		...actual,
+		readApiMessages: vi.fn().mockResolvedValue([]),
+		saveApiMessages: vi.fn().mockResolvedValue(undefined),
+		saveTaskMessages: vi.fn().mockResolvedValue(undefined),
+	}
+})
 
 import { ClineProvider } from "../core/webview/ClineProvider"
 import { readTaskMessages } from "../core/task-persistence/taskMessages"
-import { readApiMessages, saveApiMessages, saveTaskMessages } from "../core/task-persistence"
+import { applyDelegationHandoff, readApiMessages, saveApiMessages, saveTaskMessages } from "../core/task-persistence"
+import { attemptCompletionTool } from "../core/tools/AttemptCompletionTool"
 
 describe("History resume delegation - parent metadata transitions", () => {
 	beforeEach(() => {
@@ -953,5 +958,163 @@ describe("History resume delegation - parent metadata transitions", () => {
 		expect(runningChildTask.abortTask).toHaveBeenCalledWith(true)
 		expect(runningTasks.has("child-in-bg")).toBe(false)
 		expect(clineStack.length).toBe(0)
+	})
+
+	it("applyDelegationHandoff does not duplicate API tool_result when parent already has tool_result (Crash Point C)", async () => {
+		const parentId = "parent-crash-c"
+		const childId = "child-crash-c"
+		const toolUseId = "tool_call_new_task_c"
+		const summary = "Subtask completed safely"
+
+		const existingApiMessages = [
+			{ role: "user", content: [{ type: "text", text: "Start" }] },
+			{
+				role: "assistant",
+				content: [{ type: "tool_use", id: toolUseId, name: "new_task", input: {} }],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUseId,
+						content: `Subtask ${childId} completed.\n\nResult:\n${summary}`,
+					},
+				],
+			},
+		]
+		const existingUiMessages = [
+			{ ts: 1000, type: "say", say: "text", text: "Starting" },
+		]
+
+		const readTaskMock = vi.fn().mockImplementation(async (opts) => {
+			if (opts.taskId === parentId) return [...existingUiMessages]
+			return []
+		})
+		const saveTaskMock = vi.fn().mockResolvedValue(undefined)
+		const readApiMock = vi.fn().mockResolvedValue([...existingApiMessages])
+		const saveApiMock = vi.fn().mockResolvedValue(undefined)
+
+		const result = await applyDelegationHandoff({
+			parentTaskId: parentId,
+			childTaskId: childId,
+			globalStoragePath: "/tmp",
+			completionResultSummary: summary,
+			readTaskMessagesFn: readTaskMock,
+			saveTaskMessagesFn: saveTaskMock,
+			readApiMessagesFn: readApiMock,
+			saveApiMessagesFn: saveApiMock,
+		})
+
+		// API messages must still have exactly 1 tool_result block for toolUseId
+		const toolResults = result.parentApiMessages
+			.filter((m: any) => m.role === "user" && Array.isArray(m.content))
+			.flatMap((m: any) => m.content)
+			.filter((b: any) => b.type === "tool_result" && b.tool_use_id === toolUseId)
+		expect(toolResults).toHaveLength(1)
+
+		// UI messages should have received the subtask_result exactly once
+		expect(saveTaskMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				taskId: parentId,
+				messages: expect.arrayContaining([
+					expect.objectContaining({
+						type: "say",
+						say: "subtask_result",
+						text: summary,
+					}),
+				]),
+			}),
+		)
+	})
+
+	it("AttemptCompletionTool uses typed task.isDelegatingCompletion guard and resets on completion", async () => {
+		const mockTask: any = {
+			taskId: "child-task-guard",
+			parentTaskId: "parent-task-guard",
+			isDelegatingCompletion: false,
+			say: vi.fn().mockResolvedValue(undefined),
+			providerRef: {
+				deref: () => ({
+					getTaskWithId: vi.fn().mockResolvedValue({
+						historyItem: { status: "active" },
+					}),
+					reopenParentFromDelegation: vi.fn().mockImplementation(async () => {
+						// Inside delegation, the typed guard is active
+						expect(mockTask.isDelegatingCompletion).toBe(true)
+					}),
+				}),
+			},
+			clineMessages: [
+				{ type: "say", say: "completion_result", text: "Done" },
+			],
+			updateClineMessage: vi.fn(),
+			markTaskCompleted: vi.fn(),
+			emitFinalTokenUsageUpdate: vi.fn(),
+			getTokenUsage: vi.fn().mockReturnValue({}),
+			toolUsage: {},
+			emit: vi.fn(),
+		}
+
+		let askFinishSubTaskApprovalCalled = false
+		const askFinishSubTaskApproval = async () => {
+			askFinishSubTaskApprovalCalled = true
+			return true
+		}
+		const pushToolResult = vi.fn()
+		const handleError = vi.fn()
+
+		// Run execute
+		await attemptCompletionTool.execute(
+			{ result: "Done" },
+			mockTask,
+			{
+				handleError,
+				pushToolResult,
+				askFinishSubTaskApproval,
+			} as any,
+		)
+
+		expect(askFinishSubTaskApprovalCalled).toBe(true)
+		expect(mockTask.isDelegatingCompletion).toBe(false)
+	})
+
+	it("AttemptCompletionTool skips delegation if child is already completed (Invariant C6)", async () => {
+		const mockProvider = {
+			getTaskWithId: vi.fn().mockResolvedValue({
+				historyItem: { status: "completed" },
+			}),
+			reopenParentFromDelegation: vi.fn(),
+		}
+		const mockTask: any = {
+			taskId: "child-already-done",
+			parentTaskId: "parent-task",
+			isDelegatingCompletion: false,
+			providerRef: {
+				deref: () => mockProvider,
+			},
+			clineMessages: [],
+			say: vi.fn().mockResolvedValue(undefined),
+			ask: vi.fn().mockResolvedValue({ response: "yesButtonClicked" }),
+			markTaskCompleted: vi.fn(),
+			emitFinalTokenUsageUpdate: vi.fn(),
+			getTokenUsage: vi.fn().mockReturnValue({}),
+			toolUsage: {},
+			emit: vi.fn(),
+			flushPendingToolResultsToHistory: vi.fn().mockResolvedValue(undefined),
+		}
+
+		await attemptCompletionTool.execute(
+			{ result: "All done" },
+			mockTask,
+			{
+				handleError: vi.fn(),
+				pushToolResult: vi.fn(),
+				askFinishSubTaskApproval: vi.fn(),
+			} as any,
+		)
+
+		// Must NOT call reopenParentFromDelegation again when child is already completed
+		expect(mockProvider.reopenParentFromDelegation).not.toHaveBeenCalled()
 	})
 })

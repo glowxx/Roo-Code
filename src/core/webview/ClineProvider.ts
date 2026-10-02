@@ -98,12 +98,11 @@ import { Task } from "../task/Task"
 
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import type { ClineMessage, TodoItem } from "@roo-code/types"
-import { readApiMessages, saveApiMessages, saveTaskMessages, TaskHistoryStore } from "../task-persistence"
+import { applyDelegationHandoff, readApiMessages, saveApiMessages, saveTaskMessages, TaskHistoryStore } from "../task-persistence"
 import { readTaskMessages } from "../task-persistence/taskMessages"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
 import { REQUESTY_BASE_URL } from "../../shared/utils/requesty"
-import { validateAndFixToolResultIds } from "../task/validateToolResultIds"
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -1856,17 +1855,50 @@ export class ClineProvider
 			if (this.taskSwitchEpoch !== epoch) {
 				return
 			}
+			let historyItemToOpen = historyItem
 			const awaitingChildId = historyItem.awaitingChildId
+			if (historyItem.status === "delegated" && awaitingChildId) {
+				const child = this.taskHistoryStore.get(awaitingChildId)
+				if (child && child.status === "completed") {
+					try {
+						const handoff = await applyDelegationHandoff({
+							parentTaskId: id,
+							childTaskId: awaitingChildId,
+							globalStoragePath: this.contextProxy.globalStorageUri.fsPath,
+							completionResultSummary: child.completionResultSummary,
+							readTaskMessagesFn: readTaskMessages,
+							saveTaskMessagesFn: saveTaskMessages,
+							readApiMessagesFn: readApiMessages,
+							saveApiMessagesFn: saveApiMessages,
+						})
+						const childIds = Array.from(new Set([...(historyItem.childIds ?? []), awaitingChildId]))
+						const updated: typeof historyItem = {
+							...historyItem,
+							status: "interrupted",
+							completedByChildId: awaitingChildId,
+							completionResultSummary: handoff.completionResultSummary,
+							awaitingChildId: undefined,
+							childIds,
+							needsAttention: true,
+						}
+						await this.updateTaskHistory(updated)
+						historyItemToOpen = updated
+					} catch (err) {
+						this.log(`[showTaskWithId] Failed to reconcile delegation handoff for ${id}: ${err}`)
+					}
+				}
+			}
+
 			const isDelegatedWithPendingChild =
-				historyItem.status === "delegated" &&
-				Boolean(awaitingChildId) &&
-				(!this.taskHistoryStore.get(awaitingChildId!) ||
-					this.taskHistoryStore.get(awaitingChildId!)?.status !== "completed")
+				historyItemToOpen.status === "delegated" &&
+				Boolean(historyItemToOpen.awaitingChildId) &&
+				(!this.taskHistoryStore.get(historyItemToOpen.awaitingChildId!) ||
+					this.taskHistoryStore.get(historyItemToOpen.awaitingChildId!)?.status !== "completed")
 
 			if (isDelegatedWithPendingChild) {
-				await this.createTaskWithHistoryItem(historyItem, { startTask: false })
+				await this.createTaskWithHistoryItem(historyItemToOpen, { startTask: false })
 			} else {
-				await this.createTaskWithHistoryItem(historyItem)
+				await this.createTaskWithHistoryItem(historyItemToOpen)
 			}
 			if (this.taskSwitchEpoch !== epoch) {
 				const rogueIndex = this.clineStack.findIndex((t) => t.taskId === id)
@@ -2628,13 +2660,8 @@ export class ClineProvider
 		const { broadcast = true } = options
 		if (item.status === "completed") {
 			item = { ...item, needsAttention: false }
-		} else if (item.status === "delegated" && item.awaitingChildId && item.needsAttention) {
-			const hasUserDecision = (this.getCurrentTask()?.taskId === item.id ? this.getCurrentTask()?.clineMessages : undefined)?.some(
-				(m) => m.type === "ask" && m.approvalState === "USER_DECISION_REQUIRED",
-			)
-			if (!hasUserDecision) {
-				item = { ...item, needsAttention: false }
-			}
+		} else if (item.status === "delegated" && item.awaitingChildId) {
+			item = { ...item, needsAttention: false }
 		}
 
 		const history = await this.taskHistoryStore.upsert(item)
@@ -3339,13 +3366,10 @@ export class ClineProvider
 		try {
 			const { historyItem } = await this.getTaskWithId(parentTaskId)
 			const childIds = Array.from(new Set([...(historyItem.childIds ?? []), child.taskId]))
-			const hasUserDecisionRequired = (parent.clineMessages ?? []).some(
-				(m) => m.type === "ask" && m.approvalState === "USER_DECISION_REQUIRED",
-			)
 			const updatedHistory: typeof historyItem = {
 				...historyItem,
 				status: "delegated",
-				needsAttention: hasUserDecisionRequired,
+				needsAttention: false,
 				delegatedToId: child.taskId,
 				awaitingChildId: child.taskId,
 				childIds,
@@ -3413,115 +3437,21 @@ export class ClineProvider
 
 			const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
 
-			let parentClineMessages: ClineMessage[] = []
-			try {
-				parentClineMessages = await readTaskMessages({
-					taskId: parentTaskId,
-					globalStoragePath,
-				})
-			} catch {
-				parentClineMessages = []
-			}
-
-			let parentApiMessages: any[] = []
-			try {
-				parentApiMessages = (await readApiMessages({
-					taskId: parentTaskId,
-					globalStoragePath,
-				})) as any[]
-			} catch {
-				parentApiMessages = []
-			}
-
-			// 2) Inject synthetic records: UI subtask_result and update API tool_result
-			const ts = Date.now()
-
-			// Defensive: ensure arrays
-			if (!Array.isArray(parentClineMessages)) parentClineMessages = []
-			if (!Array.isArray(parentApiMessages)) parentApiMessages = []
-
-			const subtaskUiMessage: ClineMessage = {
-				type: "say",
-				say: "subtask_result",
-				text: completionResultSummary,
-				ts,
-			}
-			parentClineMessages.push(subtaskUiMessage)
-			await saveTaskMessages({ messages: parentClineMessages, taskId: parentTaskId, globalStoragePath })
-
-			// Find the tool_use_id from the last assistant message's new_task tool_use
-			let toolUseId: string | undefined
-			for (let i = parentApiMessages.length - 1; i >= 0; i--) {
-				const msg = parentApiMessages[i]
-				if (msg.role === "assistant" && Array.isArray(msg.content)) {
-					for (const block of msg.content) {
-						if (block.type === "tool_use" && block.name === "new_task") {
-							toolUseId = block.id
-							break
-						}
-					}
-					if (toolUseId) break
-				}
-			}
-
-			// Preferred: if the parent history contains the native tool_use for new_task,
-			// inject a matching tool_result for the Anthropic message contract:
-			// user → assistant (tool_use) → user (tool_result)
-			if (toolUseId) {
-				// Check if the last message is already a user message with a tool_result for this tool_use_id
-				// (in case this is a retry or the history was already updated)
-				const lastMsg = parentApiMessages[parentApiMessages.length - 1]
-				let alreadyHasToolResult = false
-				if (lastMsg?.role === "user" && Array.isArray(lastMsg.content)) {
-					for (const block of lastMsg.content) {
-						if (block.type === "tool_result" && block.tool_use_id === toolUseId) {
-							// Update the existing tool_result content
-							block.content = `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`
-							alreadyHasToolResult = true
-							break
-						}
-					}
-				}
-
-				// If no existing tool_result found, create a NEW user message with the tool_result
-				if (!alreadyHasToolResult) {
-					parentApiMessages.push({
-						role: "user",
-						content: [
-							{
-								type: "tool_result" as const,
-								tool_use_id: toolUseId,
-								content: `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`,
-							},
-						],
-						ts,
-					})
-				}
-
-				// Validate the newly injected tool_result against the preceding assistant message.
-				// This ensures the tool_result's tool_use_id matches a tool_use in the immediately
-				// preceding assistant message (Anthropic API requirement).
-				const lastMessage = parentApiMessages[parentApiMessages.length - 1]
-				if (lastMessage?.role === "user") {
-					const validatedMessage = validateAndFixToolResultIds(lastMessage, parentApiMessages.slice(0, -1))
-					parentApiMessages[parentApiMessages.length - 1] = validatedMessage
-				}
-			} else {
-				// If there is no corresponding tool_use in the parent API history, we cannot emit a
-				// tool_result. Fall back to a plain user text note so the parent can still resume.
-				parentApiMessages.push({
-					role: "user",
-					content: [
-						{
-							type: "text" as const,
-							text: `Subtask ${childTaskId} completed.\n\nResult:\n${completionResultSummary}`,
-						},
-					],
-					ts,
-				})
-			}
-
-			await saveApiMessages({ messages: parentApiMessages as any, taskId: parentTaskId, globalStoragePath })
+			// 2) Safely and idempotently apply delegation handoff to parent histories on disk
+			const {
+				completionResultSummary: effectiveSummary,
+				parentClineMessages,
+				parentApiMessages,
+			} = await applyDelegationHandoff({
+				parentTaskId,
+				childTaskId,
+				globalStoragePath,
+				completionResultSummary,
+				readTaskMessagesFn: readTaskMessages,
+				saveTaskMessagesFn: saveTaskMessages,
+				readApiMessagesFn: readApiMessages,
+				saveApiMessagesFn: saveApiMessages,
+			})
 
 			// 3) Close child instance if still open (single-open-task invariant).
 			// Close whether it's in runningTasks or currently active on stack
@@ -3550,6 +3480,7 @@ export class ClineProvider
 				await this.updateTaskHistory({
 					...childHistory,
 					status: "completed",
+					completionResultSummary: effectiveSummary,
 				})
 			} catch (err) {
 				this.log(
@@ -3566,7 +3497,7 @@ export class ClineProvider
 				status: "active",
 				needsAttention: false,
 				completedByChildId: childTaskId,
-				completionResultSummary,
+				completionResultSummary: effectiveSummary,
 				awaitingChildId: undefined,
 				childIds,
 			}
@@ -3574,7 +3505,7 @@ export class ClineProvider
 
 			// 6) Emit TaskDelegationCompleted (provider-level)
 			try {
-				this.emit(RooCodeEventName.TaskDelegationCompleted, parentTaskId, childTaskId, completionResultSummary)
+				this.emit(RooCodeEventName.TaskDelegationCompleted, parentTaskId, childTaskId, effectiveSummary)
 			} catch {
 				// non-fatal
 			}

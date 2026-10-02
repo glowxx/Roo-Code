@@ -11,6 +11,7 @@ import { GlobalFileNames } from "../../../shared/globalFileNames"
 
 vi.mock("../../../utils/storage", () => ({
 	getStorageBasePath: vi.fn().mockImplementation((defaultPath: string) => defaultPath),
+	getTaskDirectoryPath: vi.fn().mockImplementation(async (base: string, id: string) => path.join(base, "tasks", id)),
 }))
 
 // Mock safeWriteJson to use plain fs writes in tests (avoids proper-lockfile issues)
@@ -563,7 +564,99 @@ describe("TaskHistoryStore", () => {
 			const recovered = store.get("parent-comp-child")
 			expect(recovered?.status).toBe("interrupted")
 			expect(recovered?.awaitingChildId).toBeUndefined()
+			expect(recovered?.completedByChildId).toBe("child-already-done")
 			expect(recovered?.needsAttention).toBe(true)
+		})
+
+		it("recovers missing delegation handoff from child ui messages into parent histories on restart (Crash Point B)", async () => {
+			const parentId = "parent-crash-b"
+			const childId = "child-crash-b"
+			const tasksDir = path.join(tmpDir, "tasks")
+
+			const parentDir = path.join(tasksDir, parentId)
+			const childDir = path.join(tasksDir, childId)
+			await fs.mkdir(parentDir, { recursive: true })
+			await fs.mkdir(childDir, { recursive: true })
+
+			// Parent has new_task tool call but crash occurred before tool_result was written
+			const parentApi = [
+				{ role: "user", content: "Delegate a task" },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "call_new_task_123",
+							name: "new_task",
+							input: { message: "subtask work" },
+						},
+					],
+				},
+			]
+			const parentUi = [
+				{ ts: 1000, type: "say", say: "text", text: "Starting parent" },
+			]
+			await fs.writeFile(path.join(parentDir, GlobalFileNames.apiConversationHistory), JSON.stringify(parentApi))
+			await fs.writeFile(path.join(parentDir, GlobalFileNames.uiMessages), JSON.stringify(parentUi))
+
+			// Child finished with completion_result
+			const childUi = [
+				{ ts: 2000, type: "say", say: "text", text: "Child working" },
+				{ ts: 3000, type: "say", say: "completion_result", text: "Child output result details" },
+			]
+			await fs.writeFile(path.join(childDir, GlobalFileNames.uiMessages), JSON.stringify(childUi))
+
+			const parentItem = makeHistoryItem({
+				id: parentId,
+				status: "delegated",
+				awaitingChildId: childId,
+				needsAttention: false,
+			})
+			const childItem = makeHistoryItem({
+				id: childId,
+				parentTaskId: parentId,
+				status: "completed",
+				needsAttention: false,
+			})
+
+			await store.initialize()
+			await store.upsert(parentItem)
+			await store.upsert(childItem)
+
+			// Crash recovery triggers
+			await store.recoverInterruptedTasks()
+
+			const recoveredParent = store.get(parentId)
+			expect(recoveredParent?.status).toBe("interrupted")
+			expect(recoveredParent?.awaitingChildId).toBeUndefined()
+			expect(recoveredParent?.completedByChildId).toBe(childId)
+			expect(recoveredParent?.completionResultSummary).toBe("Child output result details")
+			expect(recoveredParent?.needsAttention).toBe(true)
+
+			// Verify parent API conversation history got tool_result exactly once
+			const updatedParentApi = JSON.parse(await fs.readFile(path.join(parentDir, GlobalFileNames.apiConversationHistory), "utf8"))
+			const lastApiMsg = updatedParentApi[updatedParentApi.length - 1]
+			expect(lastApiMsg.role).toBe("user")
+			expect(lastApiMsg.content[0].type).toBe("tool_result")
+			expect(lastApiMsg.content[0].tool_use_id).toBe("call_new_task_123")
+			expect(lastApiMsg.content[0].content).toContain("Child output result details")
+
+			// Verify parent UI messages got subtask_result exactly once
+			const updatedParentUi = JSON.parse(await fs.readFile(path.join(parentDir, GlobalFileNames.uiMessages), "utf8"))
+			const subtaskUiMsgs = updatedParentUi.filter((m: any) => m.type === "say" && m.say === "subtask_result")
+			expect(subtaskUiMsgs).toHaveLength(1)
+			expect(subtaskUiMsgs[0].text).toBe("Child output result details")
+
+			// Second recovery run must be completely idempotent (survive repeated restarts)
+			await store.recoverInterruptedTasks()
+
+			const secondParentApi = JSON.parse(await fs.readFile(path.join(parentDir, GlobalFileNames.apiConversationHistory), "utf8"))
+			const toolResultCount = secondParentApi.filter((m: any) => m.role === "user" && Array.isArray(m.content) && m.content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "call_new_task_123")).length
+			expect(toolResultCount).toBe(1)
+
+			const secondParentUi = JSON.parse(await fs.readFile(path.join(parentDir, GlobalFileNames.uiMessages), "utf8"))
+			const secondSubtaskUiMsgs = secondParentUi.filter((m: any) => m.type === "say" && m.say === "subtask_result")
+			expect(secondSubtaskUiMsgs).toHaveLength(1)
 		})
 
 		it("decouples child whose parent does not exist by clearing parentTaskId", async () => {
