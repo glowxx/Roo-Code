@@ -12,7 +12,9 @@ out-*/
 build/
 !apps/desktop/build/
 !apps/desktop/build/**
+!packages/build/
 bin/
+target/
 release/
 apps/desktop/release/
 *.blockmap
@@ -29,6 +31,9 @@ roo-cli-*.tar.gz*
 *.exe
 !**/rg.exe
 *.dmg
+*.msi
+*.pkg
+*.tgz
 
 # Environment, secrets & credentials (NEVER commit personal or sensitive data)
 *.env*
@@ -60,7 +65,12 @@ id_ed25519
 brain/
 transcripts/
 *.transcript*
-.roo/
+.roo/mcp.json
+.roo/*.local*
+.cursor/
+.cline/
+.aider*
+CLAUDE.local.md
 /local-prompts/
 AGENTS.local.md
 plans/
@@ -72,8 +82,14 @@ roo_desktop_data/
 .roo-desktop-data/
 qdrant_storage/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Logs & debugging
 logs/
@@ -84,6 +100,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.crash
+*.dmp
+*.dump
 
 # Operating System files
 .DS_Store
@@ -97,7 +116,11 @@ desktop.ini
 
 # IDEs & Editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .vscode-test/
 .qodo/
 .vercel
@@ -122,3 +145,6 @@ sessions/
 .sessions/
 *.swp
 *~
+__pycache__/
+*.py[cod]
+*$py.class
