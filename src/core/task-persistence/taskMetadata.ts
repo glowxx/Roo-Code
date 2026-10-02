@@ -147,13 +147,9 @@ export async function taskMetadata({
 		if (resolvedStatus === "interrupted") {
 			needsAttention = true
 		} else if (resolvedStatus === "delegated" && awaitingChildId) {
-			// A delegated parent task awaiting child execution does not need user attention
-			// unless there is an explicit independent ask that requires a user decision.
-			if (hasMessages && messages.some((m) => m.type === "ask" && m.approvalState === "USER_DECISION_REQUIRED")) {
-				needsAttention = true
-			} else {
-				needsAttention = false
-			}
+			// A delegated parent task awaiting child execution does not need user attention.
+			// Attention is directed to the active child task.
+			needsAttention = false
 		} else if (hasMessages) {
 			const lastAskIdx = findLastIndex(messages, (m) => m.type === "ask")
 			if (lastAskIdx !== -1) {
@@ -167,9 +163,8 @@ export async function taskMetadata({
 						m.say !== "api_req_retry_delayed",
 				)
 
-				// An ask requires user attention if it is the latest unresolved turn,
-				// or if it explicitly requires user decision.
-				if (lastAskIdx > lastSubstantiveSayIdx || lastAsk.approvalState === "USER_DECISION_REQUIRED") {
+				// An ask requires user attention if it is the latest unresolved turn that has not been answered.
+				if (lastAskIdx > lastSubstantiveSayIdx && !lastAsk.isAnswered) {
 					const isIdleAsk = lastAsk.ask === "resume_completed_task"
 					const isAutoApproved = lastAsk.approvalState === "AUTO_APPROVED"
 					const isEvaluating = lastAsk.approvalState === "EVALUATING"

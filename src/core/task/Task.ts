@@ -406,6 +406,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolResultBlockParam)[] = []
 	userMessageContentReady = false
 	isTaskCompleted = false
+	public isDelegatingCompletion = false
 
 	public auditLifecycleState(event: string): void {
 		const provider = this.providerRef.deref()

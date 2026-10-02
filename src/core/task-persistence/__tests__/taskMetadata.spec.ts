@@ -157,7 +157,7 @@ describe("taskMetadata lifecycle & attention derivation", () => {
 		expect(result.historyItem.delegatedToId).toBe("child-task-1")
 	})
 
-	it("flags delegated task with needsAttention: true if an explicit USER_DECISION_REQUIRED ask is present", async () => {
+	it("keeps delegated parent with needsAttention: false even if historical USER_DECISION_REQUIRED ask was present", async () => {
 		const messages: ClineMessage[] = [
 			{ ts: 1000, type: "say", say: "text", text: "Parent task" },
 			{ ts: 1500, type: "ask", ask: "command", text: "rm -rf /", approvalState: "USER_DECISION_REQUIRED" },
@@ -172,6 +172,78 @@ describe("taskMetadata lifecycle & attention derivation", () => {
 		})
 
 		expect(result.historyItem.status).toBe("delegated")
+		expect(result.historyItem.needsAttention).toBe(false)
+	})
+
+	it("keeps delegated parent needsAttention: false after historical approved run", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Starting parent work" },
+			{ ts: 1500, type: "ask", ask: "command", text: "npm test", approvalState: "USER_DECISION_REQUIRED" },
+			{ ts: 1600, type: "say", say: "command_output", text: "All tests passed" },
+			{ ts: 1700, type: "say", say: "text", text: "Tests succeeded, now delegating to subtask" },
+			{ ts: 1800, type: "ask", ask: "tool", text: "new_task" },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "delegated",
+			awaitingChildId: "child-task-1",
+		})
+
+		expect(result.historyItem.status).toBe("delegated")
+		expect(result.historyItem.needsAttention).toBe(false)
+	})
+
+	it("keeps delegated parent needsAttention: false after historical denied run", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Starting parent work" },
+			{ ts: 1500, type: "ask", ask: "command", text: "npm run deploy", approvalState: "USER_DECISION_REQUIRED" },
+			{ ts: 1600, type: "say", say: "user_feedback", text: "Denied by user" },
+			{ ts: 1700, type: "say", say: "text", text: "Understood, delegating research instead" },
+			{ ts: 1800, type: "ask", ask: "tool", text: "new_task" },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "delegated",
+			awaitingChildId: "child-task-1",
+		})
+
+		expect(result.historyItem.status).toBe("delegated")
+		expect(result.historyItem.needsAttention).toBe(false)
+	})
+
+	it("flags active task with needsAttention: true when there is a REAL current unresolved USER_DECISION_REQUIRED", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Running dangerous action" },
+			{ ts: 2000, type: "ask", ask: "command", text: "drop database production", approvalState: "USER_DECISION_REQUIRED" },
+		]
+
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "active",
+		})
+
+		expect(result.historyItem.status).toBe("active")
+		expect(result.historyItem.needsAttention).toBe(true)
+	})
+
+	it("preserves needsAttention: true on real pending decision regardless of chat reading", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1000, type: "say", say: "text", text: "Question for user" },
+			{ ts: 2000, type: "ask", ask: "tool", text: "delete_file", approvalState: "USER_DECISION_REQUIRED" },
+		]
+
+		// Merely reading the chat does not add answers or substantive says
+		const result = await taskMetadata({
+			...baseOptions,
+			messages,
+			initialStatus: "active",
+		})
+
 		expect(result.historyItem.needsAttention).toBe(true)
 	})
 })

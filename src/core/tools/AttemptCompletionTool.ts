@@ -128,10 +128,10 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 								// Fall through to normal completion ask flow
 							} else {
 								// Prevent duplicate in-flight completion calls
-								if ((task as any)._isDelegatingCompletion) {
+								if (task.isDelegatingCompletion) {
 									return
 								}
-								;(task as any)._isDelegatingCompletion = true
+								task.isDelegatingCompletion = true
 								try {
 									const delegation = await this.delegateToParent(
 										task,
@@ -150,7 +150,7 @@ export class AttemptCompletionTool extends BaseTool<"attempt_completion"> {
 									}
 									if (delegation !== "continue") return
 								} finally {
-									;(task as any)._isDelegatingCompletion = false
+									task.isDelegatingCompletion = false
 								}
 							}
 						} else {
