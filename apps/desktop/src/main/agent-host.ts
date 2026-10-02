@@ -845,13 +845,13 @@ export class DesktopAgentHost extends EventEmitter {
 					}
 				}
 				if (runningTask.isStarted === false && !runningTask.isStreaming && !isAnswered && !isTaskRunning) {
-					status = (item.status === "interrupted" || pendingAskType === "resume_task" || isUserDecisionRequired)
+					status = ((item.status === "interrupted" || pendingAskType === "resume_task" || isUserDecisionRequired) && item.status !== "delegated")
 						? "needs_attention"
 						: "completed"
 				}
 			} else if (item.status === "failed") {
 				status = "failed"
-			} else if (item.status === "completed" || item.status === "cancelled") {
+			} else if (item.status === "completed" || item.status === "cancelled" || item.status === "delegated") {
 				status = "completed"
 			} else if (item.status === "interrupted" || item.status === "active" || (item as any).needsAttention === true) {
 				status = "needs_attention"
@@ -860,7 +860,7 @@ export class DesktopAgentHost extends EventEmitter {
 			}
 
 			const isChatActive = String(item.id) === this.activeTaskId
-			const hasUnread = isChatActive ? false : Boolean(item.hasUnread)
+			const hasUnread = isChatActive || item.status === "delegated" ? false : Boolean(item.hasUnread)
 
 			const creationTs = item.createdAt ?? extractCreationTimestamp(String(item.id), typeof item.ts === "number" ? item.ts : 0)
 			const list = result[ws] ?? []

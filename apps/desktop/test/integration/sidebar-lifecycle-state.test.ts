@@ -385,5 +385,101 @@ describe("Sidebar Lifecycle State & Indicator Derivation", () => {
 
 		expect(historySpy).toHaveBeenCalled()
 	})
+
+	it("maps delegated parent to neutral completed status without attention while child runs", () => {
+		const childTask = {
+			taskId: "child-task-1",
+			taskStatus: "running",
+			isStreaming: true,
+			isStarted: true,
+			isTaskRunning: true,
+			isTaskCompleted: false,
+			askResponse: undefined,
+			clineMessages: [],
+		}
+
+		const mockProvider: any = {
+			runningTasks: new Map([["child-task-1", childTask]]),
+			taskHistoryStore: {
+				getAll: () => [
+					{
+						id: "parent-task-1",
+						number: 1,
+						ts: 1000,
+						task: "Parent task",
+						workspace: "/test/workspace",
+						status: "delegated",
+						awaitingChildId: "child-task-1",
+						needsAttention: false,
+					},
+					{
+						id: "child-task-1",
+						number: 2,
+						ts: 2000,
+						task: "Child task",
+						workspace: "/test/workspace",
+						status: "active",
+						parentTaskId: "parent-task-1",
+					},
+				],
+			},
+		}
+
+		agentHost.registerWebviewProvider("test-view", mockProvider)
+
+		const chats = Object.values(agentHost.getChatsByWorkspace()).flat() as SidebarChatEntry[]
+		const parentChat = chats.find((c) => c.id === "parent-task-1")
+		const childChat = chats.find((c) => c.id === "child-task-1")
+
+		// Parent must NOT be needs_attention (no '!') and hasUnread must be false
+		expect(parentChat?.status).toBe("completed")
+		expect(parentChat?.hasUnread).toBe(false)
+
+		// Child is running (spinner)
+		expect(childChat?.status).toBe("running")
+	})
+
+	it("keeps delegated parent neutral when child task becomes interrupted with needs_attention", () => {
+		const mockProvider: any = {
+			runningTasks: new Map(),
+			taskHistoryStore: {
+				getAll: () => [
+					{
+						id: "parent-task-2",
+						number: 1,
+						ts: 1000,
+						task: "Parent task",
+						workspace: "/test/workspace",
+						status: "delegated",
+						awaitingChildId: "child-task-2",
+						needsAttention: false,
+					},
+					{
+						id: "child-task-2",
+						number: 2,
+						ts: 2000,
+						task: "Child task",
+						workspace: "/test/workspace",
+						status: "interrupted",
+						needsAttention: true,
+						parentTaskId: "parent-task-2",
+					},
+				],
+			},
+		}
+
+		agentHost.registerWebviewProvider("test-view", mockProvider)
+
+		const chats = Object.values(agentHost.getChatsByWorkspace()).flat() as SidebarChatEntry[]
+		const parentChat = chats.find((c) => c.id === "parent-task-2")
+		const childChat = chats.find((c) => c.id === "child-task-2")
+
+		// Parent remains neutral (no '!')
+		expect(parentChat?.status).toBe("completed")
+		expect(parentChat?.hasUnread).toBe(false)
+
+		// Child has attention badge ('!')
+		expect(childChat?.status).toBe("needs_attention")
+	})
 })
 

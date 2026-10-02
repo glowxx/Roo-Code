@@ -176,6 +176,7 @@ interface ChatTextAreaProps {
 	placeholderText?: string
 	selectedImages?: string[]
 	shouldDisableImages?: boolean
+	onResume?: () => void
 }
 
 const mockInputRef = React.createRef<HTMLInputElement>()
@@ -215,6 +216,7 @@ vi.mock("../ChatTextArea", () => {
 					}}
 					data-sending-disabled={props.sendingDisabled}
 				/>
+				{props.onResume && <button onClick={props.onResume}>Continue</button>}
 			</div>
 		)
 	})
@@ -1114,8 +1116,8 @@ describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
 		})
 	})
 
-	it("does NOT render the oversized full-width button bar for resume_task state", async () => {
-		const { queryByText } = renderChatView()
+	it("does NOT render the oversized full-width button bar for resume_task state and renders exactly one Continue", async () => {
+		const { queryByText, queryAllByText } = renderChatView()
 
 		mockPostMessage({
 			resumeTaskId: "task-paused-123",
@@ -1138,6 +1140,35 @@ describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
 		await waitFor(() => {
 			// Oversized "New Chat" button must never appear in chat container
 			expect(queryByText("New Chat")).toBeNull()
+			// Exactly ONE Continue button exists (the discrete inline button in ChatTextArea)
+			const continueButtons = queryAllByText("Continue")
+			expect(continueButtons.length).toBe(1)
+		})
+	})
+
+	it("renders ZERO Continue buttons for delegated parent task", async () => {
+		const { queryAllByText } = renderChatView()
+
+		mockPostMessage({
+			currentTaskId: "parent-del-task",
+			currentTaskItem: {
+				id: "parent-del-task",
+				status: "delegated",
+				awaitingChildId: "child-task-99",
+			},
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Parent delegated",
+				},
+			],
+		})
+
+		await waitFor(() => {
+			const continueButtons = queryAllByText("Continue")
+			expect(continueButtons.length).toBe(0)
 		})
 	})
 

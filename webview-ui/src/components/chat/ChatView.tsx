@@ -579,8 +579,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						case "resume_task":
 							setSendingDisabled(false)
 							setClineAsk("resume_task")
-							setEnableButtons(true)
-							setPrimaryButtonText(t("chat:resumeTask.title"))
+							setEnableButtons(false)
+							setPrimaryButtonText(undefined)
 							setSecondaryButtonText(undefined)
 							setDidClickCancel(false) // special case where we reset the cancel button state
 							break
@@ -2173,7 +2173,13 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				selectedImages={selectedImages}
 				setSelectedImages={setSelectedImages}
 				onSend={() => handleSendMessage(inputValue, selectedImages)}
-				onResume={clineAsk === "resume_task" ? handleResumeTask : undefined}
+				onResume={
+					clineAsk === "resume_task" &&
+					currentTaskItem?.status !== "delegated" &&
+					!currentTaskItem?.awaitingChildId
+						? handleResumeTask
+						: undefined
+				}
 				onSelectImages={selectImages}
 				shouldDisableImages={shouldDisableImages}
 				onHeightChange={() => {
