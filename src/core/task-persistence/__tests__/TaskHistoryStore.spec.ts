@@ -448,4 +448,45 @@ describe("TaskHistoryStore", () => {
 			expect(store.get("gone-task")).toBeUndefined()
 		})
 	})
+
+	describe("recoverInterruptedTasks()", () => {
+		it("recovers active tasks to interrupted with needsAttention: true", async () => {
+			const activeItem = makeHistoryItem({ id: "active-1", status: "active", needsAttention: false })
+			await store.initialize()
+			await store.upsert(activeItem)
+
+			await store.recoverInterruptedTasks()
+
+			const recovered = store.get("active-1")
+			expect(recovered?.status).toBe("interrupted")
+			expect(recovered?.needsAttention).toBe(true)
+		})
+
+		it("normalizes completed tasks clearing stale needsAttention: true to false", async () => {
+			const completedItem = makeHistoryItem({ id: "completed-stale", status: "completed", needsAttention: true })
+			await store.initialize()
+			await store.upsert(completedItem)
+
+			await store.recoverInterruptedTasks()
+
+			const normalized = store.get("completed-stale")
+			expect(normalized?.status).toBe("completed")
+			expect(normalized?.needsAttention).toBe(false)
+		})
+
+		it("invokes onWrite when items are changed during recovery", async () => {
+			const onWriteMock = vi.fn()
+			const storeWithOnWrite = new TaskHistoryStore(tmpDir, { onWrite: onWriteMock })
+			const completedItem = makeHistoryItem({ id: "completed-stale-2", status: "completed", needsAttention: true })
+			await storeWithOnWrite.initialize()
+			await storeWithOnWrite.upsert(completedItem)
+			onWriteMock.mockClear()
+
+			await storeWithOnWrite.recoverInterruptedTasks()
+
+			expect(onWriteMock).toHaveBeenCalled()
+			storeWithOnWrite.dispose()
+		})
+	})
 })
+

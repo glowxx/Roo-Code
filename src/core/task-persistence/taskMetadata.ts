@@ -64,6 +64,7 @@ export async function taskMetadata({
 	let tokenUsage: ReturnType<typeof getApiMetrics>
 	let taskDirSize: number
 	let taskMessage: ClineMessage | undefined
+	let lastRelevantMessage: ClineMessage | undefined
 
 	if (!hasMessages) {
 		// Handle no messages case
@@ -81,7 +82,7 @@ export async function taskMetadata({
 		// Handle messages case
 		taskMessage = messages[0] // First message is always the task say.
 
-		const lastRelevantMessage =
+		lastRelevantMessage =
 			messages[findLastIndex(messages, (m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))] ||
 			taskMessage
 
@@ -106,21 +107,51 @@ export async function taskMetadata({
 
 	const createdAt = hasMessages ? (taskMessage?.ts ?? Date.now()) : Date.now()
 
+	// Determine completion from explicit status or completion message at task end
+	const hasCompletionMessage =
+		lastRelevantMessage?.ask === "completion_result" ||
+		lastRelevantMessage?.say === "completion_result"
+
+	const isCompleted =
+		initialStatus === "completed" ||
+		hasCompletionMessage ||
+		(hasMessages &&
+			messages.some((m) => m.ask === "resume_completed_task") &&
+			!messages.slice(findLastIndex(messages, (m) => m.ask === "resume_completed_task") + 1).some((m) => m.type === "say" && m.say === "user_feedback"))
+
+	let resolvedStatus = initialStatus
+	if (isCompleted && (!resolvedStatus || resolvedStatus === "active" || resolvedStatus === "interrupted")) {
+		resolvedStatus = "completed"
+	}
+
 	let needsAttention = false
-	if (hasMessages) {
-		const lastAskIdx = findLastIndex(messages, (m) => m.type === "ask")
-		if (lastAskIdx !== -1) {
-			const lastSayIdx = findLastIndex(messages, (m) => m.type === "say")
-			const lastAsk = messages[lastAskIdx]
-			if (
-				lastAskIdx > lastSayIdx ||
-				lastAsk.ask === "followup" ||
-				lastAsk.approvalState === "USER_DECISION_REQUIRED" ||
-				lastAsk.ask === "command" ||
-				lastAsk.ask === "tool" ||
-				lastAsk.ask === "resume_task"
-			) {
-				needsAttention = true
+	if (!isCompleted) {
+		if (resolvedStatus === "interrupted") {
+			needsAttention = true
+		} else if (hasMessages) {
+			const lastAskIdx = findLastIndex(messages, (m) => m.type === "ask")
+			if (lastAskIdx !== -1) {
+				const lastAsk = messages[lastAskIdx]
+				const lastSubstantiveSayIdx = findLastIndex(
+					messages,
+					(m) =>
+						m.type === "say" &&
+						m.say !== "command_safety_warning" &&
+						m.say !== "api_req_rate_limit_wait" &&
+						m.say !== "api_req_retry_delayed",
+				)
+
+				// An ask requires user attention if it is the latest unresolved turn,
+				// or if it explicitly requires user decision.
+				if (lastAskIdx > lastSubstantiveSayIdx || lastAsk.approvalState === "USER_DECISION_REQUIRED") {
+					const isIdleAsk = lastAsk.ask === "resume_completed_task"
+					const isAutoApproved = lastAsk.approvalState === "AUTO_APPROVED"
+					const isEvaluating = lastAsk.approvalState === "EVALUATING"
+
+					if (!isIdleAsk && !isAutoApproved && !isEvaluating) {
+						needsAttention = true
+					}
+				}
 			}
 		}
 	}
@@ -152,7 +183,7 @@ export async function taskMetadata({
 		...(chatProvider ? { chatProvider } : {}),
 		...(chatReasoningEffort ? { chatReasoningEffort } : {}),
 		...(typeof apiConfigName === "string" && apiConfigName.length > 0 ? { apiConfigName } : {}),
-		...(initialStatus && { status: initialStatus }),
+		...(resolvedStatus && { status: resolvedStatus }),
 		...(typeof title === "string" && title.length > 0 ? { title } : {}),
 		...(titleSource ? { titleSource } : {}),
 	}
