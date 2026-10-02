@@ -12,4 +12,16 @@ describe("xKiro standard pricing", () => {
 			totalOutputTokens: 200,
 		})
 	})
+
+	it("resolves openai/gpt-6.1-sol with 1M context window and reasoning effort support", () => {
+		const config = { apiProvider: "xkiro" as const, xkiroApiKey: "key", xkiroModelId: "openai/gpt-6.1-sol" }
+		const model = buildApiHandler(config).getModel()
+		expect(model.id).toBe("openai/gpt-6.1-sol")
+		expect(model.info.contextWindow).toBe(1_000_000)
+		expect(model.info.maxTokens).toBe(65_536)
+		expect(model.info.supportsReasoningEffort).toBe(true)
+		expect(model.info.preserveReasoning).toBe(true)
+		expect(model.info.inputPrice).toBe(5.0)
+		expect(model.info.outputPrice).toBe(30.0)
+	})
 })

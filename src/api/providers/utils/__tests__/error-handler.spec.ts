@@ -257,6 +257,24 @@ describe("handleProviderError", () => {
 			expect(result.message).toContain("Invalid API key")
 		})
 	})
+
+	describe("cause and code preservation", () => {
+		it("should extract code from cause.code when error.code is missing", () => {
+			const undiciError = new TypeError("terminated") as any
+			undiciError.cause = {
+				name: "SocketError",
+				message: "other side closed",
+				code: "UND_ERR_SOCKET",
+			}
+
+			const result = handleProviderError(undiciError, "xKiro")
+			expect((result as any).code).toBe("UND_ERR_SOCKET")
+			expect((result as any).cause).toBe(undiciError.cause)
+			expect((result as any).category).toBe("network_error")
+			expect((result as any).retryable).toBe(true)
+			expect((result as any).maxRetries).toBe(3)
+		})
+	})
 })
 
 describe("handleOpenAIError (backward compatibility)", () => {

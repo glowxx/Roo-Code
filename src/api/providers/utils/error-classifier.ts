@@ -319,11 +319,21 @@ export function classifyApiError(error: unknown): ApiErrorClassification {
 		"ENOTFOUND",
 		"ECONNREFUSED",
 		"UND_ERR_SOCKET",
+		"UND_ERR_BODY_TIMEOUT",
 		"ERR_STREAM_PREMATURE_CLOSE",
 	]
+	const causeCode = anyErr.cause?.code || ""
+	const causeMessage = anyErr.cause?.message || ""
 	if (
 		networkCodes.includes(code) ||
-		/connection reset|socket hang up|network error|econnreset|etimedout|premature close/i.test(message)
+		networkCodes.includes(causeCode) ||
+		/connection reset|socket hang up|network error|econnreset|etimedout|premature close|\bterminated\b|other side closed/i.test(
+			message,
+		) ||
+		/connection reset|socket hang up|network error|econnreset|etimedout|premature close|\bterminated\b|other side closed/i.test(
+			causeMessage,
+		) ||
+		(anyErr.name === "TypeError" && /terminated/i.test(message))
 	) {
 		return {
 			category: "network_error",

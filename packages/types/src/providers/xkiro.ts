@@ -5,6 +5,8 @@ export type XKiroModelId =
 	| "deepseek/deepseek-reasoner"
 	| "anthropic/claude-3.7-sonnet"
 	| "anthropic/claude-3.5-sonnet"
+	| "openai/gpt-6.1-sol"
+	| "openai/gpt-6.1-astra"
 	| "openai/gpt-6-sol"
 	| "openai/gpt-6-astra"
 	| "openai/gpt-5.6-terra"
@@ -74,6 +76,58 @@ export const xkiroModels = {
 		cacheWritesPrice: 0,
 		cacheReadsPrice: 1,
 		description: "xKiro GPT-6 Astra: Next-gen flagship model with 1M context window.",
+	},
+	"openai/gpt-6.1-astra": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 10,
+		outputPrice: 50,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 1,
+		description: "xKiro GPT-6.1 Astra: Next-gen flagship model with 1M context window.",
+	},
+	"gpt-6.1-astra": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 10,
+		outputPrice: 50,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 1,
+		description: "xKiro GPT-6.1 Astra: Next-gen flagship model with 1M context window.",
+	},
+	"openai/gpt-6.1-sol": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 5.0,
+		outputPrice: 30.0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0.5,
+		description: "xKiro GPT-6.1 Sol: Next-generation reasoning model with 1M context window.",
+	},
+	"gpt-6.1-sol": {
+		maxTokens: 65_536,
+		contextWindow: 1_000_000,
+		supportsImages: true,
+		supportsPromptCache: true,
+		preserveReasoning: true,
+		supportsReasoningEffort: true,
+		inputPrice: 5.0,
+		outputPrice: 30.0,
+		cacheWritesPrice: 0,
+		cacheReadsPrice: 0.5,
+		description: "xKiro GPT-6.1 Sol: Next-generation reasoning model with 1M context window.",
 	},
 	"openai/gpt-6-sol": {
 		maxTokens: 65_536,

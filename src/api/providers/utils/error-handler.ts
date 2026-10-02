@@ -105,6 +105,11 @@ export function handleProviderError(
 			;(wrapped as any).code = anyErr.code
 		} else if (anyErr.error?.code !== undefined) {
 			;(wrapped as any).code = anyErr.error.code
+		} else if (anyErr.cause?.code !== undefined) {
+			;(wrapped as any).code = anyErr.cause.code
+		}
+		if (anyErr.cause !== undefined) {
+			;(wrapped as any).cause = anyErr.cause
 		}
 		if (anyErr.type !== undefined) {
 			;(wrapped as any).type = anyErr.type

@@ -202,5 +202,36 @@ describe("error-classifier", () => {
 			expect(res.maxRetries).toBe(0)
 			expect(res.isDeterministic).toBe(true)
 		})
+
+		it("classifies xKiro completion error: terminated as network_error with max 3 retries", () => {
+			const res = classifyApiError(new Error("xKiro completion error: terminated"))
+			expect(res.category).toBe("network_error")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(3)
+			expect(res.isDeterministic).toBe(false)
+		})
+
+		it("classifies TypeError: terminated with undici UND_ERR_SOCKET cause as network_error", () => {
+			const undiciError = new TypeError("terminated") as any
+			undiciError.cause = {
+				name: "SocketError",
+				message: "other side closed",
+				code: "UND_ERR_SOCKET",
+			}
+			const res = classifyApiError(undiciError)
+			expect(res.category).toBe("network_error")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(3)
+			expect(res.isDeterministic).toBe(false)
+		})
+
+		it("classifies error with 'other side closed' cause message as network_error", () => {
+			const socketErr = new Error("stream error") as any
+			socketErr.cause = new Error("other side closed")
+			const res = classifyApiError(socketErr)
+			expect(res.category).toBe("network_error")
+			expect(res.retryable).toBe(true)
+			expect(res.maxRetries).toBe(3)
+		})
 	})
 })
