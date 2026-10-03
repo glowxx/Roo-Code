@@ -4,6 +4,7 @@ import type { ProviderLimits as LimitsData } from "@roo-code/types"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { vscode } from "@src/utils/vscode"
 import { Button } from "@src/components/ui"
+import { guideProgress, usageProgress } from "./providerLimitProgress"
 
 type WindowData = NonNullable<LimitsData["windows"]>[number]
 
@@ -14,25 +15,31 @@ const money = (raw?: string) => {
 }
 const tokens = (value?: number) =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0 ? new Intl.NumberFormat().format(value) : undefined
-const percentUsed = (used?: number, cap?: number) => {
-	if (used === undefined || cap === undefined || !Number.isFinite(used) || !Number.isFinite(cap) || used < 0 || cap <= 0) return undefined
-	const ratio = used / cap
-	const percentage = ratio * 100
-	return Number.isFinite(percentage) ? Number(percentage.toFixed(1)) : undefined
-}
+const amountNumber = (raw?: string) => raw !== undefined && /^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : undefined
 const validDate = (timestamp?: number) =>
 	typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0 && Number.isFinite(new Date(timestamp).getTime())
 		? new Date(timestamp) : undefined
 
-function UsageBar({ percent, label }: { percent?: number; label: string }) {
-	if (percent === undefined) return null
-	const fill = percent >= 95 ? "bg-destructive" : percent >= 80 ? "bg-vscode-editorWarning-foreground" : "bg-primary"
+function UsageBar({ progress, guide, label, paceLabel }: { progress?: number; guide?: number; label: string; paceLabel: (over: boolean, percent: string) => string }) {
+	if (progress === undefined) return null
+	const percent = (progress * 100).toFixed(1)
+	const guidePercent = guide === undefined ? undefined : (guide * 100).toFixed(1)
+	const overPace = guide !== undefined && progress > guide
 	return <div className="space-y-1.5">
-		<div className="h-2 rounded-full bg-vscode-editor-background overflow-hidden" role="progressbar"
-			aria-label={label} aria-valuenow={Math.min(percent, 100)} aria-valuemin={0} aria-valuemax={100}>
-			<div className={"h-full rounded-full " + fill} style={{ width: Math.min(percent, 100) + "%" }} />
+		<div className="relative h-2.5 rounded-full border border-border bg-vscode-editor-background" role="progressbar"
+			aria-label={label} aria-valuenow={Number(percent)} aria-valuemin={0} aria-valuemax={100}>
+			{guide !== undefined && <div aria-hidden="true" className="absolute inset-y-0 left-0 rounded-full bg-muted-foreground/20"
+				style={{ width: `${guide * 100}%` }} />}
+			<div className={`absolute inset-y-0 left-0 rounded-full ${overPace ? "bg-destructive" : "bg-chart-2"}`}
+				style={{ width: `${percent}%` }} />
+			{guide !== undefined && <div aria-hidden="true" data-testid="usage-pace-guide"
+				className="absolute -top-0.5 -bottom-0.5 z-10 w-0.5 rounded-full bg-muted-foreground"
+				style={{ left: `clamp(0px, calc(${guide * 100}% - 1px), calc(100% - 2px))` }} />}
 		</div>
-		<p className="m-0 text-xs text-vscode-descriptionForeground text-right">{percent.toFixed(1)}%</p>
+		<div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 text-xs tabular-nums text-muted-foreground">
+			<span className="min-w-0 text-[11px]">{guidePercent === undefined ? null : paceLabel(overPace, guidePercent)}</span>
+			<span>{percent}%</span>
+		</div>
 	</div>
 }
 
@@ -44,6 +51,7 @@ export function ProviderLimits() {
 	const [loading, setLoading] = useState(true)
 	const [refreshError, setRefreshError] = useState(false)
 	const [now, setNow] = useState(Date.now())
+	const paceLabel = (over: boolean, percent: string) => label(over ? "abovePace" : "withinPace", { value: percent })
 	const latestRequestId = useRef("")
 	const requestCounter = useRef(0)
 	const request = useCallback((refresh = false) => {
@@ -103,8 +111,8 @@ export function ProviderLimits() {
 		const spent = money(item.spentUsd)
 		const cap = money(item.capUsd)
 		const remaining = money(item.remainingUsd)
-		const percent = percentUsed(item.spentUsd === undefined ? undefined : Number(item.spentUsd),
-			item.capUsd === undefined ? undefined : Number(item.capUsd))
+		const progress = usageProgress(amountNumber(item.spentUsd), amountNumber(item.capUsd))
+		const guide = guideProgress(item.resetAt, item.windowSeconds === undefined ? undefined : item.windowSeconds * 1000, now)
 		const reset = validDate(item.resetAt)
 		const title = windowTitle(item)
 		return <article key={item.kind + index} className="min-w-0 rounded-lg border border-border bg-vscode-input-background p-4 space-y-4">
@@ -115,7 +123,7 @@ export function ProviderLimits() {
 					: <p className="m-0 text-sm text-vscode-descriptionForeground">{label("remainingUnavailable")}</p>}
 				{spent && cap ? <p className="m-0 mt-1 text-xs tabular-nums text-vscode-descriptionForeground">{spent} / {cap} {label("used")}</p> : null}
 			</div>
-			<UsageBar percent={percent} label={title + " " + label("used")} />
+			<UsageBar progress={progress} guide={guide} label={title + " " + label("used")} paceLabel={paceLabel} />
 			{reset ? <p className="m-0 text-xs text-vscode-descriptionForeground" title={reset.toLocaleString()}>
 				{reset.getTime() <= now ? label("resetDue") : label("resetsIn", { time: relative(item.resetAt) || "" })}</p> : null}
 			{!spent && !cap && !remaining ? <p className="m-0 text-xs text-vscode-descriptionForeground">{label("usageUnavailable")}</p> : null}
@@ -125,7 +133,8 @@ export function ProviderLimits() {
 	const wallet = limits?.wallet
 	const hasFreeData = Boolean(free && [free.usedToday, free.limitPerDay, free.remaining].some((value) => tokens(value) !== undefined))
 	const hasWalletData = Boolean(wallet && (money(wallet.balanceUsd) || money(wallet.heldUsd)))
-	const freePercent = percentUsed(free?.usedToday, free?.limitPerDay)
+	const freeProgress = usageProgress(free?.usedToday, free?.limitPerDay)
+	const freeGuide = guideProgress(free?.resetAt, 86_400_000, now)
 	const hasUsage = limits?.status === "supported" || limits?.status === "partial"
 	const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 16rem), 1fr))", gap: "0.75rem" } as const
 
@@ -158,7 +167,7 @@ export function ProviderLimits() {
 						<div>{tokens(free.remaining) ? <><p className="m-0 text-[11px] uppercase tracking-wide text-vscode-descriptionForeground">{label("remaining")}</p>
 							<p className="m-0 text-2xl font-semibold tabular-nums">{tokens(free.remaining)}</p></> : null}
 							{tokens(free.usedToday) && tokens(free.limitPerDay) ? <p className="m-0 mt-1 text-xs tabular-nums text-vscode-descriptionForeground">{tokens(free.usedToday)} / {tokens(free.limitPerDay)} {label("usedToday")}</p> : null}</div>
-						<UsageBar percent={freePercent} label={label("freeTokens")} />
+						<UsageBar progress={freeProgress} guide={freeGuide} label={label("freeTokens")} paceLabel={paceLabel} />
 						{validDate(free.resetAt) ? <p className="m-0 text-xs text-vscode-descriptionForeground" title={validDate(free.resetAt)!.toLocaleString()}>
 							{validDate(free.resetAt)!.getTime() <= now ? label("resetDue") : label("resetsIn", { time: relative(free.resetAt) || "" })}</p> : null}
 					</article> : null}

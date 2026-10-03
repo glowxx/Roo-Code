@@ -418,6 +418,8 @@
 		"windowMinutes": "{{value}}-minute usage",
 		"resetsIn": "Resets in {{time}}",
 		"used": "used",
+		"abovePace": "Above pace · {{value}}% expected",
+		"withinPace": "Within pace · {{value}}% expected",
 		"remainingUnavailable": "Remaining unavailable",
 		"usageUnavailable": "Usage details are not available yet.",
 		"loading": "Loading usage…",

@@ -88,7 +88,7 @@ describe("ProviderLimits", () => {
 		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument()
 	})
 
-	it("does not render an invalid percentage or stale reset countdown", () => {
+	it("clamps extreme percentages and does not show a stale reset countdown", () => {
 		render(<ProviderLimits />)
 		receive({
 			provider: "xkiro", status: "partial",
@@ -97,7 +97,8 @@ describe("ProviderLimits", () => {
 		})
 		expect(screen.getByText("resetDue")).toBeInTheDocument()
 		expect(screen.queryByText(/Infinity%|NaN%/)).not.toBeInTheDocument()
-		expect(screen.getAllByRole("progressbar")).toHaveLength(1)
+		expect(screen.getAllByRole("progressbar")).toHaveLength(2)
+		expect(screen.getAllByText("100.0%")).toHaveLength(2)
 	})
 
 	it("renders reset countdown for free tokens matching spending card format", () => {
@@ -115,6 +116,51 @@ describe("ProviderLimits", () => {
 			},
 		})
 		expect(screen.getByText("Resets in 4h 12m")).toBeInTheDocument()
+	})
+
+	it("uses consumed share and the time guide for 5-hour, 7-day and free-token cards", () => {
+		const now = Date.now()
+		render(<ProviderLimits />)
+		receive({
+			provider: "xkiro", status: "supported",
+			windows: [
+				{ kind: "short", windowSeconds: 18_000, spentUsd: "8.79", capUsd: "10.00", remainingUsd: "1.21", resetAt: now + 2.5 * 3_600_000 },
+				{ kind: "long", windowSeconds: 604_800, spentUsd: "1", capUsd: "10", remainingUsd: "9", resetAt: now + 3.5 * 86_400_000 },
+			],
+			freeTokens: { usedToday: 25, limitPerDay: 100, remaining: 75, resetAt: now + 12 * 3_600_000 },
+			wallet: { balanceUsd: "5.00" },
+		})
+		const fiveHour = screen.getByRole("progressbar", { name: "5-hour usage used" })
+		const sevenDay = screen.getByRole("progressbar", { name: "7-day usage used" })
+		const free = screen.getByRole("progressbar", { name: "freeTokens" })
+		expect(fiveHour).toHaveAttribute("aria-valuenow", "87.9")
+		expect(fiveHour.querySelector(".bg-destructive")).toHaveStyle({ width: "87.9%" })
+		expect(sevenDay.querySelector(".bg-chart-2")).toHaveStyle({ width: "10%" })
+		expect(free.querySelector(".bg-chart-2")).toHaveStyle({ width: "25%" })
+		for (const bar of [fiveHour, sevenDay, free]) {
+			expect(bar.querySelector('[data-testid="usage-pace-guide"]')).toBeInTheDocument()
+			expect(parseFloat((bar.querySelector('[aria-hidden="true"]') as HTMLElement).style.width)).toBeCloseTo(50, 1)
+		}
+		expect(screen.getByText("$8.79 / $10.00 used")).toBeInTheDocument()
+		expect(screen.getByText("87.9%")).toBeInTheDocument()
+		expect(screen.getAllByRole("progressbar")).toHaveLength(3)
+	})
+
+	it("keeps a normal usage bar without a trustworthy reset and clamps overspend", () => {
+		render(<ProviderLimits />)
+		receive({
+			provider: "xkiro", status: "partial",
+			windows: [{ kind: "short", windowSeconds: 18_000, spentUsd: "12", capUsd: "10", remainingUsd: "-2" }],
+			freeTokens: { usedToday: 25, limitPerDay: 0, remaining: -1 },
+		})
+		const bar = screen.getByRole("progressbar", { name: "5-hour usage used" })
+		expect(bar).toHaveAttribute("aria-valuenow", "100")
+		expect(bar.querySelector(".bg-chart-2")).toHaveStyle({ width: "100%" })
+		expect(bar.querySelector('[data-testid="usage-pace-guide"]')).not.toBeInTheDocument()
+		expect(screen.getByText("100.0%")).toBeInTheDocument()
+		expect(screen.getByText("remainingUnavailable")).toBeInTheDocument()
+		expect(screen.queryByText(/-1|-2/)).not.toBeInTheDocument()
+		expect(screen.getAllByRole("progressbar")).toHaveLength(1)
 	})
 })
 
