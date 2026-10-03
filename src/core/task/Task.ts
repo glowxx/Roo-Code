@@ -57,6 +57,7 @@ import {
 	type ApprovalActionType,
 	type ApprovalDecisionResult,
 	type CanonicalConstraint,
+	VerifierFailureCategory,
 	QueuedMessage,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
@@ -68,7 +69,8 @@ import {
 	cleanModelDisplayName,
 } from "@roo-code/types"
 import { CommandSafetyJudge, SAFETY_EVALUATION_FALLBACK_RESULT } from "../security/CommandSafetyJudge"
-import { ApprovalOrchestrator } from "../security/ApprovalOrchestrator"
+import { ApprovalOrchestrator, isDeferredRetryableCategory } from "../security/ApprovalOrchestrator"
+import { DeferredApprovalRecoveryController } from "../security/DeferredApprovalRecovery"
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
@@ -374,6 +376,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private askResponseImages?: string[]
 	public lastMessageTs?: number
 	private autoApprovalTimeoutRef?: NodeJS.Timeout
+	private deferredRecoveryController?: DeferredApprovalRecoveryController
 
 	// Tool Use
 	consecutiveMistakeCount: number = 0
@@ -2432,7 +2435,7 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							this.updateClineMessage(completionSayMsg)
 						}
 					}
-					const warningPayload: SafetyEvaluationResult & { infrastructureFailure?: boolean } = {
+					const warningPayload: SafetyEvaluationResult = {
 						isSafe: false,
 						riskLevel: decisionResult.risk || "high",
 						reason: decisionResult.reason,
@@ -2440,6 +2443,19 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 					}
 					await this.say("command_safety_warning", JSON.stringify(warningPayload))
 					this.lastMessageTs = askTs
+
+					if (
+						decisionResult.infrastructureFailure &&
+						isDeferredRetryableCategory(decisionResult.verifierFailureCategory)
+					) {
+						this.startDeferredApprovalRecovery({
+							request,
+							state: { ...state, apiConfiguration: this.apiConfiguration },
+							askMsg,
+							askTs,
+							initialDecision: decisionResult,
+						})
+					}
 				}
 			}
 		} else {
@@ -2529,6 +2545,11 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 							this.approveAsk()
 						} else {
 							approval = { decision: "ask" }
+							const askMsg = this.clineMessages.find((m) => m.ts === askTs)
+							if (askMsg) {
+								askMsg.approvalState = "USER_DECISION_REQUIRED"
+								this.updateClineMessage(askMsg)
+							}
 							const warningPayload: SafetyEvaluationResult = {
 								isSafe: twoStageResult.stage1?.isSafe ?? false,
 								riskLevel: twoStageResult.stage1?.riskLevel ?? "critical",
@@ -2727,6 +2748,10 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			clearTimeout(this.autoApprovalTimeoutRef)
 			this.autoApprovalTimeoutRef = undefined
 		}
+		if (this.deferredRecoveryController) {
+			this.deferredRecoveryController.cancel("user_interaction")
+			this.deferredRecoveryController = undefined
+		}
 	}
 
 	public approveAsk({ text, images }: { text?: string; images?: string[] } = {}) {
@@ -2739,6 +2764,229 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 
 	public supersedePendingAsk(): void {
 		this.lastMessageTs = Date.now()
+	}
+
+	/**
+	 * Starts bounded deferred recovery for transient verifier failures (e.g. timeout, rate limit, provider error).
+	 * Fails closed (maintains USER_DECISION_REQUIRED), does not hold semaphores/locks during wait,
+	 * respects Retry-After with fallback to exponential backoff with jitter (max 3 attempts).
+	 * If the user interacts/runs/denies, recovery is immediately cancelled and executed exactly once.
+	 */
+	private startDeferredApprovalRecovery({
+		request,
+		state,
+		askMsg,
+		askTs,
+		initialDecision,
+	}: {
+		request: UnifiedApprovalRequest
+		state: Partial<ExtensionState>
+		askMsg?: ClineMessage
+		askTs: number
+		initialDecision: ApprovalDecisionResult
+	}): void {
+		// Clean up any previous controller
+		if (this.deferredRecoveryController) {
+			this.deferredRecoveryController.cancel("superseded")
+			this.deferredRecoveryController = undefined
+		}
+
+		const controller = new DeferredApprovalRecoveryController({
+			maxAttempts: 3,
+			baseDelayMs: 15000,
+			maxDelayMs: 60000,
+			minDelayMs: 5000,
+			jitterRatio: 0.2,
+		})
+		this.deferredRecoveryController = controller
+
+		void (async () => {
+			let currentDecision = initialDecision
+			while (
+				!controller.isCancelled &&
+				!this.abort &&
+				this.askResponse === undefined &&
+				this.lastMessageTs === askTs
+			) {
+				const retryAfter = currentDecision.retryAfterMs
+				const scheduled = controller.scheduleAttempt(retryAfter)
+				if (!scheduled) {
+					// Max attempts reached or cancelled
+					break
+				}
+
+				console.log(
+					`[DeferredRecovery] Scheduled attempt ${scheduled.schedule.attempt}/${scheduled.schedule.maxAttempts} in ${scheduled.schedule.delayMs}ms for ${request.id}`,
+				)
+
+				// Update command_safety_warning with deferredRetry schedule
+				const warningPayload: SafetyEvaluationResult = {
+					isSafe: false,
+					riskLevel: currentDecision.risk || "high",
+					reason: currentDecision.reason,
+					infrastructureFailure: true,
+					deferredRetry: scheduled.schedule,
+				}
+				const lastWarning = findLast(this.clineMessages, (m) => m.say === "command_safety_warning")
+				if (lastWarning) {
+					lastWarning.text = JSON.stringify(warningPayload)
+					void this.updateClineMessage(lastWarning)
+				}
+
+				// Wait for backoff timer to fire (or cancellation)
+				const waitFired = await scheduled.waitPromise
+				if (
+					!waitFired ||
+					controller.isCancelled ||
+					this.abort ||
+					this.askResponse !== undefined ||
+					this.lastMessageTs !== askTs
+				) {
+					console.log(`[DeferredRecovery] Cancelled or superseded during wait for ${request.id}`)
+					break
+				}
+
+				console.log(`[DeferredRecovery] Executing attempt ${scheduled.schedule.attempt} for ${request.id}`)
+
+				// Execute verification with abort signal
+				let retryResult: ApprovalDecisionResult
+				try {
+					retryResult = await this.approvalOrchestrator.evaluate(request, state, {
+						signal: scheduled.abortSignal,
+					})
+				} catch (error) {
+					console.error(`[DeferredRecovery] Error during evaluation attempt ${scheduled.schedule.attempt}:`, error)
+					retryResult = {
+						decision: "MANUAL_APPROVAL",
+						risk: "high",
+						reason: `Safety verification temporarily unavailable. Review this action manually. (${error instanceof Error ? error.message : String(error)})`,
+						taskAligned: false,
+						infrastructureFailure: true,
+						verifierFailureCategory: VerifierFailureCategory.OTHER_TRANSIENT,
+					}
+				}
+
+				// Check again if user interacted or task aborted during evaluation
+				if (
+					controller.isCancelled ||
+					this.abort ||
+					this.askResponse !== undefined ||
+					this.lastMessageTs !== askTs
+				) {
+					console.log(`[DeferredRecovery] Ignored retry result because ask was answered or aborted for ${request.id}`)
+					break
+				}
+
+				currentDecision = retryResult
+
+				if (retryResult.decision === "ALLOW_AUTO") {
+					console.log(`[DeferredRecovery] Attempt ${scheduled.schedule.attempt} SUCCEEDED with ALLOW_AUTO for ${request.id}`)
+					if (request.actionType === "attempt_completion") {
+						this.consecutiveAttemptCompletionCount = (this.consecutiveAttemptCompletionCount || 0) + 1
+						if (this.consecutiveAttemptCompletionCount > 2) {
+							// Hard loop protection
+							if (askMsg) {
+								askMsg.approvalState = "USER_DECISION_REQUIRED"
+								void this.updateClineMessage(askMsg)
+							}
+							break
+						}
+					}
+					if (askMsg) {
+						askMsg.approvalState = "AUTO_APPROVED"
+						void this.updateClineMessage(askMsg)
+					}
+					if (request.actionType === "attempt_completion") {
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "AUTO_APPROVED"
+							void this.updateClineMessage(completionSayMsg)
+						}
+					}
+					this.approveAsk()
+					this.consecutiveReplanCount = 0
+					this.unresolvedDenialState = null
+					break
+				} else if (retryResult.decision === "DENY_AND_REPLAN" || retryResult.decision === "HARD_BLOCK") {
+					console.log(`[DeferredRecovery] Attempt ${scheduled.schedule.attempt} rejected with ${retryResult.decision} for ${request.id}`)
+					if (askMsg) {
+						askMsg.approvalState = "DENIED"
+						void this.updateClineMessage(askMsg)
+					}
+					if (request.actionType === "attempt_completion") {
+						const completionSayMsg = findLast(this.clineMessages, (m) => m.say === "completion_result")
+						if (completionSayMsg) {
+							completionSayMsg.approvalState = "DENIED"
+							void this.updateClineMessage(completionSayMsg)
+						}
+					}
+					const payload =
+						retryResult.decision === "HARD_BLOCK"
+							? formatResponse.toolHardBlocked(retryResult.reason, retryResult.replanGuidance)
+							: formatResponse.toolDeniedAndReplan(retryResult.reason, retryResult.replanGuidance)
+					this.denyAsk({ text: payload })
+					break
+				} else if (retryResult.decision === "CONTINUE_WORK") {
+					if (askMsg) {
+						askMsg.approvalState = "DENIED"
+						void this.updateClineMessage(askMsg)
+					}
+					const payload = formatResponse.continueWork({
+						reason: retryResult.reason,
+						unresolvedItems: retryResult.unresolvedItems?.map((item) => ({
+							type: item.type,
+							content: item.content,
+							guidance: item.guidance ?? undefined,
+						})),
+						missingCriteria: retryResult.missingCriteria,
+						guidance: retryResult.replanGuidance || undefined,
+					})
+					this.denyAsk({ text: payload })
+					break
+				} else {
+					// Still MANUAL_APPROVAL
+					if (!retryResult.infrastructureFailure || !isDeferredRetryableCategory(retryResult.verifierFailureCategory)) {
+						console.log(`[DeferredRecovery] Attempt ${scheduled.schedule.attempt} returned non-retryable MANUAL_APPROVAL for ${request.id}`)
+						const finalWarningPayload: SafetyEvaluationResult = {
+							isSafe: false,
+							riskLevel: retryResult.risk || "high",
+							reason: retryResult.reason,
+							infrastructureFailure: retryResult.infrastructureFailure,
+						}
+						const lastWarning = findLast(this.clineMessages, (m) => m.say === "command_safety_warning")
+						if (lastWarning) {
+							lastWarning.text = JSON.stringify(finalWarningPayload)
+							void this.updateClineMessage(lastWarning)
+						}
+						break
+					}
+				}
+			}
+
+			// Clean up warning if retries exhausted without success
+			if (
+				!controller.isCancelled &&
+				this.askResponse === undefined &&
+				this.lastMessageTs === askTs &&
+				controller.currentAttempt >= 3
+			) {
+				const finalWarningPayload: SafetyEvaluationResult = {
+					isSafe: false,
+					riskLevel: currentDecision.risk || "high",
+					reason: currentDecision.reason,
+					infrastructureFailure: currentDecision.infrastructureFailure,
+				}
+				const lastWarning = findLast(this.clineMessages, (m) => m.say === "command_safety_warning")
+				if (lastWarning) {
+					lastWarning.text = JSON.stringify(finalWarningPayload)
+					void this.updateClineMessage(lastWarning)
+				}
+			}
+
+			if (this.deferredRecoveryController === controller) {
+				this.deferredRecoveryController = undefined
+			}
+		})()
 	}
 
 	/**
@@ -3698,6 +3946,10 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			// Check if there is an unresolved actionable ask waiting for user approval/decision.
 			// If so, we must preserve it, not emit a new resume ask, and not mark the task completed.
 			const lastAsk = [...this.clineMessages].reverse().find((m) => m.type === "ask")
+			if (lastAsk && !lastAsk.isAnswered && lastAsk.approvalState === "EVALUATING") {
+				lastAsk.approvalState = "USER_DECISION_REQUIRED"
+				void this.updateClineMessage(lastAsk)
+			}
 			const trailingAfterAsk = lastAsk ? this.clineMessages.slice(this.clineMessages.lastIndexOf(lastAsk) + 1) : []
 			const hasTrailingSafetyWarning = trailingAfterAsk.some((m) => m.say === "command_safety_warning")
 			const trailingAllNonSubstantive = trailingAfterAsk.every(
@@ -4231,6 +4483,14 @@ You MUST continue the task using strictly compliant, read-only inspection or alt
 			this.compactionAbortController?.abort()
 		} catch (error) {
 			console.error("Error cancelling compaction:", error)
+		}
+
+		// Cancel any deferred approval recovery
+		try {
+			this.deferredRecoveryController?.cancel("task_disposed")
+			this.deferredRecoveryController = undefined
+		} catch (error) {
+			console.error("Error cancelling deferred recovery:", error)
 		}
 
 		// Cancel any in-progress HTTP request

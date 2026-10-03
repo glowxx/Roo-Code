@@ -30,6 +30,7 @@ import { ProviderRequestCoordinator } from "../../api/coordination/ProviderReque
 import { RequestPriority, RequestTicket } from "../../api/coordination/types"
 import { safeExtractJson, type SafeJsonExtractResult } from "./SafeJsonExtractor"
 import { safeRateLimitHeaders, safeRetryAfterHeader } from "./rateLimitTelemetry"
+import { extractRetryAfterMsFromTimeline } from "./DeferredApprovalRecovery"
 
 export interface VerifierHealthState {
 	consecutiveFailures: number
@@ -173,6 +174,18 @@ export function isTransientVerifierError(category: VerifierFailureCategory): boo
 		category === VerifierFailureCategory.TIMEOUT ||
 		category === VerifierFailureCategory.PROVIDER_ERROR ||
 		category === VerifierFailureCategory.NETWORK ||
+		category === VerifierFailureCategory.RATE_LIMIT ||
+		category === VerifierFailureCategory.OTHER_TRANSIENT
+	)
+}
+
+export function isDeferredRetryableCategory(category?: VerifierFailureCategory): boolean {
+	if (!category) return false
+	return (
+		category === VerifierFailureCategory.TIMEOUT ||
+		category === VerifierFailureCategory.PROVIDER_ERROR ||
+		category === VerifierFailureCategory.NETWORK ||
+		category === VerifierFailureCategory.RATE_LIMIT ||
 		category === VerifierFailureCategory.OTHER_TRANSIENT
 	)
 }
@@ -600,8 +613,32 @@ export class ApprovalOrchestrator {
 					if (lastCategory === VerifierFailureCategory.RATE_LIMIT) {
 						const waitMs = retryAfterMs(error)
 						coordinator.reportRateLimit(providerKey, (waitMs ?? 5000) / 1000)
-						if (waitMs !== undefined && waitMs <= 2000 && candidateAttempts < maxAttemptsForCandidate &&
-							deadline - Date.now() > waitMs + 1500) {
+						if (
+							waitMs !== undefined &&
+							waitMs <= 2000 &&
+							candidateAttempts < maxAttemptsForCandidate &&
+							deadline - Date.now() > waitMs + 1500 &&
+							!params.signal?.aborted
+						) {
+							attemptCompletedAt = Date.now()
+							await new Promise<void>((resolve) => {
+								const timer = setTimeout(resolve, waitMs)
+								if (params.signal) {
+									params.signal.addEventListener(
+										"abort",
+										() => {
+											clearTimeout(timer)
+											resolve()
+										},
+										{ once: true },
+									)
+								}
+							})
+							if (params.signal?.aborted) {
+								lastCategory = VerifierFailureCategory.CANCELLED
+								attemptCategory = lastCategory
+								break
+							}
 							continue
 						}
 						break
@@ -654,7 +691,13 @@ export class ApprovalOrchestrator {
 						backoffMs,
 						totalMs: attemptEndAt - attemptCreatedAt,
 						httpStatus: responseStatus || (attemptCategory !== "SUCCESS" ? errorStatus(lastError) ?? null : null),
-						retryAfter: responseRetryAfter ?? null,
+						retryAfter:
+							responseRetryAfter ??
+							(lastError
+								? retryAfterMs(lastError)
+									? String(Math.round(retryAfterMs(lastError)! / 1000))
+									: null
+								: null),
 						rateLimitHeaders: rateLimitHeaders ?? {},
 						category: attemptCategory,
 					}
@@ -1664,6 +1707,8 @@ export class ApprovalOrchestrator {
 		const highestRisk = request.executionBoundary?.hostImpact.highestRisk
 		const fallbackRisk: CommandSafetyRiskLevel = highestRisk && highestRisk !== "none" ? highestRisk : "medium"
 
+		const extractedRetryAfterMs = extractRetryAfterMsFromTimeline(execResult.attemptTimeline)
+
 		const result: ApprovalDecisionResult = {
 			decision: "MANUAL_APPROVAL",
 			risk: fallbackRisk,
@@ -1680,6 +1725,8 @@ export class ApprovalOrchestrator {
 			approvalPromptBytes: promptBytes,
 			approvalPromptApproxTokens: promptApproxTokens,
 			auditLog,
+			retryAfterMs: extractedRetryAfterMs,
+			inCooldown: execResult.inCooldown,
 		}
 
 		this.recordDecision(request, result, "none", false, state)
@@ -1882,6 +1929,8 @@ export class ApprovalOrchestrator {
 			mappedFailureCategory = lastErrorCategory as VerifierFailureCategory
 		}
 
+		const extractedRetryAfterMs = extractRetryAfterMsFromTimeline(attemptTimeline)
+
 		const result: ApprovalDecisionResult = {
 			decision: "MANUAL_APPROVAL",
 			risk: "high",
@@ -1895,6 +1944,7 @@ export class ApprovalOrchestrator {
 			approvalPromptBytes,
 			approvalPromptApproxTokens,
 			auditLog,
+			retryAfterMs: extractedRetryAfterMs,
 		}
 
 		this.recordDecision(request, result, lastUsedCandidate?.modelId || "none", false, state)

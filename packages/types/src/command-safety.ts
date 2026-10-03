@@ -55,6 +55,8 @@ export interface SafetyEvaluationResult {
 	isSafe: boolean
 	riskLevel: CommandSafetyRiskLevel
 	reason: string
+	infrastructureFailure?: boolean
+	deferredRetry?: DeferredAttemptSchedule
 }
 
 /**
@@ -510,6 +512,15 @@ export interface ApprovalDecisionResult {
 	approvalPromptBytes?: number
 	approvalPromptApproxTokens?: number
 	auditLog: string
+	retryAfterMs?: number
+	inCooldown?: boolean
+}
+
+export interface DeferredAttemptSchedule {
+	attempt: number
+	maxAttempts: number
+	delayMs: number
+	nextRetryAt: number
 }
 
 export const approvalDecisionResultSchema = z.object({
@@ -635,6 +646,8 @@ export interface DecisionLogEntry {
 	approvalAttempts?: number
 	retry?: boolean
 	infrastructureFailure?: boolean
+	deferredAttempt?: number
+	scheduledDelayMs?: number
 }
 
 
