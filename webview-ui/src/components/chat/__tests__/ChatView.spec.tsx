@@ -1447,5 +1447,47 @@ describe("ChatView - Task Completion & Resumption Button Bar Tests", () => {
 			expect(getByText("chat:reject.title")).toBeInTheDocument()
 		})
 	})
+
+	it("does not render STOP/PAUSE button when awaiting manual approval or deferred verifier retry", async () => {
+		const { getByText, queryByRole } = renderChatView()
+
+		mockPostMessage({
+			approvalMode: "auto",
+			currentTaskId: "task-guardrail-timeout",
+			clineMessages: [
+				{
+					type: "ask",
+					ask: "command",
+					ts: 1000,
+					text: "python script.py",
+					approvalState: "USER_DECISION_REQUIRED",
+				},
+				{
+					type: "say",
+					say: "command_safety_warning",
+					ts: 1001,
+					text: JSON.stringify({
+						isSafe: false,
+						riskLevel: "medium",
+						reason: "Safety verification temporarily unavailable. Review this action manually. (TIMEOUT: Approval AI evaluation timed out after 12000ms)",
+						infrastructureFailure: true,
+						deferredRetry: {
+							attempt: 1,
+							maxAttempts: 3,
+							delayMs: 15000,
+							nextRetryAt: Date.now() + 15000,
+						},
+					}),
+				},
+			],
+		})
+
+		await waitFor(() => {
+			expect(getByText("chat:runCommand.title")).toBeInTheDocument()
+			expect(getByText("chat:reject.title")).toBeInTheDocument()
+			// STOP button must NOT be present
+			expect(queryByRole("button", { name: "chat:stop.title" })).not.toBeInTheDocument()
+		})
+	})
 })
 

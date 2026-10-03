@@ -1754,6 +1754,12 @@ export const ChatRowContent = ({
 						riskLevel: string
 						reason: string
 						infrastructureFailure?: boolean
+						deferredRetry?: {
+							attempt: number
+							maxAttempts: number
+							delayMs: number
+							nextRetryAt: number
+						}
 					}>(message.text || "{}")
 					if (!evaluation) return null
 					const isRejected = evaluation.reason?.includes("Safety verification rejected this action")
@@ -1782,10 +1788,17 @@ export const ChatRowContent = ({
 									: isInfra
 										? `🛡️ AI Command Safety Guardrail: VERIFICATION FAILED (Fail-Closed)`
 										: `🛡️ AI Command Safety Guardrail: ${(evaluation.riskLevel || "unknown").toUpperCase()} RISK DETECTED`
+
+					let messageText = evaluation.reason
+					if (evaluation.deferredRetry) {
+						const seconds = Math.max(1, Math.round(evaluation.deferredRetry.delayMs / 1000))
+						messageText = `${evaluation.reason}\n\n⏳ Retrying verification in ~${seconds}s (Attempt ${evaluation.deferredRetry.attempt} of ${evaluation.deferredRetry.maxAttempts}). You can still Run or Deny manually at any time.`
+					}
+
 					return (
 						<WarningRow
 							title={title}
-							message={evaluation.reason}
+							message={messageText}
 							actionText="Configure Safety Guardrail"
 							onAction={() =>
 								openSettings({ section: "commandSafety", source: "command_safety_warning" })

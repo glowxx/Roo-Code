@@ -801,6 +801,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		if (clineAsk !== undefined && enableButtons && primaryButtonText !== undefined) {
 			return false
 		}
+		if (activeAskMessage) {
+			if (activeAskMessage.approvalState === "EVALUATING") {
+				return true
+			}
+			if (activeAskMessage.ask !== "command_output") {
+				return false
+			}
+		}
 		const lastMsg = modifiedMessages.at(-1)
 		if (
 			(lastMsg?.say === "completion_result" && lastMsg.approvalState !== "DENIED") ||
@@ -808,8 +816,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		) {
 			return false
 		}
-		return modifiedMessages.length > 0
-	}, [currentTaskItem, isStopping, isStreaming, clineAsk, enableButtons, primaryButtonText, modifiedMessages])
+		if (lastMsg?.type === "ask" && !lastMsg.isAnswered && lastMsg.ask !== "command_output") {
+			return false
+		}
+		if (clineAsk === "command_output") {
+			return true
+		}
+		return false
+	}, [currentTaskItem, isStopping, isStreaming, clineAsk, enableButtons, primaryButtonText, activeAskMessage, modifiedMessages])
 
 	const markFollowUpAsAnswered = useCallback(() => {
 		const lastFollowUpMessage = messagesRef.current.findLast((msg: ClineMessage) => msg.ask === "followup")
