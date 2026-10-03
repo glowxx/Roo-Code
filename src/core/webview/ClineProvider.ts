@@ -41,6 +41,7 @@ import {
 	modelSupportsReasoning,
 	stripModelTag,
 	xkiroModels,
+	resolveXkiroModelInfo,
 	anthropicModels,
 	deepSeekModels,
 	geminiModels,
@@ -2274,6 +2275,7 @@ export class ClineProvider
 				openAiModelInfos?.[modelId] ||
 				cachedOpenAiModelInfos[stripped] ||
 				openAiModelInfos?.[stripped] ||
+				resolveXkiroModelInfo(modelId) ||
 				(xkiroModels as Record<string, ModelInfo>)?.[modelId] ||
 				(xkiroModels as Record<string, ModelInfo>)?.[stripped] ||
 				(anthropicModels as Record<string, ModelInfo>)?.[modelId] ||

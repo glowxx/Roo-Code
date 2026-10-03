@@ -1,7 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 
-import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, getModelContextWindow, modelSupportsReasoning, stripModelTag } from "@roo-code/types"
+import { isRetiredProvider, type ProviderSettings, type ModelInfo, xkiroModels, resolveXkiroModelInfo, getModelContextWindow, modelSupportsReasoning, stripModelTag } from "@roo-code/types"
 
 import { ApiStream } from "./transform/stream"
 
@@ -143,6 +143,7 @@ export function buildApiHandler(configuration: ProviderSettings): ApiHandler {
 				(options as any).xkiroModelId || options.apiModelId || options.openAiModelId || "deepseek/deepseek-chat"
 			const strippedModelId = stripModelTag(xkiroModelId)
 			const defaultInfo =
+				resolveXkiroModelInfo(xkiroModelId) ||
 				(xkiroModels as Record<string, ModelInfo>)[xkiroModelId] ||
 				(xkiroModels as Record<string, ModelInfo>)[strippedModelId]
 			const cachedApiInfo = getCachedOpenAiModelInfo(xkiroModelId)

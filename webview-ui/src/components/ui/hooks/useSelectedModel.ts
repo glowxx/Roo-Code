@@ -26,6 +26,7 @@ import {
 	basetenModels,
 	qwenCodeModels,
 	xkiroModels,
+	resolveXkiroModelInfo,
 	litellmDefaultModelInfo,
 	lMStudioDefaultModelInfo,
 	BEDROCK_1M_CONTEXT_MODEL_IDS,
@@ -321,6 +322,7 @@ function getSelectedModel({
 			const id = apiConfiguration.xkiroModelId ?? apiConfiguration.apiModelId ?? defaultModelId
 			const strippedId = stripModelTag(id)
 			const predefinedInfo =
+				resolveXkiroModelInfo(id) ||
 				(xkiroModels as Record<string, ModelInfo>)[id] ||
 				(xkiroModels as Record<string, ModelInfo>)[strippedId]
 			const liveInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]

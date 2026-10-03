@@ -1,4 +1,4 @@
-import type { ModelInfo } from "../model.js"
+import { type ModelInfo, stripModelTag } from "../model.js"
 
 export type XKiroModelId =
 	| "deepseek/deepseek-chat"
@@ -90,19 +90,6 @@ export const xkiroModels = {
 		cacheReadsPrice: 1,
 		description: "xKiro GPT-6.1 Astra: Next-gen flagship model with 1M context window.",
 	},
-	"gpt-6.1-astra": {
-		maxTokens: 65_536,
-		contextWindow: 1_000_000,
-		supportsImages: true,
-		supportsPromptCache: true,
-		preserveReasoning: true,
-		supportsReasoningEffort: true,
-		inputPrice: 10,
-		outputPrice: 50,
-		cacheWritesPrice: 0,
-		cacheReadsPrice: 1,
-		description: "xKiro GPT-6.1 Astra: Next-gen flagship model with 1M context window.",
-	},
 	"openai/gpt-6.1-sol": {
 		maxTokens: 65_536,
 		contextWindow: 1_000_000,
@@ -116,33 +103,7 @@ export const xkiroModels = {
 		cacheReadsPrice: 0.5,
 		description: "xKiro GPT-6.1 Sol: Next-generation reasoning model with 1M context window.",
 	},
-	"gpt-6.1-sol": {
-		maxTokens: 65_536,
-		contextWindow: 1_000_000,
-		supportsImages: true,
-		supportsPromptCache: true,
-		preserveReasoning: true,
-		supportsReasoningEffort: true,
-		inputPrice: 5.0,
-		outputPrice: 30.0,
-		cacheWritesPrice: 0,
-		cacheReadsPrice: 0.5,
-		description: "xKiro GPT-6.1 Sol: Next-generation reasoning model with 1M context window.",
-	},
 	"openai/gpt-6-sol": {
-		maxTokens: 65_536,
-		contextWindow: 1_000_000,
-		supportsImages: true,
-		supportsPromptCache: true,
-		preserveReasoning: true,
-		supportsReasoningEffort: true,
-		inputPrice: 5.0,
-		outputPrice: 30.0,
-		cacheWritesPrice: 0,
-		cacheReadsPrice: 0.5,
-		description: "xKiro GPT-6 Sol: Next-generation reasoning model with 1M context window.",
-	},
-	"gpt-6-sol": {
 		maxTokens: 65_536,
 		contextWindow: 1_000_000,
 		supportsImages: true,
@@ -322,3 +283,19 @@ export const xkiroModels = {
 		description: "xKiro Qwen 3.8 Max: Flagship Qwen model with 1M context window.",
 	},
 } as const satisfies Record<string, ModelInfo>
+
+export function resolveXkiroModelInfo(modelId?: string): ModelInfo | undefined {
+	if (!modelId) return undefined
+	const catalog = xkiroModels as Record<string, ModelInfo>
+	if (catalog[modelId]) return catalog[modelId]
+	const stripped = stripModelTag(modelId)
+	if (catalog[stripped]) return catalog[stripped]
+	if (!modelId.includes("/")) {
+		if (catalog[`openai/${modelId}`]) return catalog[`openai/${modelId}`]
+		if (catalog[`openai/${stripped}`]) return catalog[`openai/${stripped}`]
+	}
+	const bare = modelId.split("/")[1]
+	if (bare && catalog[bare]) return catalog[bare]
+	return undefined
+}
+

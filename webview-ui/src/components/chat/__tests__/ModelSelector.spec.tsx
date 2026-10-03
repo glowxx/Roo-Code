@@ -7,6 +7,7 @@ import {
 	isReasoningModel,
 	promoteDynamicFlagships,
 	sanitizeCustomModelId,
+	getCanonicalModelKey,
 } from "../ModelSelector"
 import { vscode } from "@/utils/vscode"
 
@@ -690,4 +691,48 @@ describe("ModelSelector", () => {
 			})
 		})
 	})
+
+	describe("Canonical Model Deduplication", () => {
+		test("getCanonicalModelKey normalizes vendor prefixes and preserves variants/tags", () => {
+			expect(getCanonicalModelKey("xkiro", "openai/gpt-6.1-sol")).toBe("xkiro:gpt-6.1-sol")
+			expect(getCanonicalModelKey("xkiro", "gpt-6.1-sol")).toBe("xkiro:gpt-6.1-sol")
+			expect(getCanonicalModelKey("xkiro", "qwen/qwen3.8-max:free")).toBe("xkiro:qwen3.8-max:free")
+			expect(getCanonicalModelKey("xkiro", "qwen3.8-max:free")).toBe("xkiro:qwen3.8-max:free")
+			expect(getCanonicalModelKey("xkiro", "qwen/qwen3.8-max")).toBe("xkiro:qwen3.8-max")
+			// Tags are preserved and differ
+			expect(getCanonicalModelKey("xkiro", "qwen3.8-max:free")).not.toBe(
+				getCanonicalModelKey("xkiro", "qwen3.8-max"),
+			)
+			// Providers are distinguished
+			expect(getCanonicalModelKey("xkiro", "gpt-4o")).not.toBe(getCanonicalModelKey("openai", "gpt-4o"))
+		})
+
+		test("xKiro deduplicates vendor-namespaced and bare model IDs in available models list", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+			}
+			// Simulate dynamic API returning both namespaced and bare models
+			mockExtensionState.openAiModels = [
+				"openai/gpt-6.1-sol",
+				"gpt-6.1-sol",
+				"openai/gpt-6-sol",
+				"gpt-6-sol",
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			// Search for "sol"
+			const searchInput = screen.getByPlaceholderText("chat:modelSelector.searchPlaceholder")
+			fireEvent.change(searchInput, { target: { value: "sol" } })
+
+			// Each unique canonical model should appear exactly once in the rendered list
+			const sol61 = screen.getAllByText("GPT-6.1 Sol")
+			expect(sol61.length).toBe(1)
+
+		})
+	})
 })
+

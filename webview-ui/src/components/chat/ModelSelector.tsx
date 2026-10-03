@@ -304,6 +304,45 @@ export const formatContextWindow = (tokens?: number): string | null => {
 	return `${tokens}`
 }
 
+export function getCanonicalModelKey(provider: string, modelId: string): string {
+	const stripped = stripModelTag(modelId)
+	if (provider === "xkiro" || provider === "openai") {
+		const vendorPrefixMatch = stripped.match(
+			/^(?:openai|anthropic|google|deepseek|qwen|meta-llama|mistralai)\/(.+)$/,
+		)
+		const normalizedBase = vendorPrefixMatch ? vendorPrefixMatch[1] : stripped
+		const tagMatch = modelId.match(/:(free|beta|extended|nitro)$/)
+		const tagSuffix = tagMatch ? `:${tagMatch[1]}` : ""
+		return `${provider}:${normalizedBase}${tagSuffix}`
+	}
+	return `${provider}:${modelId}`
+}
+
+export const isFastModel = (id: string, isReasoning: boolean) => {
+	if (isReasoning) return false
+	const lower = id.toLowerCase()
+	return (
+		lower.includes("flash") ||
+		lower.includes("mini") ||
+		lower.includes("haiku") ||
+		lower.includes("turbo") ||
+		lower.includes("lite") ||
+		lower.includes("fast") ||
+		lower.includes("8b") ||
+		lower.includes("7b")
+	)
+}
+
+export const isCoderModel = (id: string) => {
+	const lower = id.toLowerCase()
+	return lower.includes("coder") || lower.includes("code") || lower.includes("dev")
+}
+
+export const isVisionModel = (id: string) => {
+	const lower = id.toLowerCase()
+	return lower.includes("vision") || lower.includes("vl") || lower.includes("omni") || lower.includes("multimodal")
+}
+
 const ProviderIcon = ({ provider, className }: { provider: string; className?: string }) => {
 	switch (provider) {
 		case "xkiro":
@@ -444,44 +483,41 @@ export const ModelSelector = ({
 
 	// Available models for the current provider
 	const availableModels = useMemo<ModelItem[]>(() => {
-		const result: ModelItem[] = []
-		const seenIds = new Set<string>()
+		const canonicalMap = new Map<string, ModelItem>()
 
-		const isFastModel = (id: string, isReasoning: boolean) => {
-			if (isReasoning) return false
-			const lower = id.toLowerCase()
-			return (
-				lower.includes("flash") ||
-				lower.includes("mini") ||
-				lower.includes("haiku") ||
-				lower.includes("turbo") ||
-				lower.includes("lite") ||
-				lower.includes("fast") ||
-				lower.includes("8b") ||
-				lower.includes("7b")
-			)
-		}
-
-		const isCoderModel = (id: string) => {
-			const lower = id.toLowerCase()
-			return lower.includes("coder") || lower.includes("code") || lower.includes("dev")
-		}
-
-		const isVisionModel = (id: string) => {
-			const lower = id.toLowerCase()
-			return lower.includes("vision") || lower.includes("vl") || lower.includes("omni") || lower.includes("multimodal")
+		const addOrMergeModel = (item: ModelItem) => {
+			const key = getCanonicalModelKey(activeProvider, item.id)
+			const existing = canonicalMap.get(key)
+			if (!existing) {
+				canonicalMap.set(key, { ...item })
+				return
+			}
+			// Prefer vendor-namespaced ID (e.g. "openai/gpt-6.1-sol" over "gpt-6.1-sol")
+			if (!existing.id.includes("/") && item.id.includes("/")) {
+				existing.id = item.id
+				existing.name = item.name
+			}
+			// Merge metadata: keep existing or incoming richest info
+			if (!existing.contextWindow && item.contextWindow) existing.contextWindow = item.contextWindow
+			if (!existing.description && item.description) existing.description = item.description
+			if (!existing.modelInfo && item.modelInfo) existing.modelInfo = item.modelInfo
+			if (!existing.badge && item.badge) existing.badge = item.badge
+			if (item.isReasoning) existing.isReasoning = true
+			if (item.isFast) existing.isFast = true
+			if (item.isCoder) existing.isCoder = true
+			if (item.isVision) existing.isVision = true
+			if (item.isFlagship) existing.isFlagship = true
 		}
 
 		// 1. Static models from MODELS_BY_PROVIDER
 		const staticMap = MODELS_BY_PROVIDER[activeProvider]
 		if (staticMap) {
 			Object.entries(staticMap).forEach(([id, info]) => {
-				seenIds.add(id)
 				const isReasoning = isReasoningModel(id, info)
 				const isFast = isFastModel(id, isReasoning)
 				const isCoder = isCoderModel(id)
 				const isVision = isVisionModel(id)
-				result.push({
+				addOrMergeModel({
 					id,
 					name: cleanModelDisplayName(id, info),
 					contextWindow: info.contextWindow,
@@ -500,39 +536,35 @@ export const ModelSelector = ({
 		if (activeProvider === "xkiro" || activeProvider === "openai") {
 			if (openAiModels && openAiModels.length > 0) {
 				openAiModels.forEach((id) => {
-					if (!seenIds.has(id)) {
-						seenIds.add(id)
-						const isReasoning = isReasoningModel(id, openAiModelInfos?.[id])
-						const isFast = isFastModel(id, isReasoning)
-						const isCoder = isCoderModel(id)
-						const isVision = isVisionModel(id)
+					const strippedId = stripModelTag(id)
+					const dynamicInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]
+					const dynamicContext = dynamicInfo?.contextWindow
+					const isReasoning = isReasoningModel(id, dynamicInfo)
+					const isFast = isFastModel(id, isReasoning)
+					const isCoder = isCoderModel(id)
+					const isVision = isVisionModel(id)
 
-						const badge = isReasoning
-							? "Reasoning"
-							: isFast
-								? "Fast"
-								: isCoder
-									? "Coder"
-									: isVision
-										? "Vision"
-										: undefined
+					const badge = isReasoning
+						? "Reasoning"
+						: isFast
+							? "Fast"
+							: isCoder
+								? "Coder"
+								: isVision
+									? "Vision"
+									: undefined
 
-						const strippedId = stripModelTag(id)
-						const dynamicInfo = openAiModelInfos?.[id] || openAiModelInfos?.[strippedId]
-						const dynamicContext = dynamicInfo?.contextWindow
-
-						result.push({
-							id,
-							name: cleanModelDisplayName(id, dynamicInfo),
-							contextWindow: getModelContextWindow(id, dynamicContext),
-							isReasoning,
-							isFast,
-							isCoder,
-							isVision,
-							badge,
-							modelInfo: dynamicInfo,
-						})
-					}
+					addOrMergeModel({
+						id,
+						name: cleanModelDisplayName(id, dynamicInfo),
+						contextWindow: getModelContextWindow(id, dynamicContext),
+						isReasoning,
+						isFast,
+						isCoder,
+						isVision,
+						badge,
+						modelInfo: dynamicInfo,
+					})
 				})
 			}
 		}
@@ -554,17 +586,10 @@ export const ModelSelector = ({
 				{ id: "qwen/qwen-2.5-coder-32b", name: "Qwen 2.5 Coder 32B", isReasoning: false, isFast: true, isCoder: true, isFlagship: true, badge: "Coder", contextWindow: 128000, description: "xKiro Qwen 2.5 Coder: Leading open coding model." },
 			]
 			xkiroPresets.forEach((p) => {
-				const existing = result.find((r) => r.id === p.id)
-				if (existing) {
-					if (!existing.description) existing.description = p.description
-					if (!existing.contextWindow) existing.contextWindow = getModelContextWindow(p.id, p.contextWindow)
-				} else {
-					seenIds.add(p.id)
-					result.push({
-						...p,
-						contextWindow: getModelContextWindow(p.id, p.contextWindow),
-					})
-				}
+				addOrMergeModel({
+					...p,
+					contextWindow: getModelContextWindow(p.id, p.contextWindow),
+				})
 			})
 		}
 
@@ -573,25 +598,22 @@ export const ModelSelector = ({
 			const orModels = routerModels?.openrouter
 			if (orModels && Object.keys(orModels).length > 0) {
 				Object.entries(orModels).forEach(([id, info]) => {
-					if (!seenIds.has(id)) {
-						seenIds.add(id)
-						const isReasoning = isReasoningModel(id, info)
-						const isFast = isFastModel(id, isReasoning)
-						const isCoder = isCoderModel(id)
-						const isVision = isVisionModel(id)
-						result.push({
-							id,
-							name: cleanModelDisplayName(id, info),
-							contextWindow: info.contextWindow,
-							isReasoning,
-							isFast,
-							isCoder,
-							isVision,
-							badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
-							description: info.description,
-							modelInfo: info,
-						})
-					}
+					const isReasoning = isReasoningModel(id, info)
+					const isFast = isFastModel(id, isReasoning)
+					const isCoder = isCoderModel(id)
+					const isVision = isVisionModel(id)
+					addOrMergeModel({
+						id,
+						name: cleanModelDisplayName(id, info),
+						contextWindow: info.contextWindow,
+						isReasoning,
+						isFast,
+						isCoder,
+						isVision,
+						badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
+						description: info.description,
+						modelInfo: info,
+					})
 				})
 			} else {
 				const orPresets = [
@@ -603,10 +625,7 @@ export const ModelSelector = ({
 					{ id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", isReasoning: false, isFast: false },
 				]
 				orPresets.forEach((p) => {
-					if (!seenIds.has(p.id)) {
-						seenIds.add(p.id)
-						result.push(p)
-					}
+					addOrMergeModel(p)
 				})
 			}
 		}
@@ -621,11 +640,7 @@ export const ModelSelector = ({
 				{ id: "deepseek-reasoner", name: "DeepSeek R1", isReasoning: true, isFast: false, badge: "Reasoning" },
 			]
 			openaiPresets.forEach((p) => {
-				const existing = result.find((r) => r.id === p.id)
-				if (!existing) {
-					seenIds.add(p.id)
-					result.push(p)
-				}
+				addOrMergeModel(p)
 			})
 		}
 
@@ -637,20 +652,17 @@ export const ModelSelector = ({
 				{ id: "deepseek-r1:8b", name: "DeepSeek R1 8B", isReasoning: true, isFast: false, badge: "Reasoning" },
 			]
 			ollamaPresets.forEach((p) => {
-				if (!seenIds.has(p.id)) {
-					seenIds.add(p.id)
-					result.push(p)
-				}
+				addOrMergeModel(p)
 			})
 		}
 
 		// 5. Ensure current active model is present if not already in list
-		if (activeModelId && !seenIds.has(activeModelId)) {
+		if (activeModelId) {
 			const isReasoning = isReasoningModel(activeModelId, activeModelInfo)
 			const isFast = isFastModel(activeModelId, isReasoning)
 			const isCoder = isCoderModel(activeModelId)
 			const isVision = isVisionModel(activeModelId)
-			result.unshift({
+			addOrMergeModel({
 				id: activeModelId,
 				name: cleanModelDisplayName(activeModelId, activeModelInfo),
 				contextWindow: activeModelInfo?.contextWindow,
@@ -662,6 +674,8 @@ export const ModelSelector = ({
 				modelInfo: activeModelInfo,
 			})
 		}
+
+		const result = Array.from(canonicalMap.values())
 
 		// 6. Dynamic Flagship Promotion
 		const flagshipIds = promoteDynamicFlagships(result)

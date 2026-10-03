@@ -7,6 +7,7 @@ import {
 	ModelInfo,
 	stripModelTag,
 	xkiroModels,
+	resolveXkiroModelInfo,
 	anthropicModels,
 	deepSeekModels,
 	geminiModels,
@@ -76,6 +77,7 @@ export function defaultResolveModelInfo(
 	return (
 		extraModelInfos?.[modelId] ||
 		extraModelInfos?.[stripped] ||
+		resolveXkiroModelInfo(modelId) ||
 		(xkiroModels as Record<string, ModelInfo>)?.[modelId] ||
 		(xkiroModels as Record<string, ModelInfo>)?.[stripped] ||
 		(anthropicModels as Record<string, ModelInfo>)?.[modelId] ||
