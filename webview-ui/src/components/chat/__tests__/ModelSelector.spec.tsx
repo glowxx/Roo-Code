@@ -732,7 +732,132 @@ describe("ModelSelector", () => {
 			const sol61 = screen.getAllByText("GPT-6.1 Sol")
 			expect(sol61.length).toBe(1)
 
+			const sol6 = screen.getAllByText("GPT-6 Sol")
+			expect(sol6.length).toBe(1)
+		})
+	})
+
+	describe("Recently Used Models", () => {
+		test("displays recently used models under 'Recently used' header", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+			}
+			mockExtensionState.recentModels = [
+				{
+					id: "anthropic/claude-3.7-sonnet",
+					provider: "xkiro",
+					name: "Claude 3.7 Sonnet",
+					timestamp: Date.now(),
+				},
+				{
+					id: "openai/gpt-6-astra",
+					provider: "xkiro",
+					name: "GPT-6 Astra",
+					timestamp: Date.now() - 1000,
+				},
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			expect(screen.getByText("Recently used")).toBeInTheDocument()
+			expect(screen.getByText("2 models")).toBeInTheDocument()
+		})
+
+		test("caps recently used models at maximum 5 items in MRU order", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+			}
+			mockExtensionState.recentModels = [
+				{ id: "anthropic/claude-3.7-sonnet", provider: "xkiro", name: "Claude 3.7 Sonnet", timestamp: 50 },
+				{ id: "anthropic/claude-3.5-sonnet", provider: "xkiro", name: "Claude 3.5 Sonnet", timestamp: 40 },
+				{ id: "openai/gpt-6-astra", provider: "xkiro", name: "GPT-6 Astra", timestamp: 30 },
+				{ id: "openai/gpt-5", provider: "xkiro", name: "GPT-5", timestamp: 20 },
+				{ id: "openai/gpt-4o", provider: "xkiro", name: "GPT-4o", timestamp: 10 },
+				{ id: "google/gemini-2.5-pro", provider: "xkiro", name: "Gemini 2.5 Pro", timestamp: 5 },
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			expect(screen.getByText("5 models")).toBeInTheDocument()
+		})
+
+		test("prunes stale catalog models not present in available models list", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+			}
+			mockExtensionState.recentModels = [
+				{
+					id: "non-existent-retired-model",
+					provider: "xkiro",
+					name: "Retired Model",
+					timestamp: 10,
+				},
+				{
+					id: "anthropic/claude-3.7-sonnet",
+					provider: "xkiro",
+					name: "Claude 3.7 Sonnet",
+					timestamp: 20,
+				},
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			expect(screen.getByText("Recently used")).toBeInTheDocument()
+			expect(screen.getByText("1 model")).toBeInTheDocument()
+			expect(screen.queryByText("Retired Model")).not.toBeInTheDocument()
+		})
+
+		test("filters recently used models when user searches", () => {
+			mockExtensionState.apiConfiguration = {
+				apiProvider: "xkiro",
+				apiModelId: "deepseek/deepseek-chat",
+				xkiroModelId: "deepseek/deepseek-chat",
+			}
+			mockExtensionState.recentModels = [
+				{
+					id: "anthropic/claude-3.7-sonnet",
+					provider: "xkiro",
+					name: "Claude 3.7 Sonnet",
+					timestamp: 10,
+				},
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			expect(screen.getByText("Recently used")).toBeInTheDocument()
+
+			const searchInput = screen.getByPlaceholderText("chat:modelSelector.searchPlaceholder")
+			fireEvent.change(searchInput, { target: { value: "gemini" } })
+
+			// When query doesn't match, Recently used header should be completely hidden
+			expect(screen.queryByText("Recently used")).not.toBeInTheDocument()
+		})
+	})
+
+	describe("Legacy API Configuration Removal", () => {
+		test("does not render legacy API CONFIGURATION or API Profiles section in model picker", () => {
+			mockExtensionState.listApiConfigMeta = [
+				{ id: "cfg-1", name: "default", modelId: "deepseek/deepseek-chat" },
+				{ id: "cfg-2", name: "custom-profile", modelId: "gpt-4o" },
+			]
+
+			render(<ModelSelector />)
+			fireEvent.click(screen.getByTestId("model-selector-trigger"))
+
+			expect(screen.queryByText("API Profiles")).not.toBeInTheDocument()
+			expect(screen.queryByText("API CONFIGURATION")).not.toBeInTheDocument()
+			expect(screen.queryByText(/Configure API & providers in Settings/i)).not.toBeInTheDocument()
+			expect(screen.getByPlaceholderText("Enter custom model ID...")).toBeInTheDocument()
 		})
 	})
 })
-

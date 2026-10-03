@@ -253,6 +253,7 @@ export interface ExtensionMessage {
 	savedTokensPercentage?: number
 	decisionLog?: DecisionLogEntry[]
 	providerLimits?: ProviderLimits
+	isCustomModel?: boolean
 }
 
 export interface OpenAiCodexRateLimitsMessage {
@@ -325,6 +326,7 @@ export type ExtensionState = Pick<
 	| "showWorktreesInHomeScreen"
 	| "disabledTools"
 	| "openAiModels"
+	| "recentModels"
 > & {
 	lockApiConfigAcrossModes?: boolean
 	openAiModelInfos?: Record<string, ModelInfo>

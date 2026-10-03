@@ -21,6 +21,8 @@ import {
 	checkoutDiffPayloadSchema,
 	checkoutRestorePayloadSchema,
 	getModelId,
+	cleanModelDisplayName,
+	type RecentModel,
 } from "@roo-code/types"
 import { customToolRegistry } from "@roo-code/core"
 
@@ -2000,6 +2002,32 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 						provider: selectedProvider,
 						reasoningEffort: selectedReasoningEffort,
 					})
+
+					// Persist recent model history (max 5, MRU order, deduplicated)
+					const existingRecents: RecentModel[] =
+						(await provider.getGlobalState("recentModels")) ??
+						((provider.contextProxy?.getValue("recentModels") as RecentModel[] | undefined) ?? [])
+
+					const newEntry: RecentModel = {
+						id: selectedModelId,
+						provider: selectedProvider,
+						name: cleanModelDisplayName(selectedModelId),
+						isCustom: Boolean(message.isCustomModel),
+						reasoningEffort: selectedReasoningEffort,
+						timestamp: Date.now(),
+					}
+
+					const filtered = existingRecents.filter(
+						(r) =>
+							!(
+								r.provider === selectedProvider &&
+								(r.id === selectedModelId || r.id.toLowerCase() === selectedModelId.toLowerCase())
+							),
+					)
+					const updatedRecents = [newEntry, ...filtered].slice(0, 5)
+
+					await provider.setGlobalState("recentModels", updatedRecents)
+					await provider.setValue("recentModels", updatedRecents)
 				}
 
 				await provider.upsertProviderProfile(message.text, message.apiConfiguration)

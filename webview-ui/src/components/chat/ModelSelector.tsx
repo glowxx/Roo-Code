@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react"
-import { Check, X, Sparkles, Cpu, Settings2, Search, Brain, Zap, Bot, Server, Layers, ChevronDown, Pin, Plus, RefreshCw, Loader2, Code2, Eye } from "lucide-react"
+import { Check, X, Sparkles, Cpu, Search, Brain, Zap, Bot, Server, Layers, ChevronDown, Plus, RefreshCw, Loader2, Code2, Eye, History } from "lucide-react"
 
 import {
 	type ProviderSettings,
 	type ProviderName,
 	type ModelInfo,
+	type RecentModel,
 	modelSupportsReasoning,
 	getModelContextWindow,
 	openAiModelInfoSaneDefaults,
@@ -263,6 +264,52 @@ export const isReasoningModel = (id: string, info?: ModelInfo): boolean => {
 // Re-export centralized display name formatters
 export { cleanModelDisplayName, formatModelDisplayName }
 
+export function getCanonicalModelKey(provider: string | undefined, modelId: string | undefined): string {
+	if (!modelId) return ""
+	const prov = (provider || "").toLowerCase().trim()
+	const trimmed = modelId.trim()
+	const colonIdx = trimmed.indexOf(":")
+	const tag = colonIdx !== -1 ? trimmed.slice(colonIdx).toLowerCase() : ""
+	const beforeTag = colonIdx !== -1 ? trimmed.slice(0, colonIdx) : trimmed
+
+	if (prov === "xkiro" || prov === "openai") {
+		const slashIdx = beforeTag.indexOf("/")
+		const bareName = slashIdx !== -1 ? beforeTag.slice(slashIdx + 1) : bareNameBeforeTag(beforeTag)
+		return `${prov}:${bareName.toLowerCase()}${tag}`
+	}
+	return `${prov}:${trimmed.toLowerCase()}`
+}
+
+function bareNameBeforeTag(beforeTag: string): string {
+	const slashIdx = beforeTag.indexOf("/")
+	return slashIdx !== -1 ? beforeTag.slice(slashIdx + 1) : beforeTag
+}
+
+export const isFastModel = (id: string, isReasoning = false): boolean => {
+	if (isReasoning) return false
+	const lower = id.toLowerCase()
+	return (
+		lower.includes("flash") ||
+		lower.includes("mini") ||
+		lower.includes("haiku") ||
+		lower.includes("turbo") ||
+		lower.includes("lite") ||
+		lower.includes("fast") ||
+		lower.includes("8b") ||
+		lower.includes("7b")
+	)
+}
+
+export const isCoderModel = (id: string): boolean => {
+	const lower = id.toLowerCase()
+	return lower.includes("coder") || lower.includes("code") || lower.includes("dev")
+}
+
+export const isVisionModel = (id: string): boolean => {
+	const lower = id.toLowerCase()
+	return lower.includes("vision") || lower.includes("vl") || lower.includes("omni") || lower.includes("multimodal")
+}
+
 
 export const sanitizeCustomModelId = (rawModelId: string): string => {
 	if (!rawModelId) return ""
@@ -302,45 +349,6 @@ export const formatContextWindow = (tokens?: number): string | null => {
 	if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`
 	if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`
 	return `${tokens}`
-}
-
-export function getCanonicalModelKey(provider: string, modelId: string): string {
-	const stripped = stripModelTag(modelId)
-	if (provider === "xkiro" || provider === "openai") {
-		const vendorPrefixMatch = stripped.match(
-			/^(?:openai|anthropic|google|deepseek|qwen|meta-llama|mistralai)\/(.+)$/,
-		)
-		const normalizedBase = vendorPrefixMatch ? vendorPrefixMatch[1] : stripped
-		const tagMatch = modelId.match(/:(free|beta|extended|nitro)$/)
-		const tagSuffix = tagMatch ? `:${tagMatch[1]}` : ""
-		return `${provider}:${normalizedBase}${tagSuffix}`
-	}
-	return `${provider}:${modelId}`
-}
-
-export const isFastModel = (id: string, isReasoning: boolean) => {
-	if (isReasoning) return false
-	const lower = id.toLowerCase()
-	return (
-		lower.includes("flash") ||
-		lower.includes("mini") ||
-		lower.includes("haiku") ||
-		lower.includes("turbo") ||
-		lower.includes("lite") ||
-		lower.includes("fast") ||
-		lower.includes("8b") ||
-		lower.includes("7b")
-	)
-}
-
-export const isCoderModel = (id: string) => {
-	const lower = id.toLowerCase()
-	return lower.includes("coder") || lower.includes("code") || lower.includes("dev")
-}
-
-export const isVisionModel = (id: string) => {
-	const lower = id.toLowerCase()
-	return lower.includes("vision") || lower.includes("vl") || lower.includes("omni") || lower.includes("multimodal")
 }
 
 const ProviderIcon = ({ provider, className }: { provider: string; className?: string }) => {
@@ -400,6 +408,8 @@ export const ModelSelector = ({
 		pinnedApiConfigs: extPinnedApiConfigs,
 		togglePinnedApiConfig: extTogglePinnedApiConfig,
 		lockApiConfigAcrossModes: extLockApiConfigAcrossModes,
+		recentModels: extRecentModels,
+		setRecentModels,
 	} = useExtensionState()
 
 	useEffect(() => {
@@ -658,26 +668,28 @@ export const ModelSelector = ({
 
 		// 5. Ensure current active model is present if not already in list
 		if (activeModelId) {
-			const isReasoning = isReasoningModel(activeModelId, activeModelInfo)
-			const isFast = isFastModel(activeModelId, isReasoning)
-			const isCoder = isCoderModel(activeModelId)
-			const isVision = isVisionModel(activeModelId)
-			addOrMergeModel({
-				id: activeModelId,
-				name: cleanModelDisplayName(activeModelId, activeModelInfo),
-				contextWindow: activeModelInfo?.contextWindow,
-				isReasoning,
-				isFast,
-				isCoder,
-				isVision,
-				badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
-				modelInfo: activeModelInfo,
-			})
+			const canonKey = getCanonicalModelKey(activeProvider, activeModelId)
+			if (!canonicalMap.has(canonKey)) {
+				const isReasoning = isReasoningModel(activeModelId, activeModelInfo)
+				const isFast = isFastModel(activeModelId, isReasoning)
+				const isCoder = isCoderModel(activeModelId)
+				const isVision = isVisionModel(activeModelId)
+				addOrMergeModel({
+					id: activeModelId,
+					name: cleanModelDisplayName(activeModelId, activeModelInfo),
+					contextWindow: activeModelInfo?.contextWindow,
+					isReasoning,
+					isFast,
+					isCoder,
+					isVision,
+					badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
+					modelInfo: activeModelInfo,
+				})
+			}
 		}
 
-		const result = Array.from(canonicalMap.values())
-
 		// 6. Dynamic Flagship Promotion
+		const result = Array.from(canonicalMap.values())
 		const flagshipIds = promoteDynamicFlagships(result)
 		result.forEach((m) => {
 			m.isFlagship = m.isFlagship || flagshipIds.has(m.id)
@@ -688,6 +700,75 @@ export const ModelSelector = ({
 
 		return result
 	}, [activeProvider, routerModels, openAiModels, openAiModelInfos, activeModelId, activeModelInfo])
+
+	// Recently used models for current provider (max 5, MRU order, pruned of stale catalog models)
+	const recentlyUsedModels = useMemo<ModelItem[]>(() => {
+		if (!extRecentModels || extRecentModels.length === 0) return []
+
+		const recentsForProvider = extRecentModels.filter(
+			(r) => !r.provider || r.provider.toLowerCase() === activeProvider.toLowerCase(),
+		)
+
+		const items: ModelItem[] = []
+		const seenRecentKeys = new Set<string>()
+
+		for (const recent of recentsForProvider) {
+			const canonKey = getCanonicalModelKey(activeProvider, recent.id)
+			if (seenRecentKeys.has(canonKey)) continue
+
+			const catalogModel = availableModels.find(
+				(m) => getCanonicalModelKey(activeProvider, m.id) === canonKey,
+			)
+
+			if (catalogModel) {
+				seenRecentKeys.add(canonKey)
+				items.push(catalogModel)
+			} else if (recent.isCustom) {
+				seenRecentKeys.add(canonKey)
+				const isReasoning = isReasoningModel(recent.id)
+				const isFast = isFastModel(recent.id, isReasoning)
+				const isCoder = isCoderModel(recent.id)
+				const isVision = isVisionModel(recent.id)
+				items.push({
+					id: recent.id,
+					name: recent.name || cleanModelDisplayName(recent.id),
+					isReasoning,
+					isFast,
+					isCoder,
+					isVision,
+					badge: isReasoning ? "Reasoning" : isFast ? "Fast" : isCoder ? "Coder" : isVision ? "Vision" : undefined,
+					contextWindow: getModelContextWindow(recent.id),
+				})
+			}
+
+			if (items.length >= 5) break
+		}
+
+		let filtered = items
+		if (selectedCategory === "reasoning") {
+			filtered = filtered.filter((m) => m.isReasoning)
+		} else if (selectedCategory === "fast") {
+			filtered = filtered.filter((m) => m.isFast)
+		} else if (selectedCategory === "coder") {
+			filtered = filtered.filter((m) => m.isCoder)
+		} else if (selectedCategory === "vision") {
+			filtered = filtered.filter((m) => m.isVision)
+		} else if (selectedCategory === "default") {
+			filtered = filtered.filter((m) => !m.isReasoning && !m.isFast && !m.isCoder && !m.isVision)
+		}
+
+		if (searchQuery.trim()) {
+			const q = searchQuery.toLowerCase().trim()
+			filtered = filtered.filter(
+				(m) =>
+					m.name.toLowerCase().includes(q) ||
+					m.id.toLowerCase().includes(q) ||
+					(m.description && m.description.toLowerCase().includes(q)),
+			)
+		}
+
+		return filtered
+	}, [extRecentModels, activeProvider, availableModels, selectedCategory, searchQuery])
 
 	// Filter models by category and search query
 	const filteredModels = useMemo(() => {
@@ -759,7 +840,7 @@ export const ModelSelector = ({
 
 	// Switch model
 	const handleSelectModel = useCallback(
-		(modelId: string) => {
+		(modelId: string, isCustom = false) => {
 			const provider = (apiConfiguration?.apiProvider || "xkiro") as ProviderName
 			const updatedConfig: ProviderSettings = {
 				...apiConfiguration,
@@ -855,17 +936,48 @@ export const ModelSelector = ({
 			// Update state locally immediately
 			setApiConfiguration(updatedConfig)
 
+			// Optimistically update recent models in extension state context
+			if (setRecentModels) {
+				const existing = extRecentModels || []
+				const newEntry: RecentModel = {
+					id: modelId,
+					provider,
+					name: cleanModelDisplayName(modelId),
+					isCustom,
+					reasoningEffort: updatedConfig.reasoningEffort,
+					timestamp: Date.now(),
+				}
+				const filtered = existing.filter(
+					(r) =>
+						!(
+							r.provider === provider &&
+							(r.id === modelId || r.id.toLowerCase() === modelId.toLowerCase())
+						),
+				)
+				setRecentModels([newEntry, ...filtered].slice(0, 5))
+			}
+
 			// Persist via engine
 			vscode.postMessage({
 				type: "upsertApiConfiguration",
 				text: extCurrentApiConfigName || "default",
 				apiConfiguration: updatedConfig,
+				...(isCustom ? { isCustomModel: true } : {}),
 			})
 
 			setOpen(false)
 			setSearchQuery("")
 		},
-		[apiConfiguration, extCurrentApiConfigName, setApiConfiguration, availableModels, routerModels, openAiModelInfos],
+		[
+			apiConfiguration,
+			extCurrentApiConfigName,
+			setApiConfiguration,
+			availableModels,
+			routerModels,
+			openAiModelInfos,
+			extRecentModels,
+			setRecentModels,
+		],
 	)
 
 	// Select custom model with sanitization
@@ -873,29 +985,9 @@ export const ModelSelector = ({
 		(rawModelId: string) => {
 			const sanitized = sanitizeCustomModelId(rawModelId)
 			if (!sanitized) return
-			handleSelectModel(sanitized)
+			handleSelectModel(sanitized, true)
 		},
 		[handleSelectModel],
-	)
-
-	// Switch API profile
-	const handleSelectApiProfile = useCallback(
-		(configId: string) => {
-			if (onApiConfigChange) {
-				onApiConfigChange(configId)
-			} else {
-				const selected = effectiveListApiConfigMeta.find((c) => c.id === configId)
-				if (selected) {
-					vscode.postMessage({
-						type: "loadApiConfiguration",
-						text: selected.name,
-					})
-				}
-			}
-			setOpen(false)
-			setSearchQuery("")
-		},
-		[onApiConfigChange, effectiveListApiConfigMeta],
 	)
 
 	// Toggle lock across modes
@@ -909,23 +1001,6 @@ export const ModelSelector = ({
 			})
 		}
 	}, [onToggleLockApiConfig, effectiveLockApiConfigAcrossModes])
-
-	// Toggle pinned config
-	const handleTogglePin = useCallback(
-		(configId: string, e: React.MouseEvent) => {
-			e.stopPropagation()
-			if (effectiveTogglePinnedApiConfig) {
-				effectiveTogglePinnedApiConfig(configId)
-			}
-			vscode.postMessage({ type: "toggleApiConfigPin", text: configId })
-		},
-		[effectiveTogglePinnedApiConfig],
-	)
-
-	const handleOpenSettings = useCallback(() => {
-		openSettings({ section: "providers", source: "model_selector" })
-		setOpen(false)
-	}, [])
 
 	useEffect(() => {
 		if (open && availableModels.length > 5 && searchInputRef.current) {
@@ -952,12 +1027,72 @@ export const ModelSelector = ({
 
 	const currentProviderLabel = providerDisplayNames[activeProvider] || activeProvider
 
-	// Separate pinned and unpinned API configs
-	const { pinnedConfigs, unpinnedConfigs } = useMemo(() => {
-		const pinned = effectiveListApiConfigMeta.filter((config) => effectivePinnedApiConfigs?.[config.id])
-		const unpinned = effectiveListApiConfigMeta.filter((config) => !effectivePinnedApiConfigs?.[config.id])
-		return { pinnedConfigs: pinned, unpinnedConfigs: unpinned }
-	}, [effectiveListApiConfigMeta, effectivePinnedApiConfigs])
+	// Unified row renderer across all model sections
+	const renderModelRow = useCallback(
+		(m: ModelItem, sectionKey: string) => {
+			const isSelected = m.id === activeModelId
+			const ctxStr = formatContextWindow(m.contextWindow)
+
+			return (
+				<div
+					key={`${sectionKey}-${m.id}`}
+					onClick={() => handleSelectModel(m.id)}
+					className={cn(
+						"px-2.5 py-1.5 text-xs cursor-pointer flex items-center justify-between gap-2 rounded-md transition-colors mx-1",
+						"hover:bg-vscode-list-hoverBackground",
+						isSelected
+							? "bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground font-medium"
+							: "text-vscode-foreground",
+					)}>
+					<div className="flex flex-col min-w-0 flex-1">
+						<div className="flex items-center gap-1.5">
+							<span className="truncate font-medium">{m.name}</span>
+							{m.isReasoning && (
+								<span className="text-[9.5px] px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
+									Reasoning
+								</span>
+							)}
+							{m.isFast && !m.isReasoning && (
+								<span className="text-[9.5px] px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400 font-semibold border border-emerald-500/30">
+									Fast
+								</span>
+							)}
+							{m.isCoder && !m.isReasoning && !m.isFast && (
+								<span className="text-[9.5px] px-1 py-0.2 rounded bg-blue-500/15 text-blue-400 font-semibold border border-blue-500/30">
+									Coder
+								</span>
+							)}
+							{m.isVision && !m.isReasoning && !m.isFast && !m.isCoder && (
+								<span className="text-[9.5px] px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 font-semibold border border-purple-500/30">
+									Vision
+								</span>
+							)}
+						</div>
+						<div className="flex items-center gap-1.5 text-[10.5px] text-vscode-descriptionForeground opacity-75 mt-0.5 truncate">
+							<span className="truncate">{m.id}</span>
+							{ctxStr && (
+								<>
+									<span>·</span>
+									<span>{ctxStr} ctx</span>
+								</>
+							)}
+						</div>
+					</div>
+
+					<div className="flex items-center flex-shrink-0">
+						{isSelected ? (
+							<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
+								<Check className="size-3.5" />
+							</div>
+						) : (
+							<div className="size-4" />
+						)}
+					</div>
+				</div>
+			)
+		},
+		[activeModelId, handleSelectModel],
+	)
 
 	return (
 		<Popover open={open} onOpenChange={setOpen} data-testid="model-selector-root">
@@ -968,7 +1103,6 @@ export const ModelSelector = ({
 						<div className="text-vscode-descriptionForeground font-mono text-[11px]">Model: {activeModelId}</div>
 						<div className="text-vscode-descriptionForeground text-[11px]">
 							Provider: {currentProviderLabel}
-							{effectiveProfileName && effectiveProfileName !== "default" ? ` (${effectiveProfileName})` : ""}
 						</div>
 					</div>
 				}>
@@ -988,7 +1122,7 @@ export const ModelSelector = ({
 					<span className="truncate font-medium">{activeDisplayName}</span>
 					<span className="opacity-40 select-none text-[11px] shrink-0">·</span>
 					<span className="truncate text-vscode-descriptionForeground opacity-80 shrink-0">
-						{effectiveProfileName === "default" ? currentProviderLabel : effectiveProfileName}
+						{currentProviderLabel}
 					</span>
 					<ChevronDown className="size-3 text-vscode-descriptionForeground opacity-60 flex-shrink-0 -mr-0.5" />
 				</PopoverTrigger>
@@ -1000,16 +1134,26 @@ export const ModelSelector = ({
 				container={portalContainer}
 				className="p-0 overflow-hidden w-[330px] bg-vscode-dropdown-background border border-vscode-dropdown-border shadow-xl">
 				<div className="flex flex-col w-full">
-					{/* Header: Provider Badge & Search */}
+					{/* Header: Provider Badge, Lock toggle & Refresh */}
 					<div className="p-2 border-b border-vscode-dropdown-border/60 bg-vscode-dropdown-background space-y-2">
 						<div className="flex items-center justify-between">
 							<div className="flex items-center gap-1.5">
 								<ProviderIcon provider={activeProvider} />
 								<span className="text-xs font-semibold text-vscode-foreground">
-									{t("chat:modelSelector.title") || "Model & API Profile"}
+									{t("chat:modelSelector.title") || "AI Models"}
 								</span>
 							</div>
 							<div className="flex items-center gap-1.5">
+								<IconButton
+									iconClass={effectiveLockApiConfigAcrossModes ? "codicon-lock" : "codicon-unlock"}
+									title={
+										effectiveLockApiConfigAcrossModes
+											? t("chat:unlockApiConfigAcrossModes")
+											: t("chat:lockApiConfigAcrossModes")
+									}
+									className={cn("p-1", effectiveLockApiConfigAcrossModes ? "text-vscode-focusBorder" : "opacity-60")}
+									onClick={handleToggleLock}
+								/>
 								{(activeProvider === "xkiro" || activeProvider === "openai") && (
 									<StandardTooltip content="Refresh available models">
 										<button
@@ -1086,9 +1230,9 @@ export const ModelSelector = ({
 						</div>
 					</div>
 
-					{/* SECTION 1: Models List */}
-					<div className="max-h-[250px] overflow-y-auto py-1 space-y-2">
-						{filteredModels.length === 0 ? (
+					{/* Models List */}
+					<div className="max-h-[300px] overflow-y-auto py-1 space-y-2">
+						{filteredModels.length === 0 && recentlyUsedModels.length === 0 ? (
 							searchQuery.trim() ? (
 								<div
 									onClick={() => handleSelectCustomModel(searchQuery.trim())}
@@ -1103,6 +1247,24 @@ export const ModelSelector = ({
 							)
 						) : (
 							<>
+								{/* 0. Recently Used Section */}
+								{recentlyUsedModels.length > 0 && (
+									<div>
+										<div className="px-2.5 py-1 text-[10px] font-bold text-vscode-descriptionForeground uppercase tracking-wider flex items-center justify-between">
+											<div className="flex items-center gap-1">
+												<History className="size-3 text-vscode-descriptionForeground" />
+												<span>Recently used</span>
+											</div>
+											<span className="text-[9.5px] opacity-70 font-normal">
+												{recentlyUsedModels.length} {recentlyUsedModels.length === 1 ? "model" : "models"}
+											</span>
+										</div>
+										<div className="space-y-0.5">
+											{recentlyUsedModels.map((m) => renderModelRow(m, "recent"))}
+										</div>
+									</div>
+								)}
+
 								{/* 1. Recommended / Flagship Section */}
 								{flagshipModels.length > 0 && (
 									<div>
@@ -1116,68 +1278,7 @@ export const ModelSelector = ({
 											</span>
 										</div>
 										<div className="space-y-0.5">
-											{flagshipModels.map((m) => {
-												const isSelected = m.id === activeModelId
-												const ctxStr = formatContextWindow(m.contextWindow)
-
-												return (
-													<div
-														key={m.id}
-														onClick={() => handleSelectModel(m.id)}
-														className={cn(
-															"px-2.5 py-1.5 text-xs cursor-pointer flex items-center justify-between gap-2 rounded-md transition-colors mx-1",
-															"hover:bg-vscode-list-hoverBackground",
-															isSelected
-																? "bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground font-medium"
-																: "text-vscode-foreground",
-														)}>
-														<div className="flex flex-col min-w-0 flex-1">
-															<div className="flex items-center gap-1.5">
-																<span className="truncate font-medium">{m.name}</span>
-																{m.isReasoning && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
-																		Reasoning
-																	</span>
-																)}
-																{m.isFast && !m.isReasoning && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400 font-semibold border border-emerald-500/30">
-																		Fast
-																	</span>
-																)}
-																{m.isCoder && !m.isReasoning && !m.isFast && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-blue-500/15 text-blue-400 font-semibold border border-blue-500/30">
-																		Coder
-																	</span>
-																)}
-																{m.isVision && !m.isReasoning && !m.isFast && !m.isCoder && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 font-semibold border border-purple-500/30">
-																		Vision
-																	</span>
-																)}
-															</div>
-															<div className="flex items-center gap-1.5 text-[10.5px] text-vscode-descriptionForeground opacity-75 mt-0.5 truncate">
-																<span className="truncate">{m.id}</span>
-																{ctxStr && (
-																	<>
-																		<span>·</span>
-																		<span>{ctxStr} ctx</span>
-																	</>
-																)}
-															</div>
-														</div>
-
-														<div className="flex items-center flex-shrink-0">
-															{isSelected ? (
-																<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
-																	<Check className="size-3.5" />
-																</div>
-															) : (
-																<div className="size-4" />
-															)}
-														</div>
-													</div>
-												)
-											})}
+											{flagshipModels.map((m) => renderModelRow(m, "flagship"))}
 										</div>
 									</div>
 								)}
@@ -1196,142 +1297,23 @@ export const ModelSelector = ({
 											</div>
 										</div>
 										<div className="space-y-0.5">
-											{allOtherModels.map((m) => {
-												const isSelected = m.id === activeModelId
-												const ctxStr = formatContextWindow(m.contextWindow)
-
-												return (
-													<div
-														key={m.id}
-														onClick={() => handleSelectModel(m.id)}
-														className={cn(
-															"px-2.5 py-1.5 text-xs cursor-pointer flex items-center justify-between gap-2 rounded-md transition-colors mx-1",
-															"hover:bg-vscode-list-hoverBackground",
-															isSelected
-																? "bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground font-medium"
-																: "text-vscode-foreground",
-														)}>
-														<div className="flex flex-col min-w-0 flex-1">
-															<div className="flex items-center gap-1.5">
-																<span className="truncate font-medium">{m.name}</span>
-																{m.isReasoning && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
-																		Reasoning
-																	</span>
-																)}
-																{m.isFast && !m.isReasoning && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400 font-semibold border border-emerald-500/30">
-																		Fast
-																	</span>
-																)}
-																{m.isCoder && !m.isReasoning && !m.isFast && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-blue-500/15 text-blue-400 font-semibold border border-blue-500/30">
-																		Coder
-																	</span>
-																)}
-																{m.isVision && !m.isReasoning && !m.isFast && !m.isCoder && (
-																	<span className="text-[9.5px] px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 font-semibold border border-purple-500/30">
-																		Vision
-																	</span>
-																)}
-															</div>
-															<div className="flex items-center gap-1.5 text-[10.5px] text-vscode-descriptionForeground opacity-75 mt-0.5 truncate">
-																<span className="truncate">{m.id}</span>
-																{ctxStr && (
-																	<>
-																		<span>·</span>
-																		<span>{ctxStr} ctx</span>
-																	</>
-																)}
-															</div>
-														</div>
-
-														<div className="flex items-center flex-shrink-0">
-															{isSelected ? (
-																<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
-																	<Check className="size-3.5" />
-																</div>
-															) : (
-																<div className="size-4" />
-															)}
-														</div>
-													</div>
-												)
-											})}
+											{allOtherModels.map((m) => renderModelRow(m, "all"))}
 										</div>
 									</div>
 								)}
 
 								{/* Fallback if no split occurred */}
-								{flagshipModels.length === 0 && allOtherModels.length === 0 && (
+								{flagshipModels.length === 0 && allOtherModels.length === 0 && filteredModels.length > 0 && (
 									<div className="space-y-0.5">
-										{filteredModels.map((m) => {
-											const isSelected = m.id === activeModelId
-											const ctxStr = formatContextWindow(m.contextWindow)
-
-											return (
-												<div
-													key={m.id}
-													onClick={() => handleSelectModel(m.id)}
-													className={cn(
-														"px-2.5 py-1.5 text-xs cursor-pointer flex items-center justify-between gap-2 rounded-md transition-colors mx-1",
-														"hover:bg-vscode-list-hoverBackground",
-														isSelected
-															? "bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground font-medium"
-															: "text-vscode-foreground",
-													)}>
-													<div className="flex flex-col min-w-0 flex-1">
-														<div className="flex items-center gap-1.5">
-															<span className="truncate font-medium">{m.name}</span>
-															{m.isReasoning && (
-																<span className="text-[9.5px] px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 font-semibold border border-amber-500/30">
-																	Reasoning
-																</span>
-															)}
-															{m.isFast && !m.isReasoning && (
-																<span className="text-[9.5px] px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400 font-semibold border border-emerald-500/30">
-																	Fast
-																</span>
-															)}
-															{m.isCoder && !m.isReasoning && !m.isFast && (
-																<span className="text-[9.5px] px-1 py-0.2 rounded bg-blue-500/15 text-blue-400 font-semibold border border-blue-500/30">
-																	Coder
-																</span>
-															)}
-															{m.isVision && !m.isReasoning && !m.isFast && !m.isCoder && (
-																<span className="text-[9.5px] px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 font-semibold border border-purple-500/30">
-																	Vision
-																</span>
-															)}
-														</div>
-														<div className="flex items-center gap-1.5 text-[10.5px] text-vscode-descriptionForeground opacity-75 mt-0.5 truncate">
-															<span className="truncate">{m.id}</span>
-															{ctxStr && (
-																<>
-																	<span>·</span>
-																	<span>{ctxStr} ctx</span>
-																</>
-															)}
-														</div>
-													</div>
-
-													<div className="flex items-center flex-shrink-0">
-														{isSelected ? (
-															<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
-																<Check className="size-3.5" />
-															</div>
-														) : (
-															<div className="size-4" />
-														)}
-													</div>
-												</div>
-											)
-										})}
+										{filteredModels.map((m) => renderModelRow(m, "fallback"))}
 									</div>
 								)}
 
 								{searchQuery.trim() &&
 									!filteredModels.some(
+										(m) => m.id.toLowerCase() === searchQuery.trim().toLowerCase(),
+									) &&
+									!recentlyUsedModels.some(
 										(m) => m.id.toLowerCase() === searchQuery.trim().toLowerCase(),
 									) && (
 										<div
@@ -1382,151 +1364,6 @@ export const ModelSelector = ({
 								Set
 							</Button>
 						</form>
-					</div>
-
-					{/* SECTION 2: API Profiles Section */}
-					{effectiveListApiConfigMeta.length > 0 && (
-						<div className="border-t border-vscode-dropdown-border/60 bg-vscode-dropdown-background/40">
-							<div className="flex items-center justify-between px-3 py-1.5 border-b border-vscode-dropdown-border/40">
-								<span className="text-[10px] font-bold text-vscode-descriptionForeground uppercase tracking-wider">
-									{t("prompts:apiConfiguration.title") || "API Profiles"}
-								</span>
-								<div className="flex items-center gap-1.5">
-									{activeProvider !== "xkiro" && (
-										<button
-											onClick={() => {
-												const updatedConfig: ProviderSettings = {
-													...apiConfiguration,
-													apiProvider: "xkiro",
-													apiModelId: "deepseek/deepseek-chat",
-													xkiroModelId: "deepseek/deepseek-chat",
-													xkiroBaseUrl: apiConfiguration?.xkiroBaseUrl || "https://api.xkiro.com/v1",
-												}
-												setApiConfiguration(updatedConfig)
-												vscode.postMessage({
-													type: "upsertApiConfiguration",
-													text: extCurrentApiConfigName || "default",
-													apiConfiguration: updatedConfig,
-												})
-											}}
-											className="text-[10px] text-[#a78bfa] hover:underline font-medium cursor-pointer">
-											Switch to xKiro
-										</button>
-									)}
-									<span className="text-[10px] text-vscode-descriptionForeground opacity-75 truncate max-w-[120px]">
-										{effectiveProfileName}
-									</span>
-								</div>
-							</div>
-
-							<div className="max-h-[140px] overflow-y-auto py-1">
-								{/* Pinned configs */}
-								{pinnedConfigs.map((config) => {
-									const isCurrent = config.id === activeConfigId
-									return (
-										<div
-											key={config.id}
-											onClick={() => handleSelectApiProfile(config.id)}
-											className={cn(
-												"px-2.5 py-1 text-xs cursor-pointer flex items-center justify-between group rounded-md mx-1",
-												"hover:bg-vscode-list-hoverBackground",
-												isCurrent &&
-													"bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground",
-											)}>
-											<div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
-												<span className="truncate font-medium">{config.name}</span>
-												{config.modelId && (
-													<span className="text-vscode-descriptionForeground opacity-60 text-[10.5px] truncate">
-														({config.modelId})
-													</span>
-												)}
-											</div>
-											<div className="flex items-center gap-1 flex-shrink-0">
-												{isCurrent && (
-													<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
-														<Check className="size-3" />
-													</div>
-												)}
-												<StandardTooltip content={t("chat:unpin")}>
-													<Button
-														variant="ghost"
-														size="icon"
-														tabIndex={-1}
-														onClick={(e) => handleTogglePin(config.id, e)}
-														className="size-4 flex items-center justify-center p-0">
-														<Pin className="size-2.5 text-vscode-focusBorder" />
-													</Button>
-												</StandardTooltip>
-											</div>
-										</div>
-									)
-								})}
-
-								{/* Unpinned configs */}
-								{unpinnedConfigs.map((config) => {
-									const isCurrent = config.id === activeConfigId
-									return (
-										<div
-											key={config.id}
-											onClick={() => handleSelectApiProfile(config.id)}
-											className={cn(
-												"px-2.5 py-1 text-xs cursor-pointer flex items-center justify-between group rounded-md mx-1",
-												"hover:bg-vscode-list-hoverBackground",
-												isCurrent &&
-													"bg-vscode-list-activeSelectionBackground text-vscode-list-activeSelectionForeground",
-											)}>
-											<div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
-												<span className="truncate font-medium">{config.name}</span>
-												{config.modelId && (
-													<span className="text-vscode-descriptionForeground opacity-60 text-[10.5px] truncate">
-														({config.modelId})
-													</span>
-												)}
-											</div>
-											<div className="flex items-center gap-1 flex-shrink-0">
-												{isCurrent && (
-													<div className="size-4 flex items-center justify-center text-vscode-focusBorder">
-														<Check className="size-3" />
-													</div>
-												)}
-												<StandardTooltip content={t("chat:pin")}>
-													<Button
-														variant="ghost"
-														size="icon"
-														tabIndex={-1}
-														onClick={(e) => handleTogglePin(config.id, e)}
-														className="size-4 flex items-center justify-center p-0 opacity-0 group-hover:opacity-100">
-														<Pin className="size-2.5 opacity-50" />
-													</Button>
-												</StandardTooltip>
-											</div>
-										</div>
-									)
-								})}
-							</div>
-						</div>
-					)}
-
-					{/* Footer: Lock toggle & Settings shortcut */}
-					<div className="px-2.5 py-1.5 border-t border-vscode-dropdown-border/60 bg-vscode-dropdown-background flex items-center justify-between">
-						<div className="flex items-center gap-1">
-							<IconButton
-								iconClass={effectiveLockApiConfigAcrossModes ? "codicon-lock" : "codicon-unlock"}
-								title={
-									effectiveLockApiConfigAcrossModes
-										? t("chat:unlockApiConfigAcrossModes")
-										: t("chat:lockApiConfigAcrossModes")
-								}
-								className={effectiveLockApiConfigAcrossModes ? "text-vscode-focusBorder" : "opacity-60"}
-								onClick={handleToggleLock}
-							/>
-						</div>
-						<button
-							onClick={handleOpenSettings}
-							className="flex items-center gap-1.5 text-[11px] text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors px-1.5 py-1 rounded hover:bg-vscode-toolbar-hoverBackground/60 cursor-pointer">
-							<Settings2 className="size-3.5" />
-							<span>{t("chat:modelSelector.configureMore") || "Settings"}</span>
-						</button>
 					</div>
 				</div>
 			</PopoverContent>

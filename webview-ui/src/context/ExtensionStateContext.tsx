@@ -19,6 +19,7 @@ import {
 	RouterModels,
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
+	type RecentModel,
 } from "@roo-code/types"
 
 import { findLastIndex } from "@roo/array"
@@ -142,6 +143,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	showWorktreesInHomeScreen: boolean
 	setShowWorktreesInHomeScreen: (value: boolean) => void
 	skills?: SkillMetadata[]
+	recentModels?: RecentModel[]
+	setRecentModels?: (value: RecentModel[]) => void
 }
 
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
@@ -196,6 +199,7 @@ export const mergeExtensionState = (prevState: ExtensionState, newState: Partial
 		openAiModels: newState.openAiModels ?? prevState.openAiModels ?? [],
 		openAiModelInfos: newState.openAiModelInfos ?? prevState.openAiModelInfos ?? {},
 		commandSafetyConfig: newState.commandSafetyConfig ?? prevState.commandSafetyConfig,
+		recentModels: newState.recentModels ?? prevState.recentModels ?? [],
 	}
 }
 
@@ -274,6 +278,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		lockApiConfigAcrossModes: false,
 		openAiModels: [],
 		openAiModelInfos: {},
+		recentModels: [],
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -693,6 +698,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		showWorktreesInHomeScreen: state.showWorktreesInHomeScreen ?? true,
 		setShowWorktreesInHomeScreen: (value) =>
 			setState((prevState) => ({ ...prevState, showWorktreesInHomeScreen: value })),
+		recentModels: state.recentModels ?? [],
+		setRecentModels: (value: RecentModel[]) => setState((prevState) => ({ ...prevState, recentModels: value })),
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>

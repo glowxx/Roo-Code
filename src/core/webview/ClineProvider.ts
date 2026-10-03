@@ -48,6 +48,7 @@ import {
 	bedrockModels,
 	openAiNativeModels,
 	isRetiredProvider,
+	type RecentModel,
 } from "@roo-code/types"
 import { resolveTaskExecutionConfig, defaultResolveModelInfo } from "../config/resolveTaskExecutionConfig"
 import { aggregateTaskCostsRecursive, type AggregatedCosts } from "./aggregateTaskCosts"
@@ -2253,6 +2254,7 @@ export class ClineProvider
 			lockApiConfigAcrossModes,
 			openAiModels,
 			openAiModelInfos,
+			recentModels,
 		} = await this.getState()
 
 		const mergedAllowedCommands = this.mergeAllowedCommands(allowedCommands)
@@ -2500,6 +2502,7 @@ export class ClineProvider
 				}
 			})(),
 			debug: vscode.workspace.getConfiguration(Package.name).get<boolean>("debug", false),
+			recentModels: recentModels ?? [],
 		}
 	}
 
@@ -2647,6 +2650,10 @@ export class ClineProvider
 				(this.contextProxy.getValue("openAiModelInfos") as Record<string, ModelInfo> | undefined) ??
 				(await this.getGlobalState("openAiModelInfos")) ??
 				{},
+			recentModels:
+				(stateValues.recentModels as RecentModel[] | undefined) ??
+				(await this.getGlobalState("recentModels")) ??
+				[],
 		}
 	}
 

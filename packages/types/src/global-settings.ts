@@ -78,6 +78,17 @@ export const DEFAULT_CHECKPOINT_TIMEOUT_SECONDS = 15
 export const themeTypes = ["linear-dark", "oled-black", "midnight-navy", "cyberpunk", "clean-light"] as const
 export type ThemeType = (typeof themeTypes)[number]
 
+export const recentModelSchema = z.object({
+	id: z.string(),
+	provider: z.string(),
+	name: z.string().optional(),
+	isCustom: z.boolean().optional(),
+	reasoningEffort: z.string().optional(),
+	timestamp: z.number().optional(),
+})
+
+export type RecentModel = z.infer<typeof recentModelSchema>
+
 /**
  * GlobalSettings
  */
@@ -86,6 +97,7 @@ export const globalSettingsSchema = z.object({
 	currentApiConfigName: z.string().optional(),
 	listApiConfigMeta: z.array(providerSettingsEntrySchema).optional(),
 	pinnedApiConfigs: z.record(z.string(), z.boolean()).optional(),
+	recentModels: z.array(recentModelSchema).max(5).optional(),
 
 	lastShownAnnouncementId: z.string().optional(),
 	customInstructions: z.string().optional(),
